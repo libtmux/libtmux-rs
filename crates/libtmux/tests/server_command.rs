@@ -4,6 +4,8 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+mod common;
+
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error as StdError;
 use std::ffi::{OsStr, OsString};
@@ -110,51 +112,45 @@ fn pid(value: u32) -> Pid {
     Pid::from_raw(i32::try_from(value).expect("test PID fits i32")).expect("test PID is nonzero")
 }
 
-async fn read_pids(
+fn read_pids(
     path: &Path,
     count: usize,
-    dispatch: &mut tokio::task::JoinHandle<Result<CommandResult, Error>>,
+    dispatch: &mut std::thread::JoinHandle<Result<CommandResult, Error>>,
 ) -> Vec<u32> {
-    let outcome = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(value) = fs::read_to_string(path) {
-                let pids = value
-                    .lines()
-                    .filter_map(|line| line.parse::<u32>().ok())
-                    .collect::<Vec<_>>();
-                if pids.len() == count {
-                    return Ok(pids);
-                }
-            }
-            tokio::select! {
-                result = &mut *dispatch => return Err(result),
-                () = tokio::task::yield_now() => {}
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(value) = fs::read_to_string(path) {
+            let pids = value
+                .lines()
+                .filter_map(|line| line.parse::<u32>().ok())
+                .collect::<Vec<_>>();
+            if pids.len() == count {
+                return pids;
             }
         }
-    })
-    .await
-    .expect("child publishes its PIDs before the readiness deadline");
-    outcome.expect("dispatch remains active until its child publishes readiness")
+        assert!(
+            !dispatch.is_finished(),
+            "dispatch ended before its child published readiness"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "child publishes PIDs before readiness deadline"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
-async fn read_pid(
+fn read_pid(
     path: &Path,
-    dispatch: &mut tokio::task::JoinHandle<Result<CommandResult, Error>>,
+    dispatch: &mut std::thread::JoinHandle<Result<CommandResult, Error>>,
 ) -> u32 {
-    read_pids(path, 1, dispatch).await[0]
+    read_pids(path, 1, dispatch)[0]
 }
 
-async fn assert_process_gone(value: u32) {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if matches!(test_kill_process(pid(value)), Err(Errno::SRCH)) {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("child is gone after terminal cleanup");
+fn assert_process_gone(value: u32) {
+    common::until(Duration::from_secs(5), || {
+        matches!(test_kill_process(pid(value)), Err(Errno::SRCH))
+    });
 }
 
 fn assert_configuration_error(
@@ -331,30 +327,26 @@ fn server_debug_redacts_socket_config_and_executable_paths() {
     }
 }
 
-#[tokio::test]
-async fn public_capability_raw_command_and_shutdown_boundary_is_usable() {
+#[test]
+fn public_capability_raw_command_and_shutdown_boundary_is_usable() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let server = Server::builder()
         .socket_path(directory.path().join("absent.sock"))
         .build()
         .expect("an absent explicit socket is valid setup");
 
-    let capabilities = server
-        .capabilities()
-        .await
-        .expect("installed tmux is supported");
+    let capabilities = server.capabilities().expect("installed tmux is supported");
     assert!(!capabilities.tmux_version().raw().is_empty());
 
     let result = server
         .cmd(Command::new("list-sessions"))
-        .await
         .expect("ordinary nonzero tmux status remains result data");
     assert_ne!(result.exit_code(), Some(0));
     assert_eq!(result.command().to_string(), r#""list-sessions""#);
     assert!(result.request_id() > 0);
 
-    server.shutdown().await.expect("shutdown succeeds");
-    server.shutdown().await.expect("shutdown is idempotent");
+    server.shutdown().expect("shutdown succeeds");
+    server.shutdown().expect("shutdown is idempotent");
 }
 
 /// tmux creates the parent directory of `-L`/the default socket itself, but
@@ -365,8 +357,8 @@ async fn public_capability_raw_command_and_shutdown_boundary_is_usable() {
 /// none may read as a partial effect, and tmux's own reason -- when it gave one
 /// -- must not be replaced by a generic message or a `Debug`-formatted exit
 /// code.
-#[tokio::test]
-async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
+#[test]
+fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let server = Server::builder()
         .socket_path(directory.path().join("missing-parent").join("sock"))
@@ -375,7 +367,6 @@ async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
 
     let error = server
         .new_session("wont-exist")
-        .await
         .expect_err("tmux creates nothing under a missing parent directory");
 
     assert_ne!(
@@ -393,11 +384,11 @@ async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
         "a Debug-formatted exit code does not leak into the message: {message}",
     );
 
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn capability_probe_is_exact_shared_lazy_and_preserves_versions() {
+#[test]
+fn capability_probe_is_exact_shared_lazy_and_preserves_versions() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let log = directory.path().join("probe.log");
     let script = write_script(
@@ -428,11 +419,16 @@ exit 91
 
     assert!(!log.exists(), "construction is inert");
     let cloned = server.clone();
-    let (first, second, third) = tokio::join!(
-        server.capabilities(),
-        server.capabilities(),
-        cloned.capabilities(),
-    );
+    let (first, second, third) = std::thread::scope(|threads| {
+        let first = threads.spawn(|| server.capabilities());
+        let second = threads.spawn(|| server.capabilities());
+        let third = threads.spawn(|| cloned.capabilities());
+        (
+            first.join().expect("first reader joins"),
+            second.join().expect("second reader joins"),
+            third.join().expect("third reader joins"),
+        )
+    });
     let first = first.expect("version probe succeeds");
     let second = second.expect("shared probe succeeds");
     let third = third.expect("cloned server shares probe");
@@ -444,7 +440,7 @@ exit 91
         fs::read_to_string(&log).expect("probe was recorded"),
         "<-V>\n"
     );
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 
     let development = write_script(
         directory.path(),
@@ -454,15 +450,14 @@ exit 91
     let development = fake_server(&development, &directory.path().join("development.sock"));
     let capabilities = development
         .capabilities()
-        .await
         .expect("master meets the minimum capability floor");
     assert_eq!(capabilities.tmux_version().raw(), "master");
     assert!(capabilities.tmux_version().is_development());
-    development.shutdown().await.expect("shutdown succeeds");
+    development.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn failed_and_nonzero_capability_probes_are_not_cached() {
+#[test]
+fn failed_and_nonzero_capability_probes_are_not_cached() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let attempts = directory.path().join("attempts");
     let script = write_script(
@@ -489,7 +484,6 @@ printf 'tmux 3.7b\n'
 
     let first = server
         .capabilities()
-        .await
         .expect_err("parseable stdout with nonzero status is rejected");
     let first_request_id = match &first {
         Error::VersionProbeFailed {
@@ -518,7 +512,6 @@ printf 'tmux 3.7b\n'
 
     let second = server
         .capabilities()
-        .await
         .expect_err("a second failed initialization is retried");
     let second_request_id = match &second {
         Error::VersionProbeFailed { request_id, .. } => Some(*request_id),
@@ -537,15 +530,14 @@ printf 'tmux 3.7b\n'
 
     let third = server
         .capabilities()
-        .await
         .expect("failed initializations are retried");
     assert_eq!(third.tmux_version().raw(), "3.7b");
     assert_eq!(fs::read(&attempts).expect("attempts are recorded"), b"xxx");
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn minimum_version_rejection_does_not_disable_the_raw_escape_hatch() {
+#[test]
+fn minimum_version_rejection_does_not_disable_the_raw_escape_hatch() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let marker = directory.path().join("command-ran");
     let script = write_script(
@@ -566,7 +558,6 @@ fi
 
     let error = server
         .capabilities()
-        .await
         .expect_err("tmux below 3.2a is rejected");
     assert!(matches!(error, Error::UnsupportedTmuxVersion { .. }));
     assert!(
@@ -576,18 +567,17 @@ fi
 
     let result = server
         .cmd(Command::new("display-message"))
-        .await
         .expect("raw execution remains available without capability escalation");
     assert!(result.success());
     assert!(
         marker.exists(),
         "raw command reached the configured executable"
     );
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn raw_dispatch_preserves_global_argv_and_logical_summary() {
+#[test]
+fn raw_dispatch_preserves_global_argv_and_logical_summary() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let socket = directory.path().join("sentinel-socket;");
     let config = directory.path().join("sentinel-config;");
@@ -614,7 +604,7 @@ printf '<TMUX_PANE=%s>\n' "${TMUX_PANE-unset}"
         .build()
         .expect("server configuration is valid");
     let command = Command::new("display-message").arg("value;");
-    let result = server.cmd(command).await.expect("fake command succeeds");
+    let result = server.cmd(command).expect("fake command succeeds");
     let stdout = result.stdout_utf8().expect("fixture output is UTF-8");
 
     assert_eq!(
@@ -631,11 +621,11 @@ printf '<TMUX_PANE=%s>\n' "${TMUX_PANE-unset}"
     );
     assert!(!format!("{result:?}").contains("sentinel-socket"));
     assert!(!format!("{result:?}").contains("sentinel-config"));
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn logical_nul_inputs_are_classified_without_spawning_the_executable() {
+#[test]
+fn logical_nul_inputs_are_classified_without_spawning_the_executable() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let marker = directory.path().join("spawned");
     let script = write_script(
@@ -662,7 +652,6 @@ async fn logical_nul_inputs_are_classified_without_spawning_the_executable() {
     for (command, expected_input, sentinel) in cases {
         let error = server
             .cmd(command)
-            .await
             .expect_err("NUL input is rejected before spawn");
         let request_id = match &error {
             Error::InvalidCommandInput {
@@ -685,11 +674,11 @@ async fn logical_nul_inputs_are_classified_without_spawning_the_executable() {
     }
     assert_ne!(request_ids[0], request_ids[1]);
     assert!(!marker.exists(), "invalid logical input never spawns");
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn command_results_expose_exact_status_bytes_and_distinct_request_ids() {
+#[test]
+fn command_results_expose_exact_status_bytes_and_distinct_request_ids() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let script = write_script(
         directory.path(),
@@ -724,7 +713,6 @@ esac
 
     let result = server
         .cmd(Command::new("raw"))
-        .await
         .expect("nonzero status remains result data");
     assert!(!result.success());
     assert_eq!(result.exit_code(), Some(7));
@@ -738,7 +726,6 @@ esac
 
     let signal = server
         .cmd(Command::new("signal"))
-        .await
         .expect("signal status remains result data");
     assert!(!signal.success());
     assert_eq!(signal.exit_code(), None);
@@ -746,7 +733,6 @@ esac
 
     let secret = server
         .cmd(Command::new("secret"))
-        .await
         .expect("secret fixture succeeds");
     let diagnostic = format!("{secret:?}");
     assert!(!diagnostic.contains("sentinel-result-output"));
@@ -755,13 +741,16 @@ esac
     let logical = Command::new("ok");
     let sequential = server
         .cmd(logical.clone())
-        .await
         .expect("sequential command succeeds");
     let cloned_server = server.clone();
-    let (first, second) = tokio::join!(
-        server.cmd(logical.clone()),
-        cloned_server.cmd(logical.clone()),
-    );
+    let (first, second) = std::thread::scope(|threads| {
+        let first = threads.spawn(|| server.cmd(logical.clone()));
+        let second = threads.spawn(|| cloned_server.cmd(logical.clone()));
+        (
+            first.join().expect("first dispatch joins"),
+            second.join().expect("second dispatch joins"),
+        )
+    });
     let first = first.expect("first concurrent command succeeds");
     let second = second.expect("second concurrent command succeeds");
     let ids = [
@@ -777,16 +766,15 @@ esac
 
     let streams = server
         .cmd(Command::new("raw"))
-        .await
         .expect("second raw command succeeds")
         .into_streams();
     assert_eq!(streams.0, b"stdout\n\n\xff");
     assert_eq!(streams.1, b"stderr\n\n\xfe");
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn shared_shutdown_cancels_active_work_and_closes_every_clone() {
+#[test]
+fn shared_shutdown_cancels_active_work_and_closes_every_clone() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let script = write_script(
         directory.path(),
@@ -818,31 +806,35 @@ exit 93
     let server = fake_server(&script, &directory.path().join("shutdown.sock"));
     let dispatch_server = server.clone();
     let dispatch_pid_path = pid_path.clone();
-    let mut dispatch = tokio::spawn(async move {
-        dispatch_server
-            .cmd(Command::new("block").arg(dispatch_pid_path.into_os_string()))
-            .await
+    let mut dispatch = std::thread::spawn(move || {
+        dispatch_server.cmd(Command::new("block").arg(dispatch_pid_path.into_os_string()))
     });
-    let child_pids = read_pids(&pid_path, 2, &mut dispatch).await;
+    let child_pids = read_pids(&pid_path, 2, &mut dispatch);
 
     let first = server.clone();
     let second = server.clone();
-    let (first_shutdown, second_shutdown) = tokio::join!(first.shutdown(), second.shutdown());
+    let (first_shutdown, second_shutdown) = std::thread::scope(|threads| {
+        let first = threads.spawn(|| first.shutdown());
+        let second = threads.spawn(|| second.shutdown());
+        (
+            first.join().expect("first shutdown joins"),
+            second.join().expect("second shutdown joins"),
+        )
+    });
     first_shutdown.expect("first shutdown succeeds");
     second_shutdown.expect("concurrent shutdown succeeds");
-    server.shutdown().await.expect("repeated shutdown succeeds");
+    server.shutdown().expect("repeated shutdown succeeds");
 
     assert!(matches!(
-        dispatch.await.expect("dispatch task remains healthy"),
+        common::join(dispatch).expect("dispatch task remains healthy"),
         Err(Error::ExecutorShutdown { .. })
     ));
     for child_pid in child_pids {
-        assert_process_gone(child_pid).await;
+        assert_process_gone(child_pid);
     }
     let rejected = server
         .clone()
         .cmd(Command::new("rejected").arg(rejected_marker.clone().into_os_string()))
-        .await
         .expect_err("the shut down executor refuses every later call");
     assert!(matches!(rejected, Error::ExecutorShutdown { .. }));
     assert!(
@@ -855,8 +847,8 @@ exit 93
     );
 }
 
-#[tokio::test]
-async fn configured_default_timeout_is_applied_and_reaps_the_child() {
+#[test]
+fn configured_default_timeout_is_applied_and_reaps_the_child() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let script = write_script(
         directory.path(),
@@ -892,14 +884,11 @@ exit 94
         .expect("server configuration is valid");
     let dispatch_server = server.clone();
     let dispatch_pid_path = pid_path.clone();
-    let mut dispatch = tokio::spawn(async move {
-        dispatch_server
-            .cmd(Command::new("block").arg(dispatch_pid_path.into_os_string()))
-            .await
+    let mut dispatch = std::thread::spawn(move || {
+        dispatch_server.cmd(Command::new("block").arg(dispatch_pid_path.into_os_string()))
     });
-    let child_pid = read_pid(&pid_path, &mut dispatch).await;
-    let error = dispatch
-        .await
+    let child_pid = read_pid(&pid_path, &mut dispatch);
+    let error = common::join(dispatch)
         .expect("dispatch task remains healthy")
         .expect_err("blocking command reaches configured timeout");
 
@@ -909,18 +898,17 @@ exit 94
         "the child ran before timing out, so replay could duplicate its effect",
     );
     assert!(pid_path.exists(), "the command crossed the spawn boundary");
-    assert_process_gone(child_pid).await;
+    assert_process_gone(child_pid);
     let probe = server
         .cmd(Command::new("probe"))
-        .await
         .expect("a different call can use the same live server handle");
     assert!(probe.success());
     assert_eq!(probe.stdout(), b"executor-alive\n");
-    server.shutdown().await.expect("shutdown remains clean");
+    server.shutdown().expect("shutdown remains clean");
 }
 
-#[tokio::test]
-async fn missing_executable_is_inert_until_use_and_errors_are_path_safe() {
+#[test]
+fn missing_executable_is_inert_until_use_and_errors_are_path_safe() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let available = write_script(
         directory.path(),
@@ -936,11 +924,9 @@ async fn missing_executable_is_inert_until_use_and_errors_are_path_safe() {
 
     let command_error = server
         .cmd(Command::new("display-message"))
-        .await
         .expect_err("first command reports the missing executable");
     let capability_error = server
         .capabilities()
-        .await
         .expect_err("capability probing reports the missing executable");
     assert!(matches!(&command_error, Error::ExecutableNotFound { .. }));
     assert!(matches!(
@@ -961,17 +947,16 @@ async fn missing_executable_is_inert_until_use_and_errors_are_path_safe() {
     assert_eq!(
         server
             .capabilities()
-            .await
             .expect("failed missing-executable probe is retried")
             .tmux_version()
             .raw(),
         "3.7b"
     );
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
-#[tokio::test]
-async fn a_spawn_failure_needs_more_than_replaying_unchanged() {
+#[test]
+fn a_spawn_failure_needs_more_than_replaying_unchanged() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let script = write_script(
         directory.path(),
@@ -987,7 +972,6 @@ async fn a_spawn_failure_needs_more_than_replaying_unchanged() {
 
     let error = server
         .cmd(Command::new("display-message"))
-        .await
         .expect_err("the executable cannot be started");
     assert!(matches!(error, Error::Spawn { .. }));
     assert!(
@@ -999,16 +983,15 @@ async fn a_spawn_failure_needs_more_than_replaying_unchanged() {
     fs::set_permissions(&script, permissions).expect("execution is restored");
     let retried = server
         .cmd(Command::new("display-message"))
-        .await
         .expect("the unchanged call runs on the same server handle");
     assert!(retried.success());
     assert_eq!(retried.stdout(), b"transport recovered\n");
 
-    server.shutdown().await.expect("shutdown succeeds");
+    server.shutdown().expect("shutdown succeeds");
 }
 
 #[test]
-fn server_operations_run_on_a_current_thread_runtime_created_after_construction() {
+fn server_operations_run_on_the_calling_thread_after_construction() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let script = write_script(
         directory.path(),
@@ -1022,16 +1005,11 @@ printf 'current-thread\n'
 "#,
     );
     let server = fake_server(&script, &directory.path().join("current-thread.sock"));
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime builds");
 
-    runtime.block_on(async {
+    ({
         assert_eq!(
             server
                 .capabilities()
-                .await
                 .expect("capabilities succeed")
                 .tmux_version()
                 .raw(),
@@ -1039,25 +1017,20 @@ printf 'current-thread\n'
         );
         let result = server
             .cmd(Command::new("display-message"))
-            .await
             .expect("raw command succeeds");
         assert_eq!(result.stdout(), b"current-thread\n");
-        server.shutdown().await.expect("shutdown succeeds");
+        server.shutdown().expect("shutdown succeeds");
     });
 }
 
 #[test]
-fn extreme_default_timeouts_do_not_overflow_current_thread_dispatch() {
+fn extreme_default_timeouts_do_not_overflow_blocking_dispatch() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let script = write_script(
         directory.path(),
         "extreme-timeout-tmux",
         "printf 'extreme-timeout-command\\n'",
     );
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime builds");
 
     for (name, timeout) in [
         ("huge-finite", Duration::from_secs(u64::MAX / 2)),
@@ -1070,20 +1043,19 @@ fn extreme_default_timeouts_do_not_overflow_current_thread_dispatch() {
             .build()
             .expect("extreme timeout is valid configuration");
 
-        runtime.block_on(async {
+        ({
             let result = server
                 .cmd(Command::new("display-message"))
-                .await
                 .expect("extreme timeout command succeeds");
             assert!(result.success());
             assert_eq!(result.stdout(), b"extreme-timeout-command\n");
-            server.shutdown().await.expect("shutdown succeeds");
+            server.shutdown().expect("shutdown succeeds");
         });
     }
 }
 
-#[tokio::test]
-async fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
+#[test]
+fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let socket = directory.path().join("socket;");
     let config = directory.path().join("config;");
@@ -1105,7 +1077,6 @@ async fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
                 .arg("-s")
                 .arg("libtmux-foundation"),
         )
-        .await
         .expect("tmux starts on the isolated socket");
     assert!(
         started.success(),
@@ -1114,7 +1085,6 @@ async fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
     );
     let configured = server
         .cmd(Command::new("show-options").arg("-gv").arg("status"))
-        .await
         .expect("show-options executes");
     assert_eq!(configured.stdout(), b"off\n");
 
@@ -1132,13 +1102,11 @@ async fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
                     .arg(name)
                     .arg(value),
             )
-            .await
             .expect("set-environment executes");
         assert!(set.success(), "tmux stderr: {:?}", set.stderr_lossy());
 
         let shown = server
             .cmd(Command::new("show-environment").arg("-g").arg(name))
-            .await
             .expect("show-environment executes");
         assert!(shown.success(), "tmux stderr: {:?}", shown.stderr_lossy());
         assert_eq!(
@@ -1148,7 +1116,7 @@ async fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
         );
     }
 
-    server.shutdown().await.expect("executor shutdown succeeds");
+    server.shutdown().expect("executor shutdown succeeds");
     drop(server);
     let daemon_status = process::Command::new("tmux")
         .arg("-S")
@@ -1189,17 +1157,15 @@ fn an_absent_tmux_variable_is_told_apart_from_a_malformed_one() {
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_channel_lock_is_released_when_the_body_fails() {
+#[test]
+fn a_channel_lock_is_released_when_the_body_fails() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
 
-    let outcome: Result<(), _> = server
-        .with_channel_lock("deploy", async |_| Err::<(), _>("the body failed"))
-        .await;
+    let outcome: Result<(), _> =
+        server.with_channel_lock("deploy", |_| Err::<(), _>("the body failed"));
     assert!(matches!(
         outcome,
         Err(libtmux::ScopeError::Operation("the body failed"))
@@ -1209,14 +1175,12 @@ async fn a_channel_lock_is_released_when_the_body_fails() {
     // what would report it; taking the lock is the assertion.
     server
         .lock_channel("deploy")
-        .await
         .expect("the channel was released");
     server
         .unlock_channel("deploy")
-        .await
         .expect("the channel unlocks");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A handle that gives up sooner than the fixture's, on the same socket.
@@ -1248,11 +1212,10 @@ fn processes_naming(channel: &str) -> Vec<String> {
 /// tmux releases a signal to whatever is waiting and keeps it only when
 /// nothing is, so a wait that gave up must not be counted as waiting.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_signal_after_a_wait_ran_out_of_time_reaches_the_next_wait() {
+#[test]
+fn a_signal_after_a_wait_ran_out_of_time_reaches_the_next_wait() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let channel = libtmux::test::unique_name("timed-out");
@@ -1260,7 +1223,6 @@ async fn a_signal_after_a_wait_ran_out_of_time_reaches_the_next_wait() {
     assert_eq!(
         server
             .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
-            .await
             .expect("the wait runs"),
         ChannelWait::TimedOut,
         "nothing signalled the channel",
@@ -1268,65 +1230,59 @@ async fn a_signal_after_a_wait_ran_out_of_time_reaches_the_next_wait() {
 
     server
         .signal_channel(&channel)
-        .await
         .expect("the channel is signalled");
 
     assert_eq!(
         server
             .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
-            .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
         "the signal arrived before this wait started, so the wait returns at once",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A dropped wait is a wait that gave up, and gives up the same way.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_signal_after_a_dropped_wait_reaches_the_next_wait() {
+#[test]
+fn a_signal_after_a_dropped_wait_reaches_the_next_wait() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let channel = libtmux::test::unique_name("dropped");
 
-    let dropped = server.wait_for_channel(&channel, scaled(Duration::from_secs(30)));
+    let (waiting, token) = common::cancellable(server);
     assert!(
-        tokio::time::timeout(scaled(Duration::from_millis(200)), dropped)
-            .await
-            .is_err(),
+        common::with_deadline(token, scaled(Duration::from_millis(200)), || waiting
+            .wait_for_channel(&channel, scaled(Duration::from_secs(30))))
+        .is_err(),
         "nothing signalled the channel",
     );
 
     server
         .signal_channel(&channel)
-        .await
         .expect("the channel is signalled");
 
     assert_eq!(
         server
             .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
-            .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// One signal releases every waiter, so one client can carry every wait this
 /// process has on the channel -- and must, or the second would keep a signal
 /// the first already answered.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn waits_on_one_channel_share_one_client() {
+#[test]
+fn waits_on_one_channel_share_one_client() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let channel = libtmux::test::unique_name("shared");
@@ -1335,7 +1291,6 @@ async fn waits_on_one_channel_share_one_client() {
         assert_eq!(
             server
                 .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
-                .await
                 .expect("the wait runs"),
             ChannelWait::TimedOut,
         );
@@ -1345,24 +1300,22 @@ async fn waits_on_one_channel_share_one_client() {
 
     server
         .signal_channel(&channel)
-        .await
         .expect("the channel is signalled");
     assert_eq!(
         server
             .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
-            .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Signalling a channel is what releases the client parked on it, so a parked
 /// client must not be able to hold the dispatch that would do the releasing.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
+#[test]
+fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
     let guard = libtmux::test::TestServer::builder()
         .dispatch_limits(
             libtmux::DispatchLimits::default()
@@ -1370,7 +1323,6 @@ async fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
                 .acquire_timeout(Some(scaled(Duration::from_secs(2)))),
         )
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let channel = libtmux::test::unique_name("crowded");
@@ -1378,7 +1330,6 @@ async fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
     assert_eq!(
         server
             .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
-            .await
             .expect("the wait runs"),
         ChannelWait::TimedOut,
     );
@@ -1387,27 +1338,24 @@ async fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
     // releases reads it.
     server
         .signal_channel(&channel)
-        .await
         .expect("the channel is signalled");
     assert_eq!(
         server
             .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
-            .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// The wait's client is this process's to account for: after shutdown none of
 /// it is left running.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_wait_that_ran_out_of_time_leaves_no_client_behind_after_shutdown() {
+#[test]
+fn a_wait_that_ran_out_of_time_leaves_no_client_behind_after_shutdown() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let channel = libtmux::test::unique_name("parked");
 
@@ -1415,12 +1363,11 @@ async fn a_wait_that_ran_out_of_time_leaves_no_client_behind_after_shutdown() {
         guard
             .server()
             .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
-            .await
             .expect("the wait runs"),
         ChannelWait::TimedOut,
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 
     let left = processes_naming(&channel);
     assert!(left.is_empty(), "processes left running: {left:?}");
@@ -1429,67 +1376,53 @@ async fn a_wait_that_ran_out_of_time_leaves_no_client_behind_after_shutdown() {
 /// tmux hands a released lock to the first queued locker, dead or alive, so a
 /// locker that gave up must not still be queued.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_lock_that_ran_out_of_time_while_queued_leaves_the_channel_lockable() {
+#[test]
+fn a_lock_that_ran_out_of_time_while_queued_leaves_the_channel_lockable() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let impatient = impatient_handle(&guard, scaled(Duration::from_millis(400)));
     let channel = libtmux::test::unique_name("queued");
 
-    server
-        .lock_channel(&channel)
-        .await
-        .expect("the channel locks");
+    server.lock_channel(&channel).expect("the channel locks");
 
     let queued = impatient
         .lock_channel(&channel)
-        .await
         .expect_err("the second lock runs out of time while queued");
     assert_eq!(queued.kind(), libtmux::ErrorKind::Timeout);
 
     server
         .unlock_channel(&channel)
-        .await
         .expect("the holder releases the channel");
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
+    let (locker, token) = common::cancellable(server);
+    common::with_deadline(token, scaled(Duration::from_secs(5)), || {
+        locker.lock_channel(&channel)
+    })
     .expect("the channel is not wedged")
     .expect("the channel locks again");
     server
         .unlock_channel(&channel)
-        .await
         .expect("the channel unlocks");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// `with_channel_lock` takes the same lock, so it inherits the same hazard.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_lock_scope_that_ran_out_of_time_while_queued_leaves_the_channel_lockable() {
+#[test]
+fn a_lock_scope_that_ran_out_of_time_while_queued_leaves_the_channel_lockable() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let impatient = impatient_handle(&guard, scaled(Duration::from_millis(400)));
     let channel = libtmux::test::unique_name("queued-scope");
 
-    server
-        .lock_channel(&channel)
-        .await
-        .expect("the channel locks");
+    server.lock_channel(&channel).expect("the channel locks");
 
-    let outcome: Result<(), _> = impatient
-        .with_channel_lock(&channel, async |_| Ok::<(), Error>(()))
-        .await;
+    let outcome: Result<(), _> = impatient.with_channel_lock(&channel, |_| Ok::<(), Error>(()));
     assert!(
         matches!(
             &outcome,
@@ -1500,122 +1433,111 @@ async fn a_lock_scope_that_ran_out_of_time_while_queued_leaves_the_channel_locka
 
     server
         .unlock_channel(&channel)
-        .await
         .expect("the holder releases the channel");
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
+    let (locker, token) = common::cancellable(server);
+    common::with_deadline(token, scaled(Duration::from_secs(5)), || {
+        locker.lock_channel(&channel)
+    })
     .expect("the channel is not wedged")
     .expect("the channel locks again");
     server
         .unlock_channel(&channel)
-        .await
         .expect("the channel unlocks");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A lock dropped while still queued is granted in turn and released, rather
 /// than held by a caller that is no longer there.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_lock_dropped_while_queued_leaves_the_channel_lockable() {
+#[test]
+fn a_lock_dropped_while_queued_leaves_the_channel_lockable() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let channel = libtmux::test::unique_name("dropped-lock");
 
-    server
-        .lock_channel(&channel)
-        .await
-        .expect("the channel locks");
+    server.lock_channel(&channel).expect("the channel locks");
 
+    let (queued, token) = common::cancellable(server);
     assert!(
-        tokio::time::timeout(
-            scaled(Duration::from_millis(400)),
-            server.lock_channel(&channel),
-        )
-        .await
+        common::with_deadline(token, scaled(Duration::from_millis(400)), || queued
+            .lock_channel(&channel))
         .is_err(),
         "the second lock is still queued behind the holder",
     );
 
     server
         .unlock_channel(&channel)
-        .await
         .expect("the holder releases the channel");
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
+    let (locker, token) = common::cancellable(server);
+    common::with_deadline(token, scaled(Duration::from_secs(5)), || {
+        locker.lock_channel(&channel)
+    })
     .expect("the channel is not wedged")
     .expect("the channel locks again");
     server
         .unlock_channel(&channel)
-        .await
         .expect("the channel unlocks");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A lock scope dropped while its lock is still queued: the lock runs in a
 /// task of its own, so the drop cannot strand it.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_lock_scope_dropped_while_queued_leaves_the_channel_lockable() {
+#[test]
+#[allow(
+    clippy::result_large_err,
+    reason = "scoped failures retain the caller error and cleanup error by value"
+)]
+fn a_lock_scope_dropped_while_queued_leaves_the_channel_lockable() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let channel = libtmux::test::unique_name("dropped-scope");
 
-    server
-        .lock_channel(&channel)
-        .await
-        .expect("the channel locks");
+    server.lock_channel(&channel).expect("the channel locks");
 
-    let scope = server.with_channel_lock(&channel, async |_| Ok::<(), Error>(()));
-    assert!(
-        tokio::time::timeout(scaled(Duration::from_millis(400)), scope)
-            .await
-            .is_err(),
-        "the scope is still queued behind the holder",
-    );
+    let (queued, token) = common::cancellable(server);
+    let scope_channel = channel.clone();
+    let scope = std::thread::spawn(move || {
+        queued.with_channel_lock(&scope_channel, |_| Ok::<(), Error>(()))
+    });
+    std::thread::sleep(scaled(Duration::from_millis(400)));
+    assert!(!scope.is_finished(), "scope is queued behind the holder");
+    token.cancel();
 
     server
         .unlock_channel(&channel)
-        .await
         .expect("the holder releases the channel");
+    assert!(matches!(
+        common::join(scope).expect("scope thread joins"),
+        Err(libtmux::ScopeError::Cancelled { cleanup: None })
+    ));
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
+    let (locker, token) = common::cancellable(server);
+    common::with_deadline(token, scaled(Duration::from_secs(5)), || {
+        locker.lock_channel(&channel)
+    })
     .expect("the channel is not wedged")
     .expect("the channel locks again");
     server
         .unlock_channel(&channel)
-        .await
         .expect("the channel unlocks");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_buffer_larger_than_an_argument_round_trips_through_files() {
+#[test]
+fn a_buffer_larger_than_an_argument_round_trips_through_files() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
     let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -1630,18 +1552,16 @@ async fn a_buffer_larger_than_an_argument_round_trips_through_files() {
     assert!(
         server
             .set_buffer(Some("big"), os_string_from_bytes(&payload))
-            .await
             .is_err(),
         "a 200 KiB argument does not fit on a command line",
     );
 
     server
         .load_buffer(Some("big"), &source)
-        .await
         .expect("tmux reads the file");
     // Compared by shape rather than by value: a failed `assert_eq!` on the
     // whole payload prints 200 KB of `120,` and buries the reason.
-    let loaded = server.buffer("big").await.expect("the buffer reads");
+    let loaded = server.buffer("big").expect("the buffer reads");
     assert_eq!(loaded.as_ref().map(Vec::len), Some(payload.len()));
     assert_eq!(
         loaded.as_deref(),
@@ -1651,13 +1571,12 @@ async fn a_buffer_larger_than_an_argument_round_trips_through_files() {
 
     server
         .save_buffer(Some("big"), &written)
-        .await
         .expect("tmux writes the file");
     let read_back = fs::read(&written).expect("the output is readable");
     assert_eq!(read_back.len(), payload.len());
     assert!(read_back == payload, "the bytes differ");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "test-support")]
@@ -1666,16 +1585,13 @@ fn os_string_from_bytes(bytes: &[u8]) -> OsString {
     OsString::from_vec(bytes.to_vec())
 }
 
-/// A caller who wants a deadline shorter than the server's default does not
-/// need an API for it: dropping the command future signals the process group
-/// and reaps it, so `tokio::time::timeout` is a per-call deadline with the
-/// cleanup already attached.
+/// A caller can cancel one command before the server-wide timeout. The
+/// cancelled dispatch waits for client cleanup before returning.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn a_caller_can_bound_one_command_with_tokio_timeout() {
+#[test]
+fn a_caller_can_bound_one_command_with_explicit_cancellation() {
     let guard = libtmux::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
 
@@ -1685,11 +1601,10 @@ async fn a_caller_can_bound_one_command_with_tokio_timeout() {
     // rather than `Server::run_shell`, which refuses outright on 3.3 through
     // 3.4 -- a version gate on captured output this test does not read.
     let started = Instant::now();
-    let outcome = tokio::time::timeout(
-        Duration::from_millis(400),
-        server.cmd(Command::new("run-shell").arg("sleep 3")),
-    )
-    .await;
+    let (bounded, token) = common::cancellable(server);
+    let outcome = common::with_deadline(token, Duration::from_millis(400), || {
+        bounded.cmd(Command::new("run-shell").arg("sleep 3"))
+    });
 
     assert!(outcome.is_err(), "the caller's deadline ended the wait");
     assert!(
@@ -1700,7 +1615,7 @@ async fn a_caller_can_bound_one_command_with_tokio_timeout() {
 
     // The server is still usable afterwards: a bounded call is not a broken
     // connection.
-    server.sessions().await.expect("the server still answers");
+    server.sessions().expect("the server still answers");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }

@@ -36,12 +36,7 @@ impl Scope<'_> {
 }
 
 /// Set a variable, so processes started later inherit it.
-pub(crate) async fn set(
-    core: &Core,
-    scope: Scope<'_>,
-    name: &str,
-    value: OsString,
-) -> Result<(), Error> {
+pub(crate) fn set(core: &Core, scope: Scope<'_>, name: &str, value: OsString) -> Result<(), Error> {
     listing::mutate(
         core,
         "set-environment",
@@ -52,11 +47,10 @@ pub(crate) async fn set(
             // An environment carries tokens, so the value never reaches a log.
             .sensitive_arg(value),
     )
-    .await
 }
 
 /// Mark a variable, so processes started later are handed it absent.
-pub(crate) async fn hide(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+pub(crate) fn hide(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
     listing::mutate(
         core,
         "set-environment",
@@ -66,11 +60,10 @@ pub(crate) async fn hide(core: &Core, scope: Scope<'_>, name: &str) -> Result<()
             .arg("--")
             .arg(OsString::from(name)),
     )
-    .await
 }
 
 /// Delete a variable, letting whatever tmux inherited show through again.
-pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+pub(crate) fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
     listing::mutate(
         core,
         "set-environment",
@@ -80,7 +73,6 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
             .arg("--")
             .arg(OsString::from(name)),
     )
-    .await
 }
 
 /// Read one variable back, telling a removal from a value.
@@ -93,19 +85,17 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
 /// session" -- two different facts on the same exit code. Reading every
 /// refusal as the first told a caller their variable was unset when their
 /// session had ended, which is the answer they would act on.
-pub(crate) async fn get(
+pub(crate) fn get(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
 ) -> Result<Option<EnvironmentEntry>, Error> {
-    let result = core
-        .execute(
-            scope
-                .apply(Command::new("show-environment"))
-                .arg("--")
-                .arg(OsString::from(name)),
-        )
-        .await?;
+    let result = core.execute(
+        scope
+            .apply(Command::new("show-environment"))
+            .arg("--")
+            .arg(OsString::from(name)),
+    )?;
     if !result.success() {
         // "unknown variable: NAME" is the answer `None` exists for. Anything
         // else -- a session that has ended, a server that has gone -- is a
@@ -147,13 +137,11 @@ pub(crate) async fn get(
 /// every `"`, `\`, `$` and backtick in the value escaped, so the first
 /// unescaped `"` ends the value. That escaping is undone and nothing else is,
 /// so each value reads exactly as [`get`] reads it.
-pub(crate) async fn all(
+pub(crate) fn all(
     core: &Core,
     scope: Scope<'_>,
 ) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
-    let result = core
-        .execute(scope.apply(Command::new("show-environment")).arg("-s"))
-        .await?;
+    let result = core.execute(scope.apply(Command::new("show-environment")).arg("-s"))?;
     if !result.success() {
         return Err(Error::from_refused_result(
             "show-environment",

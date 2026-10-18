@@ -4,6 +4,34 @@ Each section is one release: what a caller has to change to build against it.
 Start at the section for the version you are on and work up. Changes that
 need no edit on your side are in the changelog, not here.
 
+## Package split on this branch
+
+`libtmux` is now a blocking client. `libtmux-tokio` provides the native async
+client. Tokio applications can keep existing import paths with a dependency
+alias:
+
+```toml
+[dependencies]
+libtmux = { package = "libtmux-tokio", path = "../libtmux-rs/crates/libtmux-tokio" }
+```
+
+Keep `.await` when selecting the Tokio package. For the blocking package,
+remove `.await` from operations and use synchronous scoped callbacks. Control
+notifications use iterators and timeout methods instead of async streams.
+Each package owns its handles; use IDs and value types to pass targets between
+clients.
+
+The blocking package has no default features or crate dependencies. Enable
+`query` explicitly for filters; `control-mode` and `plan` add no dependencies.
+The Tokio package keeps `query` enabled by default. Enable other optional
+features as before.
+
+The branch requires Rust 1.97.1 and supports Linux, including WSL. The new
+package names and dependency graph are not published by this branch's
+existing alpha version. Use checkout paths until a coordinated release.
+See [Packages and runtimes](packages.md) for process supervision and shutdown
+contracts.
+
 ## From 0.1.0-alpha.12 to 0.1.0-alpha.13
 
 ### `ServerBuilder::colors` refuses 88
@@ -62,11 +90,11 @@ filter on it still see the `i64` tmux reports.
 listed name passes back as it is, and a `&str` needs no change:
 
 ```no_run
-# async fn buffers(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-for name in server.buffer_names().await? {
+# fn buffers(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+for name in server.buffer_names()? {
     // was: `name` was a `String`; `to_string_lossy` is the old reading.
     println!("{}", name.to_string_lossy());
-    server.delete_buffer(&name).await?;
+    server.delete_buffer(&name)?;
 }
 # Ok(())
 # }
@@ -75,9 +103,9 @@ for name in server.buffer_names().await? {
 ### `respawn` and `display_menu` take types, not literals
 
 ```no_run
-# async fn respawn(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
+# fn respawn(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
 // was: pane.respawn(Some("sh"), true)
-pane.respawn(Some("sh"), libtmux::Respawn::Replacing).await?;
+pane.respawn(Some("sh"), libtmux::Respawn::Replacing)?;
 # Ok(())
 # }
 ```
@@ -114,11 +142,11 @@ number as an `i64`; where the bytes are wanted, `TmuxText::from` gives back
 exactly what the removed reader returned:
 
 ```no_run
-# async fn read(session: &libtmux::Session) -> Result<(), libtmux::Error> {
+# fn read(session: &libtmux::Session) -> Result<(), libtmux::Error> {
 use libtmux::TmuxText;
 
-// was: session.get_option("status-left").await?
-let left = session.typed_option("status-left").await?.map(TmuxText::from);
+// was: session.get_option("status-left")?
+let left = session.typed_option("status-left")?.map(TmuxText::from);
 # let _ = left;
 # Ok(())
 # }
@@ -129,11 +157,11 @@ table; `set_option` is unchanged.
 
 ### The `_or_empty` listing twins are gone
 
-Replace `x_or_empty().await` with `x().await.unwrap_or_default()`:
+Replace `x_or_empty()` with `x().unwrap_or_default()`:
 
 ```no_run
-# async fn listing(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-let sessions = server.sessions().await.unwrap_or_default();
+# fn listing(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+let sessions = server.sessions().unwrap_or_default();
 # let _ = sessions;
 # Ok(())
 # }
@@ -150,9 +178,9 @@ conversion into it escapes. `&str`, `String`, `OsString`, `Path` and
 `&TmuxText` all convert, so ordinary calls are unchanged:
 
 ```no_run
-# async fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+# fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 // Unchanged, and now stored as written rather than expanded.
-server.new_session("release#1").await?;
+server.new_session("release#1")?;
 # Ok(())
 # }
 ```
@@ -166,14 +194,14 @@ Two changes to make:
   around a template the program itself wrote.
 
 ```no_run
-# async fn split(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+# fn split(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
 use libtmux::{SplitDirection, SplitOptions, TmuxArg};
 
 pane.split(
     SplitOptions::new(SplitDirection::Below)
         .start_directory(TmuxArg::format("#{pane_current_path}")),
 )
-.await?;
+?;
 # Ok(())
 # }
 ```
@@ -190,17 +218,17 @@ and `ControlMode::next_event` return `Option<Result<Event, Error>>`. Change
 `match event` to `match event?` in a fallible consumer:
 
 ```no_run
-# async fn watch(mut events: libtmux::control::ControlEvents) -> Result<(), libtmux::Error> {
+# fn watch(mut events: libtmux::control::ControlEvents) -> Result<(), libtmux::Error> {
 use libtmux::control::Event;
 
-while let Some(event) = events.next_event().await {
+while let Some(event) = events.next_event() {
     match event? {
         Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
         Event::Exit { .. } => break,
         _ => {}
     }
 }
-events.shutdown().await?;
+events.shutdown()?;
 # Ok(())
 # }
 ```

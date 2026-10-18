@@ -17,10 +17,22 @@ use std::time::{Duration, Instant};
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
-use super::actor::EVENT_QUEUE;
+use super::channel::EVENT_QUEUE;
 use super::{ControlMode, Event, PaneOutput};
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
 use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId, TmuxText};
+
+macro_rules! timed {
+    ($limit:expr, $body:expr $(,)?) => {{
+        let started = Instant::now();
+        let outcome = $body;
+        if started.elapsed() <= $limit {
+            Ok(outcome)
+        } else {
+            Err("operation exceeded deadline")
+        }
+    }};
+}
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -161,31 +173,33 @@ fn read_pid(path: &Path) -> Option<u32> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-async fn wait_for_pid(path: &Path) -> u32 {
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        loop {
-            if let Some(value) = read_pid(path) {
-                return value;
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
+fn wait_for_pid(path: &Path) -> u32 {
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    loop {
+        if let Some(value) = read_pid(path) {
+            return value;
         }
-    })
-    .await
-    .expect("child publishes its PID before the test deadline")
+        assert!(
+            Instant::now() < deadline,
+            "child publishes PID before deadline"
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }
 
 fn process_exists(value: u32) -> bool {
     !matches!(test_kill_process(pid(value)), Err(Errno::SRCH))
 }
 
-async fn assert_process_gone(value: u32) {
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        while process_exists(value) {
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .expect("process disappears before the test deadline");
+fn assert_process_gone(value: u32) {
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    while process_exists(value) {
+        assert!(
+            Instant::now() < deadline,
+            "process {value} disappears before deadline"
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }
 
 struct ProcessGuard {
@@ -221,15 +235,22 @@ fn process_script(parent: &Path, descendant: &Path, prefix: &str) -> String {
 /// before returning -- block 1 is the opening handshake, block 2 answers that
 /// request, so a test's own first command after attaching is block 3.
 fn opening_success() -> &'static str {
-    "printf '%%begin 0 1 0\\n%%end 0 1 0\\n'\nIFS= read -r _new_layouts\nprintf '%%begin 0 2 0\\n%%end 0 2 0\\n'"
+    r#"reply_fence() {
+    IFS= read -r _fence
+    printf '%%begin 0 900 1\nparse error: unknown command: %s\n%%error 0 900 1\n' "$_fence"
+}
+printf '%%begin 0 1 0\n%%end 0 1 0\n'
+IFS= read -r _new_layouts
+printf '%%begin 0 2 1\n%%end 0 2 1\n'
+reply_fence"#
 }
 
-async fn attach(server: &Server) -> Result<ControlMode, Error> {
-    ControlMode::attach(server, &session()).await
+fn attach(server: &Server) -> Result<ControlMode, Error> {
+    ControlMode::attach(server, &session())
 }
 
-#[tokio::test]
-async fn attach_uses_the_cores_captured_launch_context() {
+#[test]
+fn attach_uses_the_cores_captured_launch_context() {
     let fixture = directory();
     let record = fixture.path().join("context");
     let executable = write_script(
@@ -249,7 +270,7 @@ async fn attach_uses_the_cores_captured_launch_context() {
         Some(256),
     );
 
-    let control = attach(&server).await.expect("control mode attaches");
+    let control = attach(&server).expect("control mode attaches");
     let captured = fs::read_to_string(&record).expect("launch context is recorded");
     let physical_directory = fixture
         .path()
@@ -263,12 +284,12 @@ async fn attach_uses_the_cores_captured_launch_context() {
     );
     assert_eq!(captured, expected);
 
-    control.shutdown().await.expect("control mode shuts down");
-    server.shutdown().await.expect("server shuts down");
+    control.shutdown().expect("control mode shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn opening_handshake_times_out_and_reaps_the_process_group() {
+#[test]
+fn opening_handshake_times_out_and_reaps_the_process_group() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
@@ -276,21 +297,20 @@ async fn opening_handshake_times_out_and_reaps_the_process_group() {
     let executable = write_script(fixture.path(), &process_script(&parent, &descendant, ""));
     let server = basic_server(fixture.path(), executable, HANDSHAKE_TIMEOUT);
 
-    let error = tokio::time::timeout(TEST_TIMEOUT, attach(&server))
-        .await
+    let error = timed!(TEST_TIMEOUT, attach(&server))
         .expect("the configured deadline ends attach")
         .expect_err("an absent opening block times out");
     assert_eq!(error.kind(), ErrorKind::Timeout);
-    let parent_pid = wait_for_pid(&parent).await;
-    let descendant_pid = wait_for_pid(&descendant).await;
-    assert_process_gone(parent_pid).await;
-    assert_process_gone(descendant_pid).await;
+    let parent_pid = wait_for_pid(&parent);
+    let descendant_pid = wait_for_pid(&descendant);
+    assert_process_gone(parent_pid);
+    assert_process_gone(descendant_pid);
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn a_short_reply_deadline_does_not_bound_attaching() {
+#[test]
+fn a_short_reply_deadline_does_not_bound_attaching() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
@@ -304,7 +324,6 @@ async fn a_short_reply_deadline_does_not_bound_attaching() {
     );
     let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (commands, events) = attach(&server)
-        .await
         .expect("attaching outlasts the reply deadline")
         .reply_timeout(REPLY_TIMEOUT)
         .split();
@@ -312,25 +331,21 @@ async fn a_short_reply_deadline_does_not_bound_attaching() {
     // Bounded well under the server's deadline, so a `reply_timeout` that did
     // not take effect fails here rather than passing five seconds later on the
     // connection's own default.
-    let error = tokio::time::timeout(
+    let error = timed!(
         Duration::from_secs(2),
         commands.send(Command::new("display-message")),
     )
-    .await
     .expect("the command keeps the shorter deadline")
     .expect_err("the command times out");
     assert_eq!(error.kind(), ErrorKind::Timeout);
-    let shutdown = events
-        .shutdown()
-        .await
-        .expect_err("the actor reports timeout");
+    let shutdown = events.shutdown().expect_err("the actor reports timeout");
     assert_eq!(shutdown.kind(), ErrorKind::Timeout);
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn cancelling_attach_reaps_the_process_group() {
+#[test]
+fn cancelling_attach_reaps_the_process_group() {
     for negotiate_layouts in [false, true] {
         let fixture = directory();
         let parent = fixture.path().join("parent.pid");
@@ -350,25 +365,30 @@ async fn cancelling_attach_reaps_the_process_group() {
             &process_script(&parent, &descendant, &prefix),
         );
         let server = basic_server(fixture.path(), executable, Duration::from_secs(30));
+        let cancelled = server.cancellation_token().clone();
         let attached = server.clone();
-        let task = tokio::spawn(async move { attach(&attached).await });
-        let parent_pid = wait_for_pid(&parent).await;
-        let descendant_pid = wait_for_pid(&descendant).await;
+        let task = std::thread::spawn(move || attach(&attached));
+        let parent_pid = wait_for_pid(&parent);
+        let descendant_pid = wait_for_pid(&descendant);
         if negotiate_layouts {
-            assert_eq!(wait_for_pid(&layouts).await, parent_pid);
+            assert_eq!(wait_for_pid(&layouts), parent_pid);
         }
 
-        task.abort();
-        assert!(task.await.expect_err("attach is cancelled").is_cancelled());
-        assert_process_gone(parent_pid).await;
-        assert_process_gone(descendant_pid).await;
+        cancelled.cancel();
+        let error = task
+            .join()
+            .expect("attach thread joins")
+            .expect_err("attach is cancelled");
+        assert_eq!(error.kind(), ErrorKind::Cancelled);
+        assert_process_gone(parent_pid);
+        assert_process_gone(descendant_pid);
 
-        server.shutdown().await.expect("server shuts down");
+        server.shutdown().expect("server shuts down");
     }
 }
 
-#[tokio::test]
-async fn dropping_both_halves_reaps_the_process_group() {
+#[test]
+fn dropping_both_halves_reaps_the_process_group() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
@@ -378,26 +398,26 @@ async fn dropping_both_halves_reaps_the_process_group() {
         &process_script(&parent, &descendant, opening_success()),
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(30));
-    let control = attach(&server).await.expect("control mode attaches");
-    let parent_pid = wait_for_pid(&parent).await;
-    let descendant_pid = wait_for_pid(&descendant).await;
+    let control = attach(&server).expect("control mode attaches");
+    let parent_pid = wait_for_pid(&parent);
+    let descendant_pid = wait_for_pid(&descendant);
 
     drop(control);
-    assert_process_gone(parent_pid).await;
-    assert_process_gone(descendant_pid).await;
+    assert_process_gone(parent_pid);
+    assert_process_gone(descendant_pid);
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn an_open_response_block_has_one_deadline() {
+#[test]
+fn an_open_response_block_has_one_deadline() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 1\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -407,16 +427,14 @@ async fn an_open_response_block_has_one_deadline() {
     );
     let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (commands, events) = attach(&server)
-        .await
         .expect("control mode attaches")
         .reply_timeout(REPLY_TIMEOUT)
         .split();
 
-    let error = tokio::time::timeout(
+    let error = timed!(
         Duration::from_secs(2),
         commands.send(Command::new("display-message")),
     )
-    .await
     .expect("the open block reaches its deadline")
     .expect_err("the open block times out");
     assert_eq!(error.kind(), ErrorKind::Timeout);
@@ -427,32 +445,25 @@ async fn an_open_response_block_has_one_deadline() {
     assert!(marker.exists(), "the command reached the fake client");
     let closed = commands
         .send(Command::new("display-message"))
-        .await
         .expect_err("the timed out sender remains closed");
     assert!(
         !closed.is_transient(),
         "waiting cannot reopen the timed out sender",
     );
-    let shutdown = events
-        .shutdown()
-        .await
-        .expect_err("the actor reports timeout");
+    let shutdown = events.shutdown().expect_err("the actor reports timeout");
     assert_eq!(shutdown.kind(), ErrorKind::Timeout);
-    assert_process_gone(wait_for_pid(&parent).await).await;
-    assert_process_gone(wait_for_pid(&descendant).await).await;
+    assert_process_gone(wait_for_pid(&parent));
+    assert_process_gone(wait_for_pid(&descendant));
 
-    let replacement = attach(&server)
-        .await
-        .expect("a new connection can attach through the same server");
+    let replacement = attach(&server).expect("a new connection can attach through the same server");
     replacement
         .shutdown()
-        .await
         .expect("the replacement connection shuts down");
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn a_reply_deadline_starts_before_begin() {
+#[test]
+fn a_reply_deadline_starts_before_begin() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
@@ -469,31 +480,26 @@ async fn a_reply_deadline_starts_before_begin() {
     );
     let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (commands, events) = attach(&server)
-        .await
         .expect("control mode attaches")
         .reply_timeout(REPLY_TIMEOUT)
         .split();
 
-    let error = tokio::time::timeout(
+    let error = timed!(
         Duration::from_secs(2),
         commands.send(Command::new("display-message")),
     )
-    .await
     .expect("the reply deadline does not wait for begin")
     .expect_err("a missing begin times out");
     assert_eq!(error.kind(), ErrorKind::Timeout);
     assert!(marker.exists(), "the command reached the fake client");
-    let shutdown = events
-        .shutdown()
-        .await
-        .expect_err("the actor reports timeout");
+    let shutdown = events.shutdown().expect_err("the actor reports timeout");
     assert_eq!(shutdown.kind(), ErrorKind::Timeout);
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn the_earliest_committed_deadline_ends_the_connection() {
+#[test]
+fn the_earliest_committed_deadline_ends_the_connection() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
@@ -501,7 +507,7 @@ async fn the_earliest_committed_deadline_ends_the_connection() {
     let second_seen = fixture.path().join("second-command");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _first\n: > {}\nIFS= read -r _second\n: > {}",
+        "{}\nIFS= read -r _first\n: > {}\nIFS= read -r _first_fence\nIFS= read -r _second\n: > {}",
         opening_success(),
         shell_quote(&first_seen),
         shell_quote(&second_seen),
@@ -512,32 +518,28 @@ async fn the_earliest_committed_deadline_ends_the_connection() {
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(2));
     let (later, events) = attach(&server)
-        .await
         .expect("control mode attaches")
         .reply_timeout(Duration::from_secs(2))
         .split();
     let earlier = later.clone().reply_timeout(REPLY_TIMEOUT);
 
-    let first = tokio::spawn(async move { later.send(Command::new("list-sessions")).await });
-    tokio::time::timeout(TEST_TIMEOUT, async {
+    let first = std::thread::spawn(move || later.send(Command::new("list-sessions")));
+    timed!(TEST_TIMEOUT, {
         while !first_seen.exists() {
-            tokio::time::sleep(POLL_INTERVAL).await;
+            std::thread::sleep(POLL_INTERVAL);
         }
     })
-    .await
     .expect("the first command reaches the client");
 
-    let second = tokio::spawn(async move { earlier.send(Command::new("list-windows")).await });
-    tokio::time::timeout(TEST_TIMEOUT, async {
+    let second = std::thread::spawn(move || earlier.send(Command::new("list-windows")));
+    timed!(TEST_TIMEOUT, {
         while !second_seen.exists() {
-            tokio::time::sleep(POLL_INTERVAL).await;
+            std::thread::sleep(POLL_INTERVAL);
         }
     })
-    .await
     .expect("the second command reaches the client");
 
-    let second_error = tokio::time::timeout(Duration::from_secs(1), second)
-        .await
+    let second_error = timed!(Duration::from_secs(1), second.join())
         .expect("the earlier deadline ends the actor")
         .expect("the second sender task joins")
         .expect_err("the second command times out");
@@ -551,23 +553,22 @@ async fn the_earliest_committed_deadline_ends_the_connection() {
     ));
     assert!(!second_error.is_transient());
     let first_error = first
-        .await
+        .join()
         .expect("the first sender task joins")
         .expect_err("the shared connection ends");
     assert_eq!(first_error.kind(), ErrorKind::Timeout);
     let shutdown = events
         .shutdown()
-        .await
         .expect_err("the actor reports its deadline");
     assert_eq!(shutdown.kind(), ErrorKind::Timeout);
-    assert_process_gone(wait_for_pid(&parent).await).await;
-    assert_process_gone(wait_for_pid(&descendant).await).await;
+    assert_process_gone(wait_for_pid(&parent));
+    assert_process_gone(wait_for_pid(&descendant));
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn a_blocked_write_uses_the_reply_deadline() {
+#[test]
+fn a_blocked_write_uses_the_reply_deadline() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
@@ -578,40 +579,35 @@ async fn a_blocked_write_uses_the_reply_deadline() {
     );
     let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (commands, events) = attach(&server)
-        .await
         .expect("control mode attaches")
         .reply_timeout(REPLY_TIMEOUT)
         .split();
 
-    let error = tokio::time::timeout(
+    let error = timed!(
         Duration::from_secs(2),
         // Sized between two bounds rather than to be asserted on: past the
         // pipe buffer, and short of the 2 MiB that spends this deadline being
         // serialized before the request can commit.
         commands.send(Command::new("display-message").arg("x".repeat(256 * 1024))),
     )
-    .await
     .expect("the blocked write reaches its deadline")
     .expect_err("the blocked write times out");
     assert_eq!(error.kind(), ErrorKind::Timeout);
-    let shutdown = events
-        .shutdown()
-        .await
-        .expect_err("the actor reports timeout");
+    let shutdown = events.shutdown().expect_err("the actor reports timeout");
     assert_eq!(shutdown.kind(), ErrorKind::Timeout);
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn watcher_shutdown_interrupts_an_open_response_block() {
+#[test]
+fn watcher_shutdown_interrupts_an_open_response_block() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 1\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -620,26 +616,21 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
         &process_script(&parent, &descendant, &prefix),
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(30));
-    let (commands, events) = attach(&server)
-        .await
-        .expect("control mode attaches")
-        .split();
+    let (commands, events) = attach(&server).expect("control mode attaches").split();
     let sender = commands.clone();
-    let sending = tokio::spawn(async move { sender.send(Command::new("display-message")).await });
-    tokio::time::timeout(TEST_TIMEOUT, async {
+    let sending = std::thread::spawn(move || sender.send(Command::new("display-message")));
+    timed!(TEST_TIMEOUT, {
         while !marker.exists() {
-            tokio::time::sleep(POLL_INTERVAL).await;
+            std::thread::sleep(POLL_INTERVAL);
         }
     })
-    .await
     .expect("the fake client opens the response block");
 
-    tokio::time::timeout(Duration::from_secs(2), events.shutdown())
-        .await
+    timed!(Duration::from_secs(2), events.shutdown())
         .expect("watcher shutdown interrupts the read")
         .expect("explicit shutdown is clean");
     let send_error = sending
-        .await
+        .join()
         .expect("sender task joins")
         .expect_err("the interrupted command closes");
     assert!(matches!(
@@ -655,28 +646,24 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
     );
     let same_sender = commands
         .send(Command::new("display-message"))
-        .await
         .expect_err("the same sender remains closed");
     assert!(
         !same_sender.is_transient(),
         "waiting cannot reopen a closed sender",
     );
-    assert_process_gone(wait_for_pid(&parent).await).await;
-    assert_process_gone(wait_for_pid(&descendant).await).await;
+    assert_process_gone(wait_for_pid(&parent));
+    assert_process_gone(wait_for_pid(&descendant));
 
     drop(commands);
-    let replacement = attach(&server)
-        .await
-        .expect("a new connection can attach through the same server");
+    let replacement = attach(&server).expect("a new connection can attach through the same server");
     replacement
         .shutdown()
-        .await
         .expect("the replacement connection shuts down");
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn opening_notifications_stop_at_the_receiver_bound() {
+#[test]
+fn opening_notifications_stop_at_the_receiver_bound() {
     let fixture = directory();
     let prelude = fixture.path().join("prelude");
     let marker = fixture.path().join("prelude-drained");
@@ -692,8 +679,7 @@ async fn opening_notifications_stop_at_the_receiver_bound() {
     );
     let server = basic_server(fixture.path(), executable, Duration::from_millis(100));
 
-    let result = tokio::time::timeout(Duration::from_secs(10), attach(&server))
-        .await
+    let result = timed!(Duration::from_secs(10), attach(&server))
         .expect("bounded prelude reaches its configured deadline");
     let error = match result {
         Err(error) => error,
@@ -708,11 +694,11 @@ async fn opening_notifications_stop_at_the_receiver_bound() {
         "the child is stopped before draining the prelude"
     );
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn terminal_notifications_drain_after_exit_and_eof() {
+#[test]
+fn terminal_notifications_drain_after_exit_and_eof() {
     for (terminal, expected_exits) in [("printf '%%exit done\\n'", 1), ("", 0)] {
         let fixture = directory();
         let executable = write_script(
@@ -724,24 +710,20 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
             ),
         );
         let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
-        let (commands, mut events) = attach(&server)
-            .await
-            .expect("control mode attaches")
-            .split();
+        let (commands, mut events) = attach(&server).expect("control mode attaches").split();
 
-        tokio::time::timeout(TEST_TIMEOUT, async {
+        timed!(TEST_TIMEOUT, {
             while !commands.is_closed() {
-                tokio::task::yield_now().await;
+                std::thread::yield_now();
             }
         })
-        .await
         .expect("the terminal condition closes command admission");
 
         let mut sessions_changed = 0;
         let mut exits = 0;
         let mut errors = 0;
-        tokio::time::timeout(TEST_TIMEOUT, async {
-            while let Some(event) = events.next_event().await {
+        timed!(TEST_TIMEOUT, {
+            while let Some(event) = events.next_event() {
                 match event {
                     Ok(Event::SessionsChanged) => sessions_changed += 1,
                     Ok(Event::Exit { .. }) => exits += 1,
@@ -756,38 +738,33 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
                 }
             }
         })
-        .await
         .expect("every parsed event reaches the receiver");
 
         assert_eq!(sessions_changed, EVENT_QUEUE + 1);
         assert_eq!(exits, expected_exits);
         assert_eq!(errors, usize::from(expected_exits == 0));
-        assert!(events.next_event().await.is_none());
-        events.shutdown().await.expect("connection shuts down");
-        server.shutdown().await.expect("server shuts down");
+        assert!(events.next_event().is_none());
+        events.shutdown().expect("connection shuts down");
+        server.shutdown().expect("server shuts down");
     }
 }
 
-#[tokio::test]
-async fn terminal_notifications_drain_after_eof_inside_a_reply() {
+#[test]
+fn terminal_notifications_drain_after_eof_inside_a_reply() {
     let fixture = directory();
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 3 0\\npartial\\n'",
+            "{}\nIFS= read -r _command\nIFS= read -r _completion_fence\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 3 1\\npartial\\n'",
             opening_success(),
             EVENT_QUEUE + 1,
         ),
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
-    let (commands, mut events) = attach(&server)
-        .await
-        .expect("control mode attaches")
-        .split();
+    let (commands, mut events) = attach(&server).expect("control mode attaches").split();
 
     let error = commands
         .send(Command::new("display-message").arg("unanswered"))
-        .await
         .expect_err("EOF cannot finish an open reply");
     assert!(matches!(
         error,
@@ -799,7 +776,7 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
 
     let mut sessions_changed = 0;
     let mut terminal_error = None;
-    while let Some(event) = events.next_event().await {
+    while let Some(event) = events.next_event() {
         match event {
             Ok(Event::SessionsChanged) => sessions_changed += 1,
             Err(error) => {
@@ -823,48 +800,36 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
             ..
         }
     ));
-    events
-        .shutdown()
-        .await
-        .expect("the terminal error was delivered");
-    server.shutdown().await.expect("server shuts down");
+    events.shutdown().expect("the terminal error was delivered");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
+#[test]
+fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
     let fixture = directory();
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone",
+            "{}\nIFS= read -r _command\nIFS= read -r _completion_fence\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone",
             opening_success(),
             EVENT_QUEUE + 1,
         ),
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
-    let (commands, events) = attach(&server)
-        .await
-        .expect("control mode attaches")
-        .split();
+    let (commands, events) = attach(&server).expect("control mode attaches").split();
 
-    let command = tokio::spawn({
+    let command = std::thread::spawn({
         let commands = commands.clone();
-        async move {
-            commands
-                .send(Command::new("display-message").arg("unanswered"))
-                .await
-        }
+        move || commands.send(Command::new("display-message").arg("unanswered"))
     });
-    tokio::time::timeout(TEST_TIMEOUT, async {
+    timed!(TEST_TIMEOUT, {
         while !commands.is_closed() {
-            tokio::task::yield_now().await;
+            std::thread::yield_now();
         }
     })
-    .await
     .expect("EOF closes command admission");
 
-    let error = tokio::time::timeout(TEST_TIMEOUT, command)
-        .await
+    let error = timed!(TEST_TIMEOUT, command.join())
         .expect("EOF releases the committed command")
         .expect("the command task joins")
         .expect_err("EOF cannot answer the committed command");
@@ -876,55 +841,45 @@ async fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
         }
     ));
 
-    tokio::time::timeout(TEST_TIMEOUT, server.shutdown())
-        .await
+    timed!(TEST_TIMEOUT, server.shutdown())
         .expect("server shutdown interrupts terminal draining")
         .expect("server shuts down");
     drop(events);
 }
 
-#[tokio::test]
-async fn pane_snapshot_separates_output_at_the_capture_block() {
+#[test]
+fn pane_snapshot_separates_output_at_the_capture_block() {
     let fixture = directory();
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 3 0\\nvisible\\n%%end 0 3 0\\n'\nprintf '%%output %%1 after\\n'\nprintf '%%exit done\\n'",
+            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 3 1\\nvisible\\n%%end 0 3 1\\n'\nprintf '%%output %%1 after\\n'\nreply_fence\nprintf '%%exit done\\n'",
             opening_success(),
         ),
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
-    let (commands, events) = attach(&server)
-        .await
-        .expect("control mode attaches")
-        .split();
+    let (commands, events) = attach(&server).expect("control mode attaches").split();
     let mut output = PaneOutput::new("%1".parse().expect("a pane id"), events, commands);
 
     let mut preceding = Vec::new();
     let visible = output
         .snapshot(|bytes| preceding.extend_from_slice(bytes))
-        .await
         .expect("the pane is captured");
 
     assert_eq!(visible, [TmuxText::from("visible")]);
     assert_eq!(preceding, b"before");
-    assert_eq!(
-        output.next_chunk().await.as_deref(),
-        Some(b"after".as_slice())
-    );
-    output.shutdown().await.expect("connection shuts down");
-    server.shutdown().await.expect("server shuts down");
+    assert_eq!(output.next_chunk().as_deref(), Some(b"after".as_slice()));
+    output.shutdown().expect("connection shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn an_error_opening_block_is_not_ready() {
+#[test]
+fn an_error_opening_block_is_not_ready() {
     let fixture = directory();
     let executable = write_script(fixture.path(), "printf '%%begin 0 1 0\\n%%error 0 1 0\\n'");
     let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
 
-    let error = attach(&server)
-        .await
-        .expect_err("an opening error is not a successful attach");
+    let error = attach(&server).expect_err("an opening error is not a successful attach");
     assert!(matches!(
         error,
         Error::ControlMode {
@@ -933,11 +888,11 @@ async fn an_error_opening_block_is_not_ready() {
         }
     ));
 
-    server.shutdown().await.expect("server shuts down");
+    server.shutdown().expect("server shuts down");
 }
 
-#[tokio::test]
-async fn server_shutdown_owns_active_control_clients() {
+#[test]
+fn server_shutdown_owns_active_control_clients() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
     let descendant = fixture.path().join("descendant.pid");
@@ -953,60 +908,49 @@ async fn server_shutdown_owns_active_control_clients() {
         &process_script(&parent, &descendant, &prefix),
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(30));
-    let (commands, events) = attach(&server)
-        .await
-        .expect("control mode attaches")
-        .split();
-    let parent_pid = wait_for_pid(&parent).await;
-    let descendant_pid = wait_for_pid(&descendant).await;
+    let (commands, events) = attach(&server).expect("control mode attaches").split();
+    let parent_pid = wait_for_pid(&parent);
+    let descendant_pid = wait_for_pid(&descendant);
     let sender = commands.clone();
-    let sending = tokio::spawn(async move { sender.send(Command::new("display-message")).await });
-    tokio::time::timeout(TEST_TIMEOUT, async {
+    let sending = std::thread::spawn(move || sender.send(Command::new("display-message")));
+    timed!(TEST_TIMEOUT, {
         while !marker.exists() {
-            tokio::time::sleep(POLL_INTERVAL).await;
+            std::thread::sleep(POLL_INTERVAL);
         }
     })
-    .await
     .expect("the request becomes active before shutdown");
 
-    tokio::time::timeout(Duration::from_secs(2), server.shutdown())
-        .await
+    timed!(Duration::from_secs(2), server.shutdown())
         .expect("server shutdown waits for control cleanup")
         .expect("server shuts down");
-    assert_process_gone(parent_pid).await;
-    assert_process_gone(descendant_pid).await;
+    assert_process_gone(parent_pid);
+    assert_process_gone(descendant_pid);
     let send_error = sending
-        .await
+        .join()
         .expect("sender task joins")
         .expect_err("Core shutdown cancels the active request");
     assert!(matches!(send_error, Error::ExecutorShutdown { .. }));
     let connection_error = events
         .shutdown()
-        .await
         .expect_err("Core shutdown is reported by the connection");
     assert!(matches!(connection_error, Error::ExecutorShutdown { .. }));
     drop(commands);
 }
 
-#[tokio::test]
-async fn attach_after_server_shutdown_is_rejected() {
+#[test]
+fn attach_after_server_shutdown_is_rejected() {
     let fixture = directory();
     let executable = write_script(fixture.path(), opening_success());
     let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
-    server
-        .capabilities()
-        .await
-        .expect("capabilities are cached");
-    server.shutdown().await.expect("server shuts down");
+    server.capabilities().expect("capabilities are cached");
+    server.shutdown().expect("server shuts down");
 
-    let error = attach(&server)
-        .await
-        .expect_err("shutdown closes persistent-client admission");
+    let error = attach(&server).expect_err("shutdown closes persistent-client admission");
     assert!(matches!(error, Error::ExecutorShutdown { .. }));
 }
 
-#[tokio::test]
-async fn frame_error_during_bootstrap_remains_specific() {
+#[test]
+fn frame_error_during_bootstrap_remains_specific() {
     for opening in ["", "%begin 0 1 0\n%end 0 1 0\n"] {
         let fixture = directory();
         let payload = fixture.path().join("payload");
@@ -1025,9 +969,8 @@ async fn frame_error_during_bootstrap_remains_specific() {
             &session(),
             crate::ControlLimits::default().max_line_bytes(64),
         )
-        .await
         .expect_err("the oversized frame is rejected");
-        server.shutdown().await.expect("server shuts down");
+        server.shutdown().expect("server shuts down");
         assert!(
             matches!(
                 error,
@@ -1042,24 +985,19 @@ async fn frame_error_during_bootstrap_remains_specific() {
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
+#[test]
+fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
     let guard = crate::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
-    let session = server
-        .new_session("frame-closed")
-        .await
-        .expect("session starts");
-    let pane = session.panes().await.expect("panes list").remove(0);
+    let session = server.new_session("frame-closed").expect("session starts");
+    let pane = session.panes().expect("panes list").remove(0);
     let (sender, events) = ControlMode::attach_with_limits(
         server,
         session.id(),
         crate::ControlLimits::default().max_line_bytes(512),
     )
-    .await
     .expect("a quiet connection attaches")
     .split();
     let produced = server
@@ -1070,16 +1008,15 @@ async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
                 .arg(pane.id().as_ref())
                 .arg("head -c 4096 /dev/zero | tr '\\0' A; exec cat"),
         )
-        .await
         .expect("producer starts");
     assert!(produced.success(), "producer is accepted: {produced:?}");
-    tokio::time::timeout(Duration::from_secs(1), sender.commands.closed())
-        .await
-        .expect("oversized output closes admission");
-    let send_error = sender
-        .watch_only(&[])
-        .await
-        .expect_err("narrowing is refused");
+    timed!(Duration::from_secs(1), {
+        while !sender.is_closed() {
+            std::thread::yield_now();
+        }
+    })
+    .expect("oversized output closes admission");
+    let send_error = sender.watch_only(&[]).expect_err("narrowing is refused");
     drop(sender);
     assert!(matches!(
         send_error,
@@ -1088,8 +1025,8 @@ async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
             ..
         }
     ));
-    let error = events.shutdown_after_error(send_error).await;
-    guard.shutdown().await.expect("fixture shuts down");
+    let error = events.shutdown_after_error(send_error);
+    guard.shutdown().expect("fixture shuts down");
     assert!(
         matches!(
             error,
@@ -1103,25 +1040,23 @@ async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn initial_watch_failure_preserves_the_connection_error() {
+#[test]
+fn initial_watch_failure_preserves_the_connection_error() {
     let fixture = directory();
     let payload = fixture.path().join("payload");
     fs::write(
         &payload,
-        format!("%begin 0 2 0\n%end 0 2 0\n{}\n", "x".repeat(256)),
+        format!("%begin 0 2 1\n%end 0 2 1\n{}\n", "x".repeat(256)),
     )
     .expect("payload is writable");
     let guard = crate::test::TestServer::builder()
         .start()
-        .await
         .expect("tmux starts");
     let session = guard
         .server()
         .new_session("initial-watch")
-        .await
         .expect("session starts");
-    let pane = session.panes().await.expect("panes list").remove(0);
+    let pane = session.panes().expect("panes list").remove(0);
     let tmux = shell_quote(Path::new(guard.server().tmux_executable()));
     let executable = write_script_with_version(
         fixture.path(),
@@ -1138,17 +1073,15 @@ async fn initial_watch_failure_preserves_the_connection_error() {
         .expect("wrapper server resolves");
     let observed = wrapped
         .panes()
-        .await
         .expect("pane lookup succeeds")
         .into_iter()
         .find(|candidate| candidate.id() == pane.id())
         .expect("pane exists");
     let error = observed
         .stream_output_with_limits(crate::ControlLimits::default().max_line_bytes(64))
-        .await
         .expect_err("initial narrowing sees the frame violation");
-    wrapped.shutdown().await.expect("wrapper shuts down");
-    guard.shutdown().await.expect("fixture shuts down");
+    wrapped.shutdown().expect("wrapper shuts down");
+    guard.shutdown().expect("fixture shuts down");
     assert!(
         matches!(
             error,
@@ -1159,4 +1092,74 @@ async fn initial_watch_failure_preserves_the_connection_error() {
         ),
         "got {error:?}"
     );
+}
+
+#[test]
+fn failed_control_cleanup_remains_visible_to_repeated_server_shutdown() {
+    let fixture = directory();
+    let marker = fixture.path().join("fail-signal");
+    let parent = fixture.path().join("parent.pid");
+    let _guard = ProcessGuard::new([parent.clone()]);
+    let executable = write_script(
+        fixture.path(),
+        &format!(
+            "printf '%s\\n' \"$$\" > {}\n{}\nwhile IFS= read -r line; do :; done",
+            shell_quote(&parent),
+            opening_success(),
+        ),
+    );
+    let helper = fixture.path().join("signal-group");
+    fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nif [ -e {} ]; then exit 1; fi\nexec /usr/bin/kill \"$@\"\n",
+            shell_quote(&marker),
+        ),
+    )
+    .expect("signal helper is written");
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).expect("helper executable");
+    let server = Server::builder()
+        .tmux_executable(executable)
+        .socket_path(fixture.path().join("socket"))
+        .group_signal_helper(helper)
+        .default_timeout(TEST_TIMEOUT)
+        .build()
+        .expect("server builds");
+    let control = attach(&server).expect("control attaches before failure");
+    let parent = wait_for_pid(&parent);
+    fs::write(marker, []).expect("inject helper failure");
+    let error = control
+        .shutdown()
+        .expect_err("connection reports cleanup failure");
+    let (request_id, summary, detail) = match error {
+        Error::WaitChild {
+            request_id,
+            command,
+            source,
+        } => {
+            let detail = source.to_string();
+            assert_eq!(detail, "process-group signal: Other");
+            (request_id, command, detail)
+        }
+        other => panic!("expected cleanup failure, got {other:?}"),
+    };
+    assert!(summary.to_string().starts_with("\"attach\" "));
+    assert_process_gone(parent);
+    for _ in 0..2 {
+        match server
+            .shutdown()
+            .expect_err("shutdown retains cleanup failure")
+        {
+            Error::WaitChild {
+                request_id: observed,
+                command,
+                source,
+            } => {
+                assert_eq!(observed, request_id);
+                assert_eq!(command, summary);
+                assert_eq!(source.to_string(), detail);
+            }
+            other => panic!("expected retained cleanup failure, got {other:?}"),
+        }
+    }
 }

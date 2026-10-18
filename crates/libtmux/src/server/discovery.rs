@@ -22,8 +22,8 @@ impl Server {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn windows(&self) -> Result<Vec<Window>, Error> {
-        let projections = listing::windows(&self.core, listing::Scope::Server, None).await?;
+    pub fn windows(&self) -> Result<Vec<Window>, Error> {
+        let projections = listing::windows(&self.core, listing::Scope::Server, None)?;
 
         Ok(projections
             .into_iter()
@@ -37,8 +37,8 @@ impl Server {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
-        let projections = listing::panes(&self.core, listing::Scope::Server, None).await?;
+    pub fn panes(&self) -> Result<Vec<Pane>, Error> {
+        let projections = listing::panes(&self.core, listing::Scope::Server, None)?;
 
         Ok(projections
             .into_iter()
@@ -52,8 +52,8 @@ impl Server {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn clients(&self) -> Result<Vec<Client>, Error> {
-        let infos = listing::clients(&self.core, None).await?;
+    pub fn clients(&self) -> Result<Vec<Client>, Error> {
+        let infos = listing::clients(&self.core, None)?;
 
         Ok(infos
             .into_iter()
@@ -83,12 +83,11 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the session listing fails.
-    pub async fn session(&self, name: impl AsRef<[u8]>) -> Result<Option<Session>, Error> {
+    pub fn session(&self, name: impl AsRef<[u8]>) -> Result<Option<Session>, Error> {
         let name = name.as_ref();
 
         Ok(self
-            .sessions()
-            .await?
+            .sessions()?
             .into_iter()
             .find(|session| session.name() == name))
     }
@@ -98,11 +97,11 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the session listing fails.
-    pub async fn session_by_id(&self, id: &SessionId) -> Result<Option<Session>, Error> {
+    pub fn session_by_id(&self, id: &SessionId) -> Result<Option<Session>, Error> {
         // An id is a sigil and digits, so it can be handed to tmux as a
         // predicate and matched server-side. tmux returns the one row rather
         // than every row for this to scan.
-        let infos = listing::sessions(&self.core, Some(&id.predicate("session_id"))).await?;
+        let infos = listing::sessions(&self.core, Some(&id.predicate("session_id")))?;
 
         Ok(infos
             .into_iter()
@@ -118,13 +117,12 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the window listing fails.
-    pub async fn window_by_id(&self, id: &WindowId) -> Result<Option<Window>, Error> {
+    pub fn window_by_id(&self, id: &WindowId) -> Result<Option<Window>, Error> {
         let projections = listing::windows(
             &self.core,
             listing::Scope::Server,
             Some(&id.predicate("window_id")),
-        )
-        .await?;
+        )?;
 
         // A window linked into several sessions has one row per link, and
         // activity belongs to the link rather than to the window: the same
@@ -147,13 +145,12 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the pane listing fails.
-    pub async fn pane_by_id(&self, id: &PaneId) -> Result<Option<Pane>, Error> {
+    pub fn pane_by_id(&self, id: &PaneId) -> Result<Option<Pane>, Error> {
         let projections = listing::panes(
             &self.core,
             listing::Scope::Server,
             Some(&id.predicate("pane_id")),
-        )
-        .await?;
+        )?;
 
         Ok(projections
             .into_iter()
@@ -166,12 +163,11 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the client listing fails.
-    pub async fn client(&self, name: impl AsRef<[u8]>) -> Result<Option<Client>, Error> {
+    pub fn client(&self, name: impl AsRef<[u8]>) -> Result<Option<Client>, Error> {
         let name = name.as_ref();
 
         Ok(self
-            .clients()
-            .await?
+            .clients()?
             .into_iter()
             .find(|client| client.name() == name))
     }
@@ -194,9 +190,9 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when any of the three listings fails.
-    pub async fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
+    pub fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
         let (sessions, windows, panes) =
-            tokio::try_join!(self.sessions(), self.windows(), self.panes(),)?;
+            Ok::<_, Error>((self.sessions()?, self.windows()?, self.panes()?))?;
 
         // Grouping is by the numeric part of each ID rather than the ID: it
         // is Copy and unique among IDs of one kind, so stitching the three
@@ -253,12 +249,11 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the session listing fails.
-    pub async fn has_session(&self, name: impl AsRef<[u8]>) -> Result<bool, Error> {
+    pub fn has_session(&self, name: impl AsRef<[u8]>) -> Result<bool, Error> {
         let name = name.as_ref();
 
         Ok(self
-            .sessions()
-            .await?
+            .sessions()?
             .iter()
             .any(|session| session.name() == name))
     }
@@ -274,23 +269,19 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// guard.session("work").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// guard.session("work")?;
     ///
-    /// let sessions = guard.server().sessions().await?;
+    /// let sessions = guard.server().sessions()?;
     /// assert_eq!(sessions.len(), 1);
     /// assert!(sessions[0].id().to_string().starts_with('$'));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn sessions(&self) -> Result<Vec<Session>, Error> {
-        let infos = listing::sessions(&self.core, None).await?;
+    pub fn sessions(&self) -> Result<Vec<Session>, Error> {
+        let infos = listing::sessions(&self.core, None)?;
 
         Ok(infos
             .into_iter()
@@ -305,24 +296,20 @@ impl Server {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// session.new_window("editor").await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// session.new_window("editor")?;
 ///
 /// // One round of listings for the whole hierarchy, rather than one call per
 /// // session and another per window.
-/// let tree = guard.server().hierarchy().await?;
+/// let tree = guard.server().hierarchy()?;
 /// let found = tree
 ///     .iter()
 ///     .find(|branch| branch.session.name().to_string_lossy() == "work")
 ///     .expect("the session just created");
 /// assert_eq!(found.windows.len(), 2);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -342,16 +329,14 @@ pub struct SessionTree {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::SplitDirection;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
-/// window.split(SplitDirection::Below).await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let window = session.active_window()?.expect("a session has a window");
+/// window.split(SplitDirection::Below)?;
 ///
-/// let tree = guard.server().hierarchy().await?;
+/// let tree = guard.server().hierarchy()?;
 /// let panes: usize = tree
 ///     .iter()
 ///     .flat_map(|branch| branch.windows.iter())
@@ -359,9 +344,7 @@ pub struct SessionTree {
 ///     .sum();
 /// assert_eq!(panes, 2);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```

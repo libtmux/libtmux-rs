@@ -19,7 +19,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
-libtmux = { path = "../crates/libtmux", features = ["unstable-fuzzing"] }
+libtmux = { package = "libtmux-tokio", path = "../crates/libtmux-tokio", features = ["unstable-fuzzing"] }
 tmux-workspace = { path = "../crates/tmux-workspace" }
 
 [[bin]]

@@ -54,11 +54,10 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CommandCounter {
 }
 
 /// Add `sessions` sessions of `windows` windows, each holding two panes.
-async fn populate(server: &libtmux::Server, prefix: &str, sessions: usize, windows: usize) {
+fn populate(server: &libtmux::Server, prefix: &str, sessions: usize, windows: usize) {
     for session in 0..sessions {
         let session = server
             .new_session(format!("{prefix}-{session}").as_str())
-            .await
             .expect("session");
 
         for window in 0..windows {
@@ -66,35 +65,33 @@ async fn populate(server: &libtmux::Server, prefix: &str, sessions: usize, windo
                 .new_window(
                     NewWindowOptions::new(format!("window-{window}").as_str()).command("sleep 300"),
                 )
-                .await
                 .expect("window");
             created
                 .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
-                .await
                 .expect("pane");
         }
     }
 }
 
-#[tokio::test]
-async fn the_hierarchy_costs_the_same_however_large_it_is() {
+#[test]
+fn the_hierarchy_costs_the_same_however_large_it_is() {
     let counter = CommandCounter::default();
     let subscriber = tracing_subscriber::registry().with(counter.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // One session, one window: the smallest hierarchy there is.
-    populate(server, "small", 1, 1).await;
+    populate(server, "small", 1, 1);
     counter.reset();
-    let small = server.hierarchy().await.expect("hierarchy");
+    let small = server.hierarchy().expect("hierarchy");
     let small_commands = counter.commands();
 
     // Sixteen times the objects.
-    populate(server, "large", 3, 5).await;
+    populate(server, "large", 3, 5);
     counter.reset();
-    let large = server.hierarchy().await.expect("hierarchy");
+    let large = server.hierarchy().expect("hierarchy");
     let large_commands = counter.commands();
 
     assert!(large.len() > small.len(), "the second hierarchy is larger");
@@ -112,35 +109,35 @@ async fn the_hierarchy_costs_the_same_however_large_it_is() {
         "the cost does not grow with the hierarchy",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn walking_down_costs_a_command_for_every_step() {
+#[test]
+fn walking_down_costs_a_command_for_every_step() {
     let counter = CommandCounter::default();
     let subscriber = tracing_subscriber::registry().with(counter.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    populate(server, "walked", 2, 3).await;
+    populate(server, "walked", 2, 3);
 
     // The same information, gathered the obvious way. This is not a strawman:
     // it is what the traversal API does, and it is the right shape when a
     // caller wants one branch rather than the whole tree.
     counter.reset();
-    let sessions = server.sessions().await.expect("sessions");
+    let sessions = server.sessions().expect("sessions");
     let mut windows = 0;
     for session in &sessions {
-        for window in session.windows().await.expect("windows") {
+        for window in session.windows().expect("windows") {
             windows += 1;
-            let _ = window.panes().await.expect("panes");
+            let _ = window.panes().expect("panes");
         }
     }
     let walked = counter.commands();
 
     counter.reset();
-    server.hierarchy().await.expect("hierarchy");
+    server.hierarchy().expect("hierarchy");
     let gathered = counter.commands();
 
     assert_eq!(
@@ -154,7 +151,7 @@ async fn walking_down_costs_a_command_for_every_step() {
         "walking cost {walked} commands where the hierarchy cost {gathered}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// What it costs to ask a client what it is attached to.
@@ -165,40 +162,38 @@ async fn walking_down_costs_a_command_for_every_step() {
 /// window's active pane into the same format tree, so the whole snapshot comes
 /// back in the first round trip and the second was never needed.
 #[cfg(feature = "control-mode")]
-#[tokio::test]
-async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
+#[test]
+fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
     let counter = CommandCounter::default();
     let subscriber = tracing_subscriber::registry().with(counter.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("attached").await.expect("session");
+    let session = server.new_session("attached").expect("session");
 
     // A control-mode connection is a client, so the server has one to ask.
-    let control = libtmux::control::ControlMode::attach(server, session.id())
-        .await
-        .expect("a control client");
+    let control =
+        libtmux::control::ControlMode::attach(server, session.id()).expect("a control client");
     // Also warms the version probe, which is a command of its own the first
     // time anything asks for it.
     let client = server
         .clients()
-        .await
         .expect("clients")
         .into_iter()
         .next()
         .expect("one client");
 
     counter.reset();
-    let attached = client.attached_session().await.expect("a session");
+    let attached = client.attached_session().expect("a session");
     let session_commands = counter.commands();
 
     counter.reset();
-    let window = client.attached_window().await.expect("a window");
+    let window = client.attached_window().expect("a window");
     let window_commands = counter.commands();
 
     counter.reset();
-    let pane = client.attached_pane().await.expect("a pane");
+    let pane = client.attached_pane().expect("a pane");
     let pane_commands = counter.commands();
 
     // The answer is the point. A cheaper call that returns the wrong object is
@@ -214,8 +209,8 @@ async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
     assert_eq!(window_commands, 1, "the same for the window");
     assert_eq!(pane_commands, 1, "and for the pane");
 
-    control.shutdown().await.expect("control shuts down");
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    control.shutdown().expect("control shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// What it costs to read a field a pane listing already carries.
@@ -224,8 +219,8 @@ async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
 /// and each agrees with what `display-message` reports for the same pane: an
 /// empty expansion where the read says `Absent`.
 #[cfg(feature = "query")]
-#[tokio::test]
-async fn reading_a_listed_pane_field_costs_no_command() {
+#[test]
+fn reading_a_listed_pane_field_costs_no_command() {
     use libtmux::query::Filterable as _;
     use libtmux::{Availability, Command, NewSessionOptions, Pane, PaneWait};
 
@@ -233,25 +228,23 @@ async fn reading_a_listed_pane_field_costs_no_command() {
     let subscriber = tracing_subscriber::registry().with(counter.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     // History to scroll back through, then a cursor off the origin, then a
     // reader that prints nothing more, so the cursor holds still.
     let session = server
         .new_session(NewSessionOptions::new("read").command("seq 1 200; printf abc; exec cat"))
-        .await
         .expect("session");
-    let mut pane = session.panes().await.expect("panes").remove(0);
+    let mut pane = session.panes().expect("panes").remove(0);
     let arrived = pane
         .wait_for_text("abc", std::time::Duration::from_secs(10))
-        .await
         .expect("wait");
     assert_eq!(arrived, PaneWait::Arrived);
     let fields = Pane::filter_fields();
 
     for scrolled in [None, Some(5)] {
         if let Some(lines) = scrolled {
-            pane.copy_mode().await.expect("copy mode");
+            pane.copy_mode().expect("copy mode");
             pane.cmd(
                 Command::new("send-keys")
                     .arg("-X")
@@ -259,10 +252,9 @@ async fn reading_a_listed_pane_field_costs_no_command() {
                     .arg(lines.to_string())
                     .arg("scroll-up"),
             )
-            .await
             .expect("scroll");
         }
-        pane.refresh().await.expect("listing");
+        pane.refresh().expect("listing");
 
         counter.reset();
         let cursor_x = pane.get(fields.cursor_x);
@@ -295,7 +287,7 @@ async fn reading_a_listed_pane_field_costs_no_command() {
             ),
         ];
         for (format, read) in reads {
-            let asked = pane.format(format).await.expect("display-message");
+            let asked = pane.format(format).expect("display-message");
             assert_eq!(
                 asked.to_string_lossy(),
                 read.unwrap_or_default(),
@@ -304,24 +296,23 @@ async fn reading_a_listed_pane_field_costs_no_command() {
         }
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A replacing hook write is one invocation, so no drop can land between the
 /// clear and the entries and leave the hook empty.
-#[tokio::test]
-async fn replacing_hooks_clears_and_writes_in_one_command() {
+#[test]
+fn replacing_hooks_clears_and_writes_in_one_command() {
     use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
 
     let counter = CommandCounter::default();
     let subscriber = tracing_subscriber::registry().with(counter.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let session = guard
         .server()
         .new_session("hooks")
-        .await
         .expect("the session is created");
     let mut entries = std::collections::BTreeMap::new();
     entries.insert(0, TmuxText::from(b"display-message one".to_vec()));
@@ -330,13 +321,11 @@ async fn replacing_hooks_clears_and_writes_in_one_command() {
     // The scope check reads before writing; count only the write.
     session
         .set_hooks("alert-bell", &written, ReplaceMode::Replace)
-        .await
         .expect("the hooks are written");
 
     counter.reset();
     session
         .set_hooks("alert-bell", &written, ReplaceMode::Replace)
-        .await
         .expect("the hooks are written");
 
     assert_eq!(
@@ -346,7 +335,6 @@ async fn replacing_hooks_clears_and_writes_in_one_command() {
     );
     let read = session
         .hook("alert-bell")
-        .await
         .expect("the hook reads")
         .expect("the hook is set");
     assert_eq!(read.len(), 2);

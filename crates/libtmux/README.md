@@ -1,29 +1,14 @@
-<!-- libtmux-logo -->
-<p align="center">
-  <picture>
-    <source srcset="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux/assets/logo.svg" type="image/svg+xml">
-    <img src="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux/assets/logo.png" width="128" height="128" alt="libtmux for Rust">
-  </picture>
-</p>
-<!-- /libtmux-logo -->
-
-<div align="center">
-
 # libtmux
 
-[![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]
+A blocking tmux client with no default crate dependencies.
 
-[crates.io]: https://img.shields.io/crates/v/libtmux.svg
-[crate]: https://crates.io/crates/libtmux
-[docs.rs]: https://img.shields.io/docsrs/libtmux
-[docs]: https://docs.rs/libtmux
-[MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
-[rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
+`Server`, `Session`, `Window`, `Pane`, and `Client` expose listings, creation,
+options, hooks, key bindings, buffers, pane input, capture, and scoped cleanup.
+Commands use argument arrays, and output preserves bytes until you choose how
+to decode them. Accessors read snapshots; explicit refresh reads tmux again.
 
-**Drive tmux from Rust: typed, async control over servers, sessions, windows,
-and panes.**
-
-</div>
+Choose `libtmux-tokio` for native asynchronous I/O, timers, and task
+supervision. A blocking operation belongs on a synchronous thread.
 
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not
@@ -31,673 +16,129 @@ and panes.**
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
-See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
+## Installation
 
-```rust
-use libtmux::test::TestServer;
+Linux, including WSL, Rust 1.97.1 or later, and tmux 3.2a or later are required.
+The executable and environment are captured when a server is built. Select a
+specific executable with `ServerBuilder::tmux_executable`.
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Runs for real. `TestServer` is an isolated tmux on its own socket under
-    // `/tmp/libtmux-rs-test/`, torn down at the end. Your own code says
-    // `let server = libtmux::Server::new()?;` instead; nothing else changes.
-    let guard = TestServer::new().await?;
-    let server = guard.server();
-
-    let session = server.new_session("work").await?;
-    let window = session.new_window("editor").await?;
-    let pane = window.active_pane().await?.expect("a window has a pane");
-
-    pane.send_line("echo hello").await?;
-
-    for line in pane.capture().await? {
-        println!("{}", line.to_string_lossy());
-    }
-
-    guard.shutdown().await?;
-    Ok(())
-}
-```
-
-The examples on this page run as written, against a throwaway tmux. To run
-them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.0-alpha.15", features = ["test-support"] }`.
-
-Every accessor that reaches tmux is `async`; everything that reads an
-already-taken snapshot is not. Commands run without a shell, and results keep
-stdout and stderr as raw bytes, so decoding stays the caller's decision.
-
-## Requirements and installation
-
-Rust 1.85 or newer, tmux 3.2a or newer, and a Unix target. Native Windows is
-unsupported because tmux is unavailable there; WSL works.
+The package split is unreleased. Use this branch as a Git dependency:
 
 ```toml
 [dependencies]
-libtmux = "0.1.0-alpha.15"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+libtmux = { git = "https://github.com/libtmux/libtmux-rs", branch = "standard-library-core" }
 ```
 
-Async operations need an entered Tokio runtime. The default executable is
-`tmux`, resolved through the `PATH` captured when the `Server` is built; use
-`ServerBuilder::tmux_executable` to select another.
+The client uses Linux procfs and `/usr/bin/kill` to clean up process groups
+before reaping their leaders. `ServerBuilder::group_signal_helper` can select
+another absolute executable with the same arguments. A failed helper is
+reported as `WaitChild`; descendant cleanup is then unproven.
 
-**Minimum supported Rust version.** 1.85, the first compiler to ship Edition
-2024. It is checked in CI against the whole test suite, not just a build. A
-raise is a minor version bump and is called out in the release notes, so a
-patch release never moves it.
+The library exclusively owns its child processes. Do not reap them with
+`waitpid(-1)`, or install `SIGCHLD=SIG_IGN` or `SA_NOCLDWAIT`. Kernel I/O can
+delay child termination even after a deadline has expired.
 
-## Features
+## Create and inspect
 
-`query` is the only one on by default. `full` turns on every capability
-below, so a caller who wants them all does not have to list them.
+```no_run
+use libtmux::Server;
 
-| Feature | What it adds |
-| --- | --- |
-| `query` | Typed filter expressions over listings. On by default |
-| `plan` | Recording tmux work before running it, and choosing what it costs |
-| `control-mode` | One persistent tmux connection, so the server reports changes as they happen rather than being polled |
-| `blocking` | A runtime for calling from code that is not async |
-| `derive` | `#[derive(Filterable)]`, for filtering your own structs with the same expressions |
-| `serde` | Versioned serialization for `FilterExpr<T>`, for sending expressions over a wire |
-| `schema` | JSON Schema for serialized plans and portable filter expressions |
-| `tracing` | Sanitized command instrumentation: a `tmux_command` span per dispatch |
-| `test-support` | The real-tmux test guard, for your own tests |
-| `full` | Every capability above, but not `test-support` |
-
-## Where to start, by what you came to do
-
-| I want to | Call | Shown in |
-| --- | --- | --- |
-| Make a session and tear it down | `Server::with_session` | `examples/scratch.rs` |
-| Reach a session someone left running | `Server::session`, `Server::sessions` | `examples/inspect.rs` |
-| Find the pane my process is in | `Pane::from_env` | `examples/inspect.rs` |
-| Add a window, split a pane | `Session::new_window`, `Pane::split` | `examples/scratch.rs` |
-| Type into a pane | `Pane::send_line`, `Pane::send_keys`, `Pane::send_key_names` | `examples/scratch.rs` |
-| Read what a pane printed | `Pane::capture`, `Pane::capture_with` | `examples/scratch.rs` |
-| Wait for output rather than sleep | `Pane::wait_for_text`, `Pane::wait_for_quiet` | `examples/scratch.rs` |
-| Follow a pane as it writes | `Pane::stream_output` | `examples/watch.rs` |
-| Hear about changes as they happen | `ControlMode::attach`, `ControlSender::subscribe` | `examples/watch.rs` |
-| Select panes by a typed expression | `Filterable::filter_fields`, `QueryIteratorExt::matching` | `examples/find.rs` |
-| Send tmux something this crate has no method for | `Server::cmd` | below |
-| Compare what each transport costs | `plan::Plan`, `plan::Planner` | `examples/matrix.rs` |
-| Clean up fixtures a killed run left | `test::reap_abandoned_servers` | `examples/sweep.rs` |
-| Tell a gone object from a gone link | `Error::is_object_gone`, `Error::is_transient` | `examples/recover.rs` |
-
-Waiting needs no feature: `Pane::wait_for_text` and `Pane::wait_for_quiet` are
-in the library, poll the scrollback with wrapped lines joined, and answer
-`PaneWait::Dead` when the pane's process ends rather than running to the
-deadline. `docs/findings.md` records what they had to survive, and what a
-control-mode doorbell was measured to buy.
-
-## Waiting for something to happen
-
-If the work can announce itself, do not poll. End it with
-`tmux wait-for -S <channel>` and wait on that channel:
-
-```rust
-use libtmux::ChannelWait;
-use std::time::Duration;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = libtmux::test::TestServer::builder().start().await?;
-    let server = guard.server();
-
-    // Stands in for the pane running `make; tmux wait-for -S build-done`.
-    // Signalling first is safe: tmux keeps it for the next waiter.
-    server.signal_channel("build-done").await?;
-
-    match server.wait_for_channel("build-done", Duration::from_secs(60)).await? {
-        ChannelWait::Signalled => println!("the build ended"),
-        // Running out of time is an outcome, not an error, so this stays
-        // distinguishable from tmux being unreachable.
-        _ => println!("it is still going"),
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let server = Server::new()?;
+    let session = server.new_session("work")?;
+    let window = session.new_window("editor")?;
+    let pane = window.active_pane()?.ok_or("window has no active pane")?;
+    pane.send_line("cargo test")?;
+    for line in pane.capture()? {
+        println!("{}", line.to_string_lossy());
     }
-
-    guard.shutdown().await?;
+    server.shutdown()?;
     Ok(())
 }
 ```
 
-tmux keeps a signal nobody is waiting on, so the job finishing first does not
-lose the race, and nothing polls. A wait that runs out of time keeps its
-client on the channel rather than killing it, so the signal is still there for
-this process's next wait: tmux cannot take a waiter back out, and a killed one
-would eat the signal instead. `examples/orchestrate.rs` runs three jobs this
-way.
-
-For a pane that was *not* written to announce itself, `Pane::wait_for_text`
-does the same job without a channel:
-
-```rust
-use libtmux::{PaneWait, test::TestServer};
-use std::time::Duration;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = TestServer::new().await?;
-    let session = guard.server().new_session("waiting").await?;
-    let pane = session.panes().await?.remove(0);
-
-    pane.send_line("printf 'ready\n'").await?;
-
-    // Checked rather than discarded: a wait that reached its deadline still
-    // returns successfully, so the outcome is the answer.
-    assert_eq!(
-        pane.wait_for_text("ready", Duration::from_secs(10)).await?,
-        PaneWait::Arrived,
-    );
-
-    guard.shutdown().await?;
-    Ok(())
-}
-```
-
-What it handles, and what a loop written by hand usually does not: it looks
-before it sleeps, so text already present is an answer rather than a wait; it
-reads the scrollback with wrapped lines joined, so output that scrolled away
-is still found and a needle spanning a wrap still matches; and it answers
-`PaneWait::Dead` when the pane's process ends rather than holding the
-deadline.
-
-Three things that are not obvious:
-
-- **Every command is already bounded.** A dispatch carries the server's
-  `default_timeout`, 30 seconds unless you change it, so a hung tmux ends the
-  call rather than the loop. The deadline above is for the *condition*, not the
-  transport.
-- **Polling costs a tmux process per tick, and a tick is 120ms.** One
-  `capture-pane` each, so a wait stays under ten dispatches a second and
-  answers within an interval of the text appearing. With `control-mode` you
-  can subscribe to a format instead and be told when it changes -- see
-  `ControlSender::subscribe`. tmux coalesces those reports to at most once a
-  second, so a subscription says what a value became, not every step it took.
-
-The subscription form, which costs one connection rather than a process per
-tick. It watches a format rather than the pane's text, so it suits "how many
-windows are there now" better than "did this line appear":
-
-```rust
-# // `control` is behind `control-mode`, so the example is compiled only when
-# // that feature is on. Without the guard this block fails to build under any
-# // configuration lacking it, and `just doctest` runs `--all-features`, so
-# // nothing would say so.
-# #[cfg(not(feature = "control-mode"))]
-# fn main() {}
-# #[cfg(feature = "control-mode")]
-use libtmux::control::{ControlMode, Event, Subscription};
-# #[cfg(feature = "control-mode")]
-use libtmux::test::TestServer;
-
-# #[cfg(feature = "control-mode")]
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = TestServer::new().await?;
-    let session = guard.server().new_session("watching").await?;
-    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
-        .await?
-        .split();
-
-    commands
-        .subscribe("windows", &Subscription::Session, "#{session_windows}")
-        .await?;
-
-    // The first report arrives without anything having changed, so a
-    // subscription reads the value as well as watching it.
-    let mut reports = 0;
-    while let Some(event) = events.next_event().await {
-        if let Event::SubscriptionChanged { name, value, .. } = event? {
-            println!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
-            reports += 1;
-            if reports == 1 {
-                break;
-            }
-        }
-    }
-
-    commands.unsubscribe("windows").await?;
-    events.shutdown().await?;
-    guard.shutdown().await?;
-    Ok(())
-}
-```
-
-- **`command_prompt` and `display_menu` wait for a person**, not for a
-  condition, and the dispatch timeout is what ends that wait. They are not
-  building blocks for this.
-
-## Choosing how commands reach tmux
-
-Three switches decide what a run costs and what it can prove. They compose:
-async is the API, control mode is the transport, and chaining is what a
-subprocess transport does instead of having one.
-
-### What each one does
-
-| Switch | Off (the default) | On |
-| --- | --- | --- |
-| **Async** | Nothing: every method is already `async`. `blocking::Runtime` is a runtime you drive them from, not a second API to keep in step | `blocking::Runtime::new()?.run(future)` for scripts and tests |
-| **Control mode** | One tmux process per command | One connection for every command, and tmux reports changes as they happen |
-| **Chaining** | One tmux process per command | Neighbouring commands share one process, trading the ability to say which one failed |
-
-Measured on one workload of six operations, all leaving identical tmux state:
-
-| Mode | Processes | Attribution on failure |
-| --- | --- | --- |
-| One command per invocation | 6 | names the failing command |
-| Folded into shared invocations | 3 | `Unknown` -- tmux reports one status for the group |
-| Control mode | 1 | names the failing command |
-
-Control mode is the only one that buys back the processes without giving up
-the answer, because its `%begin`/`%end` blocks are per command. Folding is
-what a subprocess transport offers instead of having that. Run
-`cargo run --example matrix --features full,test-support` to reproduce the
-table on your own machine.
-
-### How to turn each one on
-
-| Switch | Cargo feature | In code |
-| --- | --- | --- |
-| Async | none | already the default; every method is `async` |
-| Blocking runtime | `blocking` | `libtmux::blocking::Runtime::new()?` |
-| Control mode | `control-mode` | `ControlMode::attach(&server, session).await?` |
-| Chaining, by hand | none | `CommandChain::new(a).then(b)`, then `server.chain(chain).await?` |
-| Chaining, by planner | `plan` | `plan.run(&server, Planner::Folding).await?` |
-| Folding a pane creation in too | `plan` | `Planner::Marked` |
-| Never folding across your own work | `plan` | `Planner::steps_bounded(&plan, &boundaries)` |
-| Per-command answers over one connection | `plan`, `control-mode` | `plan.run_over_control_mode(&sender).await?` |
-
-Control mode is never the default transport, and turning the feature on does
-not make it one: normal commands stay one process per command until you attach
-a connection and use it. `Server::over_control_mode` is how you use it for
-everything rather than command by command -- it returns a handle whose ordinary
-typed calls travel down the connection, and handles reached through it inherit
-the route:
-
-```text
-let (commands, events) = ControlMode::attach(&server, session.id()).await?.split();
-let routed = server.over_control_mode(&commands).await?;
-
-// One connection, no processes: the whole typed API, not a plan's worth of it.
-for pane in routed.panes().await? {
-    pane.send_line("echo hello").await?;
-}
-```
-
-Keep the original server for the two things a connection is wrong for: a
-command that parks the client's queue, such as `wait-for` or a foreground
-`run-shell`, and arguments that are not valid UTF-8, which a text protocol
-cannot carry. See `Server::over_control_mode` for the runnable version.
-
-## When the typed API does not cover it
-
-tmux has more commands than this crate has methods, and a method can be narrower
-than the command behind it. `Server::cmd` runs anything, through the same
-transport, timeout and error classification as the typed calls -- so reaching
-for it costs you the method, not the machinery.
-
-```rust
-use libtmux::{Command, test::TestServer};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = TestServer::new().await?;
-    let server = guard.server();
-    let session = server.new_session("escape-hatch").await?;
-    let pane = session.panes().await?.remove(0);
-
-    // `Pane::clock_mode` has no typed way back out for every mode, so this is
-    // how you leave one the API does not model.
-    server
-        .cmd(
-            Command::new("copy-mode")
-                .arg("-q")
-                .arg("-t")
-                .arg(pane.id().to_string()),
-        )
-        .await?;
-
-    // The answer carries tmux's own bytes. A command tmux refuses is an `Err`
-    // classified the same way a typed call's would be.
-    let version = server
-        .cmd(Command::new("display-message").arg("-p").arg("#{version}"))
-        .await?;
-    assert!(!version.stdout().is_empty());
-
-    guard.shutdown().await?;
-    Ok(())
-}
-```
-
-A command you needed here is worth reporting: `tmux-mcp` and `tmux-workspace`
-use this crate from outside it, and when either reaches for `cmd` that counts as
-a gap in the API rather than a use of the escape hatch.
-
-## What tmux is made of
-
-```text
-Server ──┬── Session ──── Window ──── Pane
-         └── Client ─────┘
-```
-
-| Type | Held by | Identified by | Notes |
-| --- | --- | --- | --- |
-| `Server` | a socket | its socket path | one daemon; `Server::new()` finds the default |
-| `Session` | the server | `$0` | what a client attaches to |
-| `Window` | *linked into* sessions | `@0` | one window can be linked into several sessions at once |
-| `Pane` | exactly one window | `%0` | holds the process and the scrollback |
-| `Client` | the server | its tty | attached to one session at a time |
-
-The third row is the one that surprises people, and it decides API shape. A
-window has one identity and several *links*, so a command that removes one link
-has to name the session too -- `session:@id`, because `@id` alone could not say
-which link to remove, and a bare index names a slot rather than whichever
-window is sitting in it. [`Window::unlink`] does exactly that, and reports
-[`Error::LinkGone`] rather than [`Error::ObjectGone`] when the link is already
-gone, because the window itself may still be running under another session.
-
-## Walking the hierarchy
-
-`Server::hierarchy` gathers the whole tree in three tmux commands, rather than
-one per object:
-
-```rust
-use libtmux::test::TestServer;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = TestServer::new().await?;
-    let server = guard.server();
-    server.new_session("work").await?;
-
-    for branch in server.hierarchy().await? {
-        println!("{}", branch.session.name().to_string_lossy());
-
-        for window in &branch.windows {
-            println!("  {}", window.window.name().to_string_lossy());
-
-            for pane in &window.panes {
-                println!("    {pane}");
-            }
-        }
-    }
-
-    guard.shutdown().await?;
-    Ok(())
-}
-```
-
-A listing keeps the reason it failed. `sessions()` returns
-`Result<Vec<Session>>`, so an unreachable tmux is an error rather than an empty
-list. A caller that would rather show nothing writes
-`sessions().await.unwrap_or_default()`, which suits a status line and nothing
-that reconciles state -- a reconciler reading "no sessions" from an outage will
-happily delete everything, and now has to say so at the call site.
-
-## Filtering
-
-Typed field handles build an expression without accepting an untyped field name
-or value, so a comparison that has no meaning for a field does not compile:
-
-```rust
-use std::time::Duration;
-
-use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::test::{TestServer, retry_until};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = TestServer::new().await?;
-    let server = guard.server();
-    server.new_session("work").await?;
-
-    let fields = libtmux::Pane::filter_fields();
-
-    let active = fields
-        .pane_current_command
-        .starts_with("sh")
-        .and(fields.pane_active.eq(true));
-
-    // tmux hands back a pane the moment it forks, before the shell in it has
-    // started, so what a pane is running is worth waiting for rather than
-    // assuming. A wait must assert the outcome it got: this one fails if the
-    // deadline passes without the expression ever matching.
-    retry_until(Duration::from_secs(5), async || {
-        server
-            .panes()
-            .await
-            .is_ok_and(|panes| panes.iter().matching(&active).count() == 1)
-    })
-    .await?;
-
-    guard.shutdown().await?;
-    Ok(())
-}
-```
-
-A question about what a session *contains* needs the shape that holds its
-windows, so `SessionTree` and `WindowTree` carry relations:
-
-```rust
-use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::test::TestServer;
-use libtmux::{SessionTree, WindowTree};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = TestServer::new().await?;
-    let server = guard.server();
-
-    let ci = server.new_session("ci").await?;
-    ci.new_window("build").await?;
-    server.new_session("idle").await?;
-
-    let sessions = SessionTree::filter_fields();
-    let windows = WindowTree::filter_fields();
-    let building = sessions.windows.any(windows.window.window_name.eq("build"));
-
-    let names: Vec<_> = server
-        .hierarchy()
-        .await?
-        .iter()
-        .matching(&building)
-        .map(|branch| branch.session.name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(names, ["ci"]);
-
-    guard.shutdown().await?;
-    Ok(())
-}
-```
-
-With `serde`, an expression lowers to a versioned JSON envelope, so a CLI, an
-MCP server, or a config file can carry one.
-
-## Text from tmux is bytes
-
-tmux permits names, titles, and pane contents that are not valid UTF-8, so they
-arrive as `TmuxText` rather than `String`. There is no implicit conversion:
-
-```rust
-let text = libtmux::TmuxText::from("editor");
-
-assert_eq!(text.as_bytes(), b"editor");
-assert_eq!(text.as_str().expect("valid UTF-8"), "editor");
-assert_eq!(text.to_string_lossy(), "editor");
-```
-
-## Failures say what to do about them
-
-`Error` has a variant per failure mode; `Error::kind` reduces those to the
-decision a caller makes. `Error::is_object_gone` is the branch most programs
-write, because an object disappearing is an ordinary race rather than a failed
-request.
-
-`Error::is_transient` answers the narrower replay question: `true` means the
-same call can be repeated without duplicating an effect and may work after the
-condition clears. A timeout is `false` even when the server handle remains
-usable, because tmux may have completed the command before its caller stopped
-waiting.
-
-A composed call can also fail after tmux accepted one of its effects. That is
-`Error::AfterEffect`, classified as `ErrorKind::PartialEffect`: its source
-still explains the later failure, but `is_transient` is `false` for the whole
-call because replay may repeat the accepted effect.
-
-The block below shows the shape against a healthy server, so its interesting
-arms do not run. `examples/recover.rs` makes each failure happen instead --
-including the one that costs people, where a link is gone and the window it
-pointed at is still running.
-
-```rust
-use libtmux::test::TestServer;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = TestServer::new().await?;
-    let session = guard.server().new_session("work").await?;
-
-    match session.windows().await {
-        Ok(windows) => println!("{} windows", windows.len()),
-        Err(error) if error.is_object_gone() => println!("gone"),
-        Err(error) if error.is_transient() => println!("retry: {error}"),
-        Err(error) => return Err(error.into()),
-    }
-
-    guard.shutdown().await?;
-    Ok(())
-}
-```
+`shutdown` closes the client's work; it does not kill the tmux sessions you
+created. `with_session`, `with_window`, and `with_pane` pair resource creation
+with cleanup. `ScopeError` preserves creation, operation, and cleanup failures.
+
+For a runnable isolated version, use `test::TestServer` with `test-support`.
+[The complete examples](examples/api/README.md) include private sockets,
+cleanup, expected output, and standalone Cargo manifests.
 
 ## Cancellation and shutdown
 
-Each subprocess command runs in an isolated process group with a supervised
-deadline, 30 seconds by default and configurable through
-`ServerBuilder::default_timeout`. The deadline starts before the command waits
-for dispatch capacity.
-Dropping the command future, reaching its timeout, or shutting the server down
-signals the group and waits for the direct child while the runtime is alive.
-The signal reaches the tmux client, not the server: a command the server has
-already received still runs, so a dropped mutation may or may not have
-happened, and a retry can repeat it.
+A blocking call runs on the calling thread. Cancel from another thread with
+`CancellationToken`; `Server::with_cancellation_token` makes a view that shares
+the executor, request IDs, cached capabilities, and channel-wait state.
 
-A control-mode connection has its own isolated process group. Its attach
-handshake and each command response use the same default timeout; a response's
-deadline starts before its line is written and ends with the complete block.
-Dropping both handles terminates and reaps the connection.
+Cancellation of an already-running callback is cooperative. Resource-creation
+scopes wait until they know the resource ID so they can clean it up. Queued
+channel-lock scopes return on cancellation and release any later grant.
 
-A caller that wants a shorter deadline for one command does not need an API
-for it. Dropping the future is what signals the group, so wrapping the call is
-a per-call deadline with the cleanup already attached:
+Call `shutdown` to observe cleanup failures. Dropping a handle alone leaves
+tmux objects intact. A timeout or cancellation does not roll back an effect
+that tmux already accepted; inspect the resulting state before retrying a
+mutation.
 
-```rust
-use libtmux::Command;
-use std::time::Duration;
+`wait_for_channel` retains its client after a timeout because tmux cannot
+withdraw a queued waiter without consuming a future signal. Another wait on
+the same server view shares that client. `lock_channel` likewise releases an
+abandoned grant when tmux eventually grants it. Shutdown ends parked clients.
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = libtmux::test::TestServer::new().await?;
-    let server = guard.server();
+## Control mode
 
-    // Ends at 400ms rather than the server's 30-second default, and the
-    // client's process group is signalled and reaped on the way out. The
-    // `sleep` runs under the tmux server, so it finishes regardless.
-    let bounded = tokio::time::timeout(
-        Duration::from_millis(400),
-        server.cmd(Command::new("run-shell").arg("sleep 3")),
-    )
-    .await;
-    assert!(bounded.is_err());
+Enable `control-mode` to attach `control::ControlMode` to a session. Split it
+into a command sender and event receiver, subscribe to format changes, watch
+pane output, or route the object model through `Server::over_control_mode`.
 
-    // The server is still usable: a bounded call is not a broken connection.
-    server.sessions().await?;
+Reply correlation follows the completion of expanded commands, including
+aliases and nested commands. Notifications and foreground replies stay
+separate. Queue, line, reply, and output limits fail explicitly rather than
+silently truncating a result. Snapshot boundaries identify which events came
+after a capture.
 
-    guard.shutdown().await?;
-    Ok(())
-}
-```
+Commands that hold tmux's command queue also delay following requests. Use
+the subprocess channel APIs for parked waits and locks. A command that closes
+a control connection before its completion boundary reports a closed
+connection.
 
-`Server::shutdown()` is shared by all clones: it cancels active subprocess
-work and persistent control connections, rejects later commands and attaches,
-and is safe to call concurrently or repeatedly. Await it, or await your
-commands, before tearing the runtime down — runtime destruction signals
-best-effort but cannot promise that child reaping finished.
+## Features
 
-## Testing against real tmux
+No feature is enabled by default. The default dependency graph contains only
+`libtmux`; values, command execution, concrete handles, and errors use the
+standard library. Optional features add the dependencies their capability
+requires. `plan` and `control-mode` also work without crate dependencies.
 
-`test-support` exports `libtmux::test::TestServer`, the same guard this crate's
-own suite uses:
+| Feature | What it adds |
+| --- | --- |
+| `query` | Typed filtering, cardinality checks, and the portable query grammar |
+| `plan` | Inspectable plans and execution budgets |
+| `control-mode` | Persistent connections, notifications, subscriptions, and pane output |
+| `derive` | `#[derive(Filterable)]` for your own types |
+| `serde` | Versioned portable query and plan serialisation |
+| `schema` | JSON Schema for portable queries and plans |
+| `tracing` | Redacted command spans and cleanup diagnostics |
+| `test-support` | Owned tmux fixtures and abandoned-fixture cleanup |
+| `full` | All capabilities above except `test-support` |
 
-```toml
-[dev-dependencies]
-libtmux = { version = "0.1.0-alpha.15", features = ["test-support"] }
-```
+## Errors and diagnostics
 
-Each guard owns a tmux child on a private socket with an empty config, so tests
-cannot reach your real server or each other, and it is given only the
-environment tmux and a pane's shell need -- `PATH`, `HOME`, `USER`, `LOGNAME`,
-`SHELL`, the locale variables and `TMUX_TMPDIR` -- so a test that reads the
-environment cannot read yours. `shutdown().await` closes escaped
-clients, waits the daemon, and reports cleanup failures; `Drop` forces
-best-effort cleanup even after the runtime has ended. On Linux, cleanup also
-sweeps processes by an exact environment marker through pidfds, so PID reuse
-cannot redirect a signal.
+| Question | API |
+| --- | --- |
+| What kind of failure was this? | `Error::kind` |
+| Did the object disappear? | `Error::is_object_gone` |
+| Is retrying safe? | Inspect `Error::is_transient` and whether an effect was accepted |
+| Which request failed? | Request ID and redacted command summary |
+| Did scoped cleanup also fail? | `ScopeError` |
 
-There is no mock and no replay mode: a test here talks to tmux, because what
-tmux answers is the thing under test. CI needs tmux installed, which on a
-GitHub Actions Ubuntu runner is one step:
+The `tracing` feature records command outcomes without argument values or
+captured output. Request IDs correlate calls with failures. Output remains
+available from the returned result for a caller that deliberately needs it.
 
-```yaml
-- run: sudo apt-get install -y --no-install-recommends tmux
-```
+## Further reading
 
-`LIBTMUX_TEST_TMUX` points the guard at a specific build when one release
-matters.
-
-The guarantees and their limits are set out in `docs/design.md`, which ships
-with the crate.
-
-## Compatibility
-
-Every supported tmux release is built from source in CI and runs the whole
-workspace: 3.2a, 3.4, 3.5a, 3.6b, and 3.7b. The floor and the ceiling matter
-equally — 3.4 and 3.5a are the releases that wrap command output differently,
-which is why the format codec carries a second dialect.
-
-## If you know the Python libtmux
-
-This is a port of it, and the object model is the same one: a server holding
-sessions, windows linked into them, panes inside those. Code you have written
-against the Python library will read as familiar here. Four things differ, and
-they are the ones worth knowing before you start.
-
-| | Python `libtmux` | this crate |
-| --- | --- | --- |
-| Calling | synchronous throughout | `async` throughout; `blocking::Runtime` drives it from code that is not |
-| Pane text | `capture_pane` returns `list[str]` | `capture` returns `TmuxText`, which keeps bytes no `String` would hold |
-| Filtering | `QueryList` lives in `_internal` | `query` is public, and field handles are generated per type |
-| Transport | one tmux process per command | the same by default, plus control mode and command chaining |
-
-One thing differs, and in this crate's favour: waiting. The Python library
-keeps `retry_until` in `libtmux/test/retry.py`, a test helper, so production
-code that waits on a pane writes the loop itself. `Pane::wait_for_text` and
-`Pane::wait_for_quiet` are here in the library and need no feature.
-
-## Documentation
-
-[API documentation](https://docs.rs/libtmux) covers the public surface. Two
-longer documents ship inside the crate, next to the source:
-
-- `docs/design.md` — why the crate is shaped the way it is: the transport, the
-  snapshot and format boundary, the query grammar, the test guard, and the
-  compatibility lanes.
-- `docs/findings.md` — every tmux defect and platform surprise the crate works
-  around, each with the tmux releases it holds for and what the crate does.
-- `docs/parity.md` — the capability ledger against Python libtmux, naming each
-  Rust symbol and the test that exercises it.
-
-## License
-
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
-or [MIT license](LICENSE-MIT) at your option.
+- [Architecture](docs/design.md)
+- [Package boundaries and migration](docs/packages.md)
+- [Compatibility findings](docs/findings.md)
+- [Python capability ledger](docs/parity.md)
+- [Earlier alpha migrations](docs/migration.md)

@@ -2,9 +2,11 @@ assoc_const libtmux::ControlClientLimits::DEFAULT_CLIENTS: usize
 assoc_const libtmux::ControlLimits::DEFAULT_BLOCK_BYTES: usize
 assoc_const libtmux::ControlLimits::DEFAULT_LINE_BYTES: usize
 assoc_const libtmux::DispatchLimits::DEFAULT_IN_FLIGHT: usize
+assoc_const libtmux::DispatchLimits::DEFAULT_WAIT_CLIENTS: usize
 assoc_const libtmux::OutputLimits::DEFAULT_STDERR_BYTES: usize
 assoc_const libtmux::OutputLimits::DEFAULT_STDOUT_BYTES: usize
 assoc_const libtmux::ReleaseSuffix::FINAL: Self
+assoc_const libtmux::ReleaseSuffix::PATCH_A: Self
 assoc_const libtmux::ReleaseSuffix::RELEASE_CANDIDATE: Self
 assoc_const libtmux::TmuxVersion::MIN_SUPPORTED: libtmux::ReleaseVersion
 assoc_const libtmux::plan::Operation::EFFECTS: libtmux::plan::Effects
@@ -236,6 +238,7 @@ constant libtmux::option_names::XTERM_KEYS: &str
 constant libtmux::since::CAPTURE_LINE_FLAGS: libtmux::ReleaseVersion
 constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS: libtmux::ReleaseVersion
 constant libtmux::since::CLIENTS_HIDE_STOPPED: libtmux::ReleaseVersion
+constant libtmux::since::COMMAND_ERROR_HOOK: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
 constant libtmux::since::JSON_LAYOUTS: libtmux::ReleaseVersion
 constant libtmux::since::LIST_KEYS_FORMAT: libtmux::ReleaseVersion
@@ -295,6 +298,7 @@ enum libtmux::plan::SessionTarget
 enum libtmux::plan::SplitTarget
 enum libtmux::plan::StepReason
 enum libtmux::plan::WindowTarget
+enum libtmux::protocol::Line
 enum libtmux::query::ExactlyOneError
 enum libtmux::query::FilterExpressionErrorKind
 enum libtmux::test::DaemonState
@@ -305,6 +309,9 @@ function libtmux::AccessRule::principal: const fn(&self) -> libtmux::Principal
 function libtmux::Availability::as_ref: const fn(&self) -> libtmux::Availability<&T>
 function libtmux::Availability::available: fn(self) -> Option<T>
 function libtmux::Availability::is_available: const fn(&self) -> bool
+function libtmux::CancellationToken::cancel: fn(&self)
+function libtmux::CancellationToken::is_cancelled: fn(&self) -> bool
+function libtmux::CancellationToken::new: fn() -> Self
 function libtmux::CaptureOptions::end: const fn(self, line: i32) -> Self
 function libtmux::CaptureOptions::escape_sequences: const fn(self) -> Self
 function libtmux::CaptureOptions::history: const fn() -> Self
@@ -314,24 +321,24 @@ function libtmux::CaptureOptions::start: const fn(self, line: i32) -> Self
 function libtmux::CaptureOptions::trailing_spaces: const fn(self) -> Self
 function libtmux::CaptureOptions::trim_blank_cells: const fn(self) -> Self
 function libtmux::CaptureOptions::visible: const fn() -> Self
-function libtmux::Client::attached_pane: async fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
-function libtmux::Client::attached_session: async fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
-function libtmux::Client::attached_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Client::attached_pane: fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
+function libtmux::Client::attached_session: fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
+function libtmux::Client::attached_window: fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Client::created: fn(&self) -> SystemTime
-function libtmux::Client::detach: async fn(self) -> Result<(), libtmux::Error>
+function libtmux::Client::detach: fn(self) -> Result<(), libtmux::Error>
 function libtmux::Client::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Client::height: fn(&self) -> Option<u32>
 function libtmux::Client::is_control_mode: fn(&self) -> bool
 function libtmux::Client::is_own: fn(&self) -> bool
 function libtmux::Client::is_readonly: fn(&self) -> bool
-function libtmux::Client::lock: async fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Client::lock: fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Client::name: const fn(&self) -> &libtmux::TmuxText
 function libtmux::Client::pid: fn(&self) -> u32
-function libtmux::Client::redraw: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Client::refresh: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Client::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
-function libtmux::Client::suspend: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Client::switch_to: async fn(&self, session: &libtmux::Session) -> Result<(), libtmux::Error>
+function libtmux::Client::redraw: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Client::refresh: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Client::refreshed: fn(&self) -> Result<Self, libtmux::Error>
+function libtmux::Client::suspend: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Client::switch_to: fn(&self, session: &libtmux::Session) -> Result<(), libtmux::Error>
 function libtmux::Client::term_name: fn(&self) -> &libtmux::TmuxText
 function libtmux::Client::tty: fn(&self) -> &libtmux::TmuxText
 function libtmux::Client::width: fn(&self) -> u32
@@ -369,6 +376,8 @@ function libtmux::ControlLimits::max_line_bytes: const fn(self, bytes: usize) ->
 function libtmux::DispatchLimits::acquire_timeout: const fn(self, timeout: Option<Duration>) -> Self
 function libtmux::DispatchLimits::in_flight: const fn(self) -> usize
 function libtmux::DispatchLimits::max_in_flight: const fn(self, permits: usize) -> Self
+function libtmux::DispatchLimits::max_wait_clients: const fn(self, clients: usize) -> Self
+function libtmux::DispatchLimits::wait_clients: const fn(self) -> usize
 function libtmux::EngineCapabilities::tmux_version: const fn(&self) -> &libtmux::TmuxVersion
 function libtmux::Error::after_effect: fn(self, operation: &'static str) -> Self
 function libtmux::Error::found_version: fn(&self) -> Option<&libtmux::TmuxVersion>
@@ -378,6 +387,7 @@ function libtmux::Error::is_transient: fn(&self) -> bool
 function libtmux::Error::kind: fn(&self) -> libtmux::ErrorKind
 function libtmux::Error::minimum_version: fn(&self) -> Option<&libtmux::ReleaseVersion>
 function libtmux::IdParseError::expected_sigil: const fn(self) -> char
+function libtmux::IdParseError::new: const fn(expected_sigil: char) -> Self
 function libtmux::JoinOptions::full: const fn(self) -> Self
 function libtmux::JoinOptions::new: const fn(direction: libtmux::SplitDirection) -> Self
 function libtmux::JoinOptions::size: const fn(self, size: libtmux::PaneSize) -> Self
@@ -419,25 +429,25 @@ function libtmux::OutputLimits::max_stderr_bytes: const fn(self, bytes: usize) -
 function libtmux::OutputLimits::max_stdout_bytes: const fn(self, bytes: usize) -> Self
 function libtmux::OutputLimits::stderr_bytes: const fn(self) -> usize
 function libtmux::OutputLimits::stdout_bytes: const fn(self) -> usize
-function libtmux::Pane::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Pane::break_out: async fn(self) -> Result<Self, libtmux::Error>
-function libtmux::Pane::capture: async fn(&self) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
-function libtmux::Pane::capture_lines: async fn(&self, options: libtmux::CaptureOptions) -> Result<Vec<libtmux::CapturedLine>, libtmux::Error>
-function libtmux::Pane::capture_with: async fn(&self, options: libtmux::CaptureOptions) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
-function libtmux::Pane::clear_history: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Pane::clock_mode: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Pane::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
-function libtmux::Pane::copy_mode: async fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Pane::append_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Pane::break_out: fn(self) -> Result<Self, libtmux::Error>
+function libtmux::Pane::capture: fn(&self) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::Pane::capture_lines: fn(&self, options: libtmux::CaptureOptions) -> Result<Vec<libtmux::CapturedLine>, libtmux::Error>
+function libtmux::Pane::capture_with: fn(&self, options: libtmux::CaptureOptions) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::Pane::clear_history: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Pane::clock_mode: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Pane::cmd: fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
+function libtmux::Pane::copy_mode: fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Pane::current_command: fn(&self) -> Option<&libtmux::TmuxText>
 function libtmux::Pane::current_path: fn(&self) -> Option<&libtmux::TmuxText>
-function libtmux::Pane::display: async fn(&self, message: &str) -> Result<(), libtmux::Error>
-function libtmux::Pane::exit_mode: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Pane::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
-function libtmux::Pane::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
-function libtmux::Pane::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Pane::display: fn(&self, message: &str) -> Result<(), libtmux::Error>
+function libtmux::Pane::exit_mode: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Pane::format: fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
+function libtmux::Pane::from_env: fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Pane::from_env_value: fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Pane::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Pane::height: fn(&self) -> u32
-function libtmux::Pane::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
+function libtmux::Pane::hook: fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
 function libtmux::Pane::id: const fn(&self) -> &libtmux::PaneId
 function libtmux::Pane::index: fn(&self) -> u32
 function libtmux::Pane::is_active: fn(&self) -> bool
@@ -450,48 +460,49 @@ function libtmux::Pane::is_in_mode: fn(&self) -> bool
 function libtmux::Pane::is_input_disabled: fn(&self) -> bool
 function libtmux::Pane::is_piped: fn(&self) -> bool
 function libtmux::Pane::is_synchronized: fn(&self) -> bool
-function libtmux::Pane::join_into: async fn(self, beside: &Self, options: libtmux::JoinOptions) -> Result<Self, libtmux::Error>
-function libtmux::Pane::kill: async fn(self) -> Result<(), libtmux::Error>
+function libtmux::Pane::join_into: fn(self, beside: &Self, options: libtmux::JoinOptions) -> Result<Self, libtmux::Error>
+function libtmux::Pane::kill: fn(self) -> Result<(), libtmux::Error>
 function libtmux::Pane::left: fn(&self) -> i32
-function libtmux::Pane::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
-function libtmux::Pane::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
-function libtmux::Pane::paste_buffer: async fn(&self, name: Option<&str>) -> Result<(), libtmux::Error>
+function libtmux::Pane::option_names: fn(&self) -> Result<Vec<String>, libtmux::Error>
+function libtmux::Pane::options: fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
+function libtmux::Pane::paste_buffer: fn(&self, name: Option<&str>) -> Result<(), libtmux::Error>
 function libtmux::Pane::pid: fn(&self) -> Option<u32>
-function libtmux::Pane::pipe: async fn(&self, command: Option<impl Into<OsString>>) -> Result<(), libtmux::Error>
-function libtmux::Pane::refresh: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Pane::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
-function libtmux::Pane::resize: async fn(&mut self, width: u32, height: u32) -> Result<&mut Self, libtmux::Error>
-function libtmux::Pane::resize_by: async fn(&mut self, direction: libtmux::ResizeDirection, cells: u32) -> Result<&mut Self, libtmux::Error>
-function libtmux::Pane::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, respawn_mode: libtmux::Respawn) -> Result<&mut Self, libtmux::Error>
-function libtmux::Pane::select: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Pane::send_key_names: async fn<I, K>(&self, keys: I) -> Result<(), libtmux::Error> where I: IntoIterator<Item = K>, K: Into<OsString>
-function libtmux::Pane::send_keys: async fn(&self, keys: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Pane::send_line: async fn(&self, text: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Pane::send_prefix: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Pane::session: async fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
+function libtmux::Pane::pipe: fn(&self, command: Option<impl Into<OsString>>) -> Result<(), libtmux::Error>
+function libtmux::Pane::refresh: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::refreshed: fn(&self) -> Result<Self, libtmux::Error>
+function libtmux::Pane::resize: fn(&mut self, width: u32, height: u32) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::resize_by: fn(&mut self, direction: libtmux::ResizeDirection, cells: u32) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::respawn: fn(&mut self, command: Option<impl Into<OsString>>, respawn_mode: libtmux::Respawn) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::select: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::send_key_names: fn<I, K>(&self, keys: I) -> Result<(), libtmux::Error> where I: IntoIterator<Item = K>, K: Into<OsString>
+function libtmux::Pane::send_keys: fn(&self, keys: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Pane::send_line: fn(&self, text: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Pane::send_prefix: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Pane::session: fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
 function libtmux::Pane::session_id: const fn(&self) -> &libtmux::SessionId
-function libtmux::Pane::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Pane::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Pane::set_title: async fn(&mut self, title: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
-function libtmux::Pane::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
-function libtmux::Pane::split: async fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<Self, libtmux::Error>
-function libtmux::Pane::stream_output: async fn(&self) -> Result<libtmux::control::PaneOutput, libtmux::Error>
-function libtmux::Pane::stream_output_with_limits: async fn(&self, limits: libtmux::ControlLimits) -> Result<libtmux::control::PaneOutput, libtmux::Error>
-function libtmux::Pane::swap_with: async fn(&mut self, other: &Self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::set_hook: fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Pane::set_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Pane::set_title: fn(&mut self, title: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::set_typed_option: fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Pane::split: fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<Self, libtmux::Error>
+function libtmux::Pane::stream_output: fn(&self) -> Result<libtmux::control::PaneOutput, libtmux::Error>
+function libtmux::Pane::stream_output_with_limits: fn(&self, limits: libtmux::ControlLimits) -> Result<libtmux::control::PaneOutput, libtmux::Error>
+function libtmux::Pane::swap_with: fn(&mut self, other: &Self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::title: fn(&self) -> &libtmux::TmuxText
-function libtmux::Pane::toggle_zoom: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::toggle_zoom: fn(&mut self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::top: fn(&self) -> i32
 function libtmux::Pane::tty: fn(&self) -> &libtmux::TmuxText
-function libtmux::Pane::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
-function libtmux::Pane::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Pane::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Pane::wait_for_quiet: async fn(&self, quiet_for: Duration, within: Duration) -> Result<libtmux::PaneWait, libtmux::Error>
-function libtmux::Pane::wait_for_text: async fn(&self, needle: impl AsRef<[u8]>, within: Duration) -> Result<libtmux::PaneWait, libtmux::Error>
-function libtmux::Pane::wait_until: async fn(&self, within: Duration, settled: impl FnMut(&[libtmux::TmuxText]) -> bool) -> Result<libtmux::PaneWait, libtmux::Error>
+function libtmux::Pane::typed_option: fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Pane::unset_hook: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Pane::unset_option: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Pane::wait_for_quiet: fn(&self, quiet_for: Duration, within: Duration) -> Result<libtmux::PaneWait, libtmux::Error>
+function libtmux::Pane::wait_for_text: fn(&self, needle: impl AsRef<[u8]>, within: Duration) -> Result<libtmux::PaneWait, libtmux::Error>
+function libtmux::Pane::wait_until: fn(&self, within: Duration, settled: impl FnMut(&[libtmux::TmuxText]) -> bool) -> Result<libtmux::PaneWait, libtmux::Error>
 function libtmux::Pane::width: fn(&self) -> u32
-function libtmux::Pane::window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Pane::window: fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Pane::window_id: const fn(&self) -> &libtmux::WindowId
 function libtmux::Pane::window_index: const fn(&self) -> i32
+function libtmux::PaneId::number: const fn(&self) -> u32
 function libtmux::ReleaseSuffix::is_final: const fn(self) -> bool
 function libtmux::ReleaseSuffix::is_release_candidate: const fn(self) -> bool
 function libtmux::ReleaseSuffix::patch: fn(letter: char) -> Option<Self>
@@ -505,162 +516,166 @@ function libtmux::ReleaseVersion::suffix: const fn(self) -> libtmux::ReleaseSuff
 function libtmux::ScopeError::into_operation: fn(self) -> Option<E>
 function libtmux::ScopeError::into_value: fn(self) -> Option<T>
 function libtmux::ScopeError::tmux_error: const fn(&self) -> Option<&libtmux::Error>
-function libtmux::Server::access_rules: async fn(&self) -> Result<Vec<libtmux::AccessRule>, libtmux::Error>
-function libtmux::Server::append_array_option: async fn(&self, name: &str, index: u32, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::array_option: async fn(&self, name: &str) -> Result<libtmux::SparseValues<libtmux::TmuxText>, libtmux::Error>
-function libtmux::Server::attached_sessions: async fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
-function libtmux::Server::bind_key: async fn(&self, table: &str, key: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::buffer: async fn(&self, name: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, libtmux::Error>
-function libtmux::Server::buffer_names: async fn(&self) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::Server::access_rules: fn(&self) -> Result<Vec<libtmux::AccessRule>, libtmux::Error>
+function libtmux::Server::append_array_option: fn(&self, name: &str, index: u32, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::array_option: fn(&self, name: &str) -> Result<libtmux::SparseValues<libtmux::TmuxText>, libtmux::Error>
+function libtmux::Server::attached_sessions: fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
+function libtmux::Server::bind_key: fn(&self, table: &str, key: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::buffer: fn(&self, name: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, libtmux::Error>
+function libtmux::Server::buffer_names: fn(&self) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Server::builder: fn() -> libtmux::ServerBuilder
-function libtmux::Server::capabilities: async fn(&self) -> Result<&libtmux::EngineCapabilities, libtmux::Error>
-function libtmux::Server::chain: async fn(&self, chain: libtmux::CommandChain) -> Result<libtmux::CommandResult, libtmux::Error>
-function libtmux::Server::check_alive: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Server::choose: async fn(&self, chooser: libtmux::Chooser, client: Option<&libtmux::Client>) -> Result<(), libtmux::Error>
-function libtmux::Server::clear_prompt_history: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Server::client: async fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Client>, libtmux::Error>
-function libtmux::Server::clients: async fn(&self) -> Result<Vec<libtmux::Client>, libtmux::Error>
-function libtmux::Server::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
+function libtmux::Server::capabilities: fn(&self) -> Result<&libtmux::EngineCapabilities, libtmux::Error>
+function libtmux::Server::chain: fn(&self, chain: libtmux::CommandChain) -> Result<libtmux::CommandResult, libtmux::Error>
+function libtmux::Server::check_alive: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Server::choose: fn(&self, chooser: libtmux::Chooser, client: Option<&libtmux::Client>) -> Result<(), libtmux::Error>
+function libtmux::Server::clear_prompt_history: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Server::client: fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Client>, libtmux::Error>
+function libtmux::Server::clients: fn(&self) -> Result<Vec<libtmux::Client>, libtmux::Error>
+function libtmux::Server::cmd: fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
 function libtmux::Server::colors: fn(&self) -> Option<u16>
-function libtmux::Server::command_prompt: async fn(&self, client: Option<&libtmux::Client>, prompt: Option<&str>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::command_prompt: fn(&self, client: Option<&libtmux::Client>, prompt: Option<&str>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::config_file: fn(&self) -> Option<&Path>
 function libtmux::Server::default_timeout: fn(&self) -> Duration
-function libtmux::Server::delete_buffer: async fn(&self, name: impl AsRef<[u8]>) -> Result<(), libtmux::Error>
-function libtmux::Server::display_menu: async fn(&self, client: Option<&libtmux::Client>, title: &str, items: impl IntoIterator<Item = libtmux::MenuItem>) -> Result<(), libtmux::Error>
-function libtmux::Server::display_panes: async fn(&self, client: Option<&libtmux::Client>) -> Result<(), libtmux::Error>
-function libtmux::Server::display_popup: async fn(&self, client: Option<&libtmux::Client>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::environment: async fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
-function libtmux::Server::environment_all: async fn(&self) -> Result<BTreeMap<String, libtmux::EnvironmentEntry>, libtmux::Error>
-function libtmux::Server::find_window: async fn(&self, client: Option<&libtmux::Client>, search: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::format: async fn(&self, pane: Option<&libtmux::Pane>, format: &str) -> Result<libtmux::TmuxText, libtmux::Error>
+function libtmux::Server::delete_buffer: fn(&self, name: impl AsRef<[u8]>) -> Result<(), libtmux::Error>
+function libtmux::Server::display_menu: fn(&self, client: Option<&libtmux::Client>, title: &str, items: impl IntoIterator<Item = libtmux::MenuItem>) -> Result<(), libtmux::Error>
+function libtmux::Server::display_panes: fn(&self, client: Option<&libtmux::Client>) -> Result<(), libtmux::Error>
+function libtmux::Server::display_popup: fn(&self, client: Option<&libtmux::Client>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::environment: fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
+function libtmux::Server::environment_all: fn(&self) -> Result<BTreeMap<String, libtmux::EnvironmentEntry>, libtmux::Error>
+function libtmux::Server::find_window: fn(&self, client: Option<&libtmux::Client>, search: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::format: fn(&self, pane: Option<&libtmux::Pane>, format: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Server::from_env: fn() -> Result<Self, libtmux::Error>
 function libtmux::Server::from_env_value: fn(value: Option<impl Into<OsString>>) -> Result<Self, libtmux::Error>
-function libtmux::Server::generation: async fn(&self) -> Result<libtmux::ServerGeneration, libtmux::Error>
-function libtmux::Server::grant_access: async fn(&self, user: &str, mode: libtmux::AccessMode) -> Result<(), libtmux::Error>
-function libtmux::Server::has_session: async fn(&self, name: impl AsRef<[u8]>) -> Result<bool, libtmux::Error>
-function libtmux::Server::hide_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::hierarchy: async fn(&self) -> Result<Vec<libtmux::SessionTree>, libtmux::Error>
-function libtmux::Server::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
-function libtmux::Server::hooks: async fn(&self) -> Result<BTreeMap<String, libtmux::IndexedHooks>, libtmux::Error>
+function libtmux::Server::generation: fn(&self) -> Result<libtmux::ServerGeneration, libtmux::Error>
+function libtmux::Server::grant_access: fn(&self, user: &str, mode: libtmux::AccessMode) -> Result<(), libtmux::Error>
+function libtmux::Server::has_session: fn(&self, name: impl AsRef<[u8]>) -> Result<bool, libtmux::Error>
+function libtmux::Server::hide_environment: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::hierarchy: fn(&self) -> Result<Vec<libtmux::SessionTree>, libtmux::Error>
+function libtmux::Server::hook: fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
+function libtmux::Server::hooks: fn(&self) -> Result<BTreeMap<String, libtmux::IndexedHooks>, libtmux::Error>
 function libtmux::Server::identity: fn(&self) -> &libtmux::ServerIdentity
-function libtmux::Server::is_alive: async fn(&self) -> bool
-function libtmux::Server::key_bindings: async fn(&self, table: Option<&str>) -> Result<Vec<String>, libtmux::Error>
-function libtmux::Server::kill: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Server::load_buffer: async fn(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), libtmux::Error>
-function libtmux::Server::lock_all: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Server::lock_channel: async fn(&self, channel: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::is_alive: fn(&self) -> bool
+function libtmux::Server::key_bindings: fn(&self, table: Option<&str>) -> Result<Vec<String>, libtmux::Error>
+function libtmux::Server::kill: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Server::load_buffer: fn(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), libtmux::Error>
+function libtmux::Server::lock_all: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Server::lock_channel: fn(&self, channel: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::new: fn() -> Result<Self, libtmux::Error>
-function libtmux::Server::new_session: async fn(&self, options: impl Into<libtmux::NewSessionOptions>) -> Result<libtmux::Session, libtmux::Error>
-function libtmux::Server::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
-function libtmux::Server::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
-function libtmux::Server::over_control_mode: async fn(&self, sender: &libtmux::control::ControlSender) -> Result<Self, libtmux::Error>
+function libtmux::Server::new_session: fn(&self, options: impl Into<libtmux::NewSessionOptions>) -> Result<libtmux::Session, libtmux::Error>
+function libtmux::Server::option_names: fn(&self) -> Result<Vec<String>, libtmux::Error>
+function libtmux::Server::options: fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
+function libtmux::Server::over_control_mode: fn(&self, sender: &libtmux::control::ControlSender) -> Result<Self, libtmux::Error>
 function libtmux::Server::owns_control_client: fn(&self, pid: u32) -> bool
-function libtmux::Server::pane_by_id: async fn(&self, id: &libtmux::PaneId) -> Result<Option<libtmux::Pane>, libtmux::Error>
-function libtmux::Server::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
-function libtmux::Server::prompt_history: async fn(&self, kind: libtmux::PromptKind) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
-function libtmux::Server::require_generation: async fn(&self, expected: libtmux::ServerGeneration) -> Result<(), libtmux::Error>
+function libtmux::Server::pane_by_id: fn(&self, id: &libtmux::PaneId) -> Result<Option<libtmux::Pane>, libtmux::Error>
+function libtmux::Server::panes: fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
+function libtmux::Server::prompt_history: fn(&self, kind: libtmux::PromptKind) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::Server::require_generation: fn(&self, expected: libtmux::ServerGeneration) -> Result<(), libtmux::Error>
 function libtmux::Server::resolved_tmux_executable: fn(&self) -> Option<PathBuf>
-function libtmux::Server::revoke_access: async fn(&self, user: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::run_shell: async fn(&self, command: impl Into<OsString>) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
-function libtmux::Server::save_buffer: async fn(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), libtmux::Error>
-function libtmux::Server::session: async fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Session>, libtmux::Error>
-function libtmux::Server::session_by_id: async fn(&self, id: &libtmux::SessionId) -> Result<Option<libtmux::Session>, libtmux::Error>
-function libtmux::Server::sessions: async fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
-function libtmux::Server::set_array_option: async fn(&self, name: &str, index: u32, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_buffer: async fn(&self, name: Option<&str>, data: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_environment: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_global_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_global_window_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_hooks: async fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
-function libtmux::Server::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_typed_global_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_typed_global_window_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
-function libtmux::Server::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
-function libtmux::Server::shutdown: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Server::signal_channel: async fn(&self, channel: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::revoke_access: fn(&self, user: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::run_shell: fn(&self, command: impl Into<OsString>) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::Server::save_buffer: fn(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), libtmux::Error>
+function libtmux::Server::session: fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Session>, libtmux::Error>
+function libtmux::Server::session_by_id: fn(&self, id: &libtmux::SessionId) -> Result<Option<libtmux::Session>, libtmux::Error>
+function libtmux::Server::sessions: fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
+function libtmux::Server::set_array_option: fn(&self, name: &str, index: u32, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_buffer: fn(&self, name: Option<&str>, data: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_environment: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_global_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_global_window_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_hook: fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_hooks: fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
+function libtmux::Server::set_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_typed_global_option: fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_typed_global_window_option: fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_typed_option: fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Server::shutdown: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Server::signal_channel: fn(&self, channel: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::socket_name: fn(&self) -> Option<&OsStr>
 function libtmux::Server::socket_path: fn(&self) -> &Path
-function libtmux::Server::source_file: async fn(&self, path: impl Into<PathBuf>) -> Result<(), libtmux::Error>
-function libtmux::Server::spawn_shell: async fn(&self, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::start: async fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Server::source_file: fn(&self, path: impl Into<PathBuf>) -> Result<(), libtmux::Error>
+function libtmux::Server::spawn_shell: fn(&self, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::start: fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Server::tmux_executable: fn(&self) -> &OsStr
-function libtmux::Server::typed_global_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
-function libtmux::Server::typed_global_window_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
-function libtmux::Server::typed_key_bindings: async fn(&self, table: Option<&str>) -> Result<Vec<libtmux::KeyBinding>, libtmux::Error>
-function libtmux::Server::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
-function libtmux::Server::unbind_key: async fn(&self, table: &str, key: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::unlock_channel: async fn(&self, channel: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::unset_array_option: async fn(&self, name: &str, index: u32) -> Result<(), libtmux::Error>
-function libtmux::Server::unset_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::validate_layouts: async fn<'a>(&self, layouts: impl IntoIterator<Item = (&'a OsStr, usize)>) -> Result<(), libtmux::Error>
-function libtmux::Server::wait_for_channel: async fn(&self, channel: &str, within: Duration) -> Result<libtmux::ChannelWait, libtmux::Error>
-function libtmux::Server::window_by_id: async fn(&self, id: &libtmux::WindowId) -> Result<Option<libtmux::Window>, libtmux::Error>
-function libtmux::Server::windows: async fn(&self) -> Result<Vec<libtmux::Window>, libtmux::Error>
-function libtmux::Server::with_channel_lock: async fn<T, E>(&self, channel: &str, operation: impl AsyncFnOnce(&Self) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
-function libtmux::Server::with_session: async fn<T, E>(&self, options: impl Into<libtmux::NewSessionOptions>, operation: impl AsyncFnOnce(&libtmux::Session) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::Server::typed_global_option: fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Server::typed_global_window_option: fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Server::typed_key_bindings: fn(&self, table: Option<&str>) -> Result<Vec<libtmux::KeyBinding>, libtmux::Error>
+function libtmux::Server::typed_option: fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Server::unbind_key: fn(&self, table: &str, key: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::unlock_channel: fn(&self, channel: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::unset_array_option: fn(&self, name: &str, index: u32) -> Result<(), libtmux::Error>
+function libtmux::Server::unset_environment: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::unset_hook: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::unset_option: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::validate_layouts: fn<'a>(&self, layouts: impl IntoIterator<Item = (&'a OsStr, usize)>) -> Result<(), libtmux::Error>
+function libtmux::Server::wait_for_channel: fn(&self, channel: &str, within: Duration) -> Result<libtmux::ChannelWait, libtmux::Error>
+function libtmux::Server::window_by_id: fn(&self, id: &libtmux::WindowId) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Server::windows: fn(&self) -> Result<Vec<libtmux::Window>, libtmux::Error>
+function libtmux::Server::with_cancellation_token: fn(&self, token: libtmux::CancellationToken) -> Self
+function libtmux::Server::with_channel_lock: fn<T, E>(&self, channel: &str, operation: impl FnOnce(&Self) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::Server::with_session: fn<T, E>(&self, options: impl Into<libtmux::NewSessionOptions>, operation: impl FnOnce(&libtmux::Session) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
 function libtmux::ServerBuilder::build: fn(self) -> Result<libtmux::Server, libtmux::Error>
+function libtmux::ServerBuilder::cancellation_token: fn(self, token: libtmux::CancellationToken) -> Self
 function libtmux::ServerBuilder::colors: const fn(self, colors: u16) -> Self
 function libtmux::ServerBuilder::config_file: fn(self, path: impl Into<PathBuf>) -> Self
 function libtmux::ServerBuilder::control_client_limits: const fn(self, limits: libtmux::ControlClientLimits) -> Self
 function libtmux::ServerBuilder::default_timeout: const fn(self, timeout: Duration) -> Self
 function libtmux::ServerBuilder::dispatch_limits: const fn(self, limits: libtmux::DispatchLimits) -> Self
+function libtmux::ServerBuilder::group_signal_helper: fn(self, path: impl Into<PathBuf>) -> Self
 function libtmux::ServerBuilder::output_limits: const fn(self, limits: libtmux::OutputLimits) -> Self
 function libtmux::ServerBuilder::socket_name: fn(self, name: impl Into<OsString>) -> Self
 function libtmux::ServerBuilder::socket_path: fn(self, path: impl Into<PathBuf>) -> Self
 function libtmux::ServerBuilder::tmux_executable: fn(self, executable: impl Into<OsString>) -> Self
 function libtmux::ServerGeneration::pid: const fn(self) -> u32
 function libtmux::ServerGeneration::start_time: fn(self) -> SystemTime
-function libtmux::Session::active_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
-function libtmux::Session::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Session::active_window: fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Session::append_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Session::attached_client_count: fn(&self) -> u32
-function libtmux::Session::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
+function libtmux::Session::cmd: fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
 function libtmux::Session::created: fn(&self) -> SystemTime
-function libtmux::Session::detach_clients: async fn(&self) -> Result<(), libtmux::Error>
-function libtmux::Session::display: async fn(&self, message: &str) -> Result<(), libtmux::Error>
-function libtmux::Session::environment: async fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
-function libtmux::Session::environment_all: async fn(&self) -> Result<BTreeMap<String, libtmux::EnvironmentEntry>, libtmux::Error>
-function libtmux::Session::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
-function libtmux::Session::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
-function libtmux::Session::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Session::detach_clients: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Session::display: fn(&self, message: &str) -> Result<(), libtmux::Error>
+function libtmux::Session::environment: fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
+function libtmux::Session::environment_all: fn(&self) -> Result<BTreeMap<String, libtmux::EnvironmentEntry>, libtmux::Error>
+function libtmux::Session::format: fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
+function libtmux::Session::from_env: fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Session::from_env_value: fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Session::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
-function libtmux::Session::hide_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Session::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
-function libtmux::Session::hooks: async fn(&self) -> Result<BTreeMap<String, libtmux::IndexedHooks>, libtmux::Error>
+function libtmux::Session::hide_environment: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Session::hook: fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
+function libtmux::Session::hooks: fn(&self) -> Result<BTreeMap<String, libtmux::IndexedHooks>, libtmux::Error>
 function libtmux::Session::id: const fn(&self) -> &libtmux::SessionId
 function libtmux::Session::is_attached: fn(&self) -> bool
-function libtmux::Session::kill: async fn(self) -> Result<(), libtmux::Error>
+function libtmux::Session::kill: fn(self) -> Result<(), libtmux::Error>
 function libtmux::Session::last_attached: fn(&self) -> Option<SystemTime>
-function libtmux::Session::last_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
-function libtmux::Session::lock: async fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Session::last_window: fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Session::lock: fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Session::name: fn(&self) -> &libtmux::TmuxText
-function libtmux::Session::new_window: async fn(&self, options: impl Into<libtmux::NewWindowOptions>) -> Result<libtmux::Window, libtmux::Error>
-function libtmux::Session::next_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
-function libtmux::Session::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
-function libtmux::Session::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
-function libtmux::Session::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
+function libtmux::Session::new_window: fn(&self, options: impl Into<libtmux::NewWindowOptions>) -> Result<libtmux::Window, libtmux::Error>
+function libtmux::Session::next_window: fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Session::option_names: fn(&self) -> Result<Vec<String>, libtmux::Error>
+function libtmux::Session::options: fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
+function libtmux::Session::panes: fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
 function libtmux::Session::path: fn(&self) -> &libtmux::TmuxText
-function libtmux::Session::previous_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
-function libtmux::Session::refresh: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Session::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
-function libtmux::Session::rename: async fn(&mut self, name: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
-function libtmux::Session::search_windows: async fn<M: libtmux::query::Matcher<libtmux::Window>>(&self, matcher: M) -> Result<Vec<libtmux::Window>, libtmux::Error>
-function libtmux::Session::set_environment: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Session::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Session::set_hooks: async fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
-function libtmux::Session::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Session::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
-function libtmux::Session::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
-function libtmux::Session::unset_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Session::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Session::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Session::window: async fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Window>, libtmux::Error>
-function libtmux::Session::window_at: async fn(&self, index: i32) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Session::previous_window: fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Session::refresh: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Session::refreshed: fn(&self) -> Result<Self, libtmux::Error>
+function libtmux::Session::rename: fn(&mut self, name: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Session::search_windows: fn<M: libtmux::query::Matcher<libtmux::Window>>(&self, matcher: M) -> Result<Vec<libtmux::Window>, libtmux::Error>
+function libtmux::Session::set_environment: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Session::set_hook: fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Session::set_hooks: fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
+function libtmux::Session::set_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Session::set_typed_option: fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Session::typed_option: fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Session::unset_environment: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Session::unset_hook: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Session::unset_option: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Session::window: fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Session::window_at: fn(&self, index: i32) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Session::window_count: fn(&self) -> u32
-function libtmux::Session::windows: async fn(&self) -> Result<Vec<libtmux::Window>, libtmux::Error>
-function libtmux::Session::with_window: async fn<T, E>(&self, options: impl Into<libtmux::NewWindowOptions>, operation: impl AsyncFnOnce(&libtmux::Window) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::Session::windows: fn(&self) -> Result<Vec<libtmux::Window>, libtmux::Error>
+function libtmux::Session::with_window: fn<T, E>(&self, options: impl Into<libtmux::NewWindowOptions>, operation: impl FnOnce(&libtmux::Window) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::SessionId::number: const fn(&self) -> u32
 function libtmux::SessionName::as_str: fn(&self) -> &str
 function libtmux::SessionName::new: fn(name: impl Into<String>) -> Result<Self, libtmux::SessionNameError>
 function libtmux::SparseValues::first: fn(&self) -> Option<&T>
@@ -681,6 +696,7 @@ function libtmux::SplitOptions::start_directory: fn(self, directory: impl Into<l
 function libtmux::SplitOptions::zoom: const fn(self) -> Self
 function libtmux::TmuxArg::as_os_str: fn(&self) -> &OsStr
 function libtmux::TmuxArg::format: fn(template: impl Into<OsString>) -> Self
+function libtmux::TmuxArg::into_os_string: fn(self) -> OsString
 function libtmux::TmuxArg::literal: fn(text: impl AsRef<OsStr>) -> Self
 function libtmux::TmuxText::as_bytes: fn(&self) -> &[u8]
 function libtmux::TmuxText::as_flag: fn(&self) -> Option<bool>
@@ -695,98 +711,98 @@ function libtmux::TmuxVersion::meets: fn(&self, required: &libtmux::ReleaseVersi
 function libtmux::TmuxVersion::parse_output: fn(output: &[u8]) -> Result<Self, libtmux::Error>
 function libtmux::TmuxVersion::raw: fn(&self) -> &str
 function libtmux::TmuxVersion::release: const fn(&self) -> Option<&libtmux::ReleaseVersion>
-function libtmux::Window::active_pane: async fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
-function libtmux::Window::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Window::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
-function libtmux::Window::display: async fn(&self, message: &str) -> Result<(), libtmux::Error>
-function libtmux::Window::focus_direction: async fn(&self, direction: libtmux::PaneDirection) -> Result<libtmux::Pane, libtmux::Error>
-function libtmux::Window::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
-function libtmux::Window::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
-function libtmux::Window::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Window::active_pane: fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
+function libtmux::Window::append_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Window::cmd: fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
+function libtmux::Window::display: fn(&self, message: &str) -> Result<(), libtmux::Error>
+function libtmux::Window::focus_direction: fn(&self, direction: libtmux::PaneDirection) -> Result<libtmux::Pane, libtmux::Error>
+function libtmux::Window::format: fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
+function libtmux::Window::from_env: fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Window::from_env_value: fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Window::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Window::has_activity: const fn(&self) -> bool
 function libtmux::Window::has_bell: const fn(&self) -> bool
 function libtmux::Window::height: fn(&self) -> u32
-function libtmux::Window::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
+function libtmux::Window::hook: fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
 function libtmux::Window::id: const fn(&self) -> &libtmux::WindowId
 function libtmux::Window::index: const fn(&self) -> i32
 function libtmux::Window::is_active: const fn(&self) -> bool
 function libtmux::Window::is_linked: const fn(&self) -> bool
 function libtmux::Window::is_zoomed: fn(&self) -> bool
-function libtmux::Window::kill: async fn(self) -> Result<(), libtmux::Error>
+function libtmux::Window::kill: fn(self) -> Result<(), libtmux::Error>
 function libtmux::Window::last_activity: fn(&self) -> SystemTime
-function libtmux::Window::last_pane: async fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
+function libtmux::Window::last_pane: fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::layout: fn(&self) -> &libtmux::TmuxText
-function libtmux::Window::link_to: async fn(&self, session: &libtmux::Session, index: Option<i32>) -> Result<(), libtmux::Error>
-function libtmux::Window::linked_sessions: async fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
-function libtmux::Window::move_to: async fn(&mut self, session: &libtmux::Session, index: i32) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::link_to: fn(&self, session: &libtmux::Session, index: Option<i32>) -> Result<(), libtmux::Error>
+function libtmux::Window::linked_sessions: fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
+function libtmux::Window::move_to: fn(&mut self, session: &libtmux::Session, index: i32) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::name: fn(&self) -> &libtmux::TmuxText
-function libtmux::Window::next_layout: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
-function libtmux::Window::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
-function libtmux::Window::pane_at: async fn(&self, index: u32) -> Result<Option<libtmux::Pane>, libtmux::Error>
+function libtmux::Window::next_layout: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::option_names: fn(&self) -> Result<Vec<String>, libtmux::Error>
+function libtmux::Window::options: fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
+function libtmux::Window::pane_at: fn(&self, index: u32) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::pane_count: fn(&self) -> u32
-function libtmux::Window::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
-function libtmux::Window::previous_layout: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::refresh: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
-function libtmux::Window::rename: async fn(&mut self, name: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::resize: async fn(&mut self, width: u32, height: u32) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::resize_by: async fn(&mut self, direction: libtmux::ResizeDirection, cells: u32) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, respawn_mode: libtmux::Respawn) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::rotate: async fn(&self, rotation: libtmux::Rotation) -> Result<(), libtmux::Error>
-function libtmux::Window::search_panes: async fn<M: libtmux::query::Matcher<libtmux::Pane>>(&self, matcher: M) -> Result<Vec<libtmux::Pane>, libtmux::Error>
-function libtmux::Window::select: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::select_layout: async fn(&mut self, layout: impl Into<libtmux::LayoutSpec>) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::session: async fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
+function libtmux::Window::panes: fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
+function libtmux::Window::previous_layout: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::refresh: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::refreshed: fn(&self) -> Result<Self, libtmux::Error>
+function libtmux::Window::rename: fn(&mut self, name: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::resize: fn(&mut self, width: u32, height: u32) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::resize_by: fn(&mut self, direction: libtmux::ResizeDirection, cells: u32) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::respawn: fn(&mut self, command: Option<impl Into<OsString>>, respawn_mode: libtmux::Respawn) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::rotate: fn(&self, rotation: libtmux::Rotation) -> Result<(), libtmux::Error>
+function libtmux::Window::search_panes: fn<M: libtmux::query::Matcher<libtmux::Pane>>(&self, matcher: M) -> Result<Vec<libtmux::Pane>, libtmux::Error>
+function libtmux::Window::select: fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::select_layout: fn(&mut self, layout: impl Into<libtmux::LayoutSpec>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::session: fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
 function libtmux::Window::session_id: const fn(&self) -> &libtmux::SessionId
-function libtmux::Window::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Window::set_hooks: async fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
-function libtmux::Window::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Window::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
-function libtmux::Window::split: async fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<libtmux::Pane, libtmux::Error>
-function libtmux::Window::swap_with: async fn(&mut self, other: &Self) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
-function libtmux::Window::unlink: async fn(self) -> Result<(), libtmux::Error>
-function libtmux::Window::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Window::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Window::set_hook: fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Window::set_hooks: fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
+function libtmux::Window::set_option: fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Window::set_typed_option: fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Window::split: fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<libtmux::Pane, libtmux::Error>
+function libtmux::Window::swap_with: fn(&mut self, other: &Self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::typed_option: fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Window::unlink: fn(self) -> Result<(), libtmux::Error>
+function libtmux::Window::unset_hook: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Window::unset_option: fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Window::width: fn(&self) -> u32
-function libtmux::Window::with_pane: async fn<T, E>(&self, options: impl Into<libtmux::SplitOptions>, operation: impl AsyncFnOnce(&libtmux::Pane) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
-function libtmux::blocking::Runtime::new: fn() -> Result<Self, libtmux::Error>
-function libtmux::blocking::Runtime::run: fn<F: Future>(&self, future: F) -> <F as core::future::future::Future>::Output
-function libtmux::blocking::Runtime::try_run: fn<F: Future>(&self, future: F) -> Result<<F as core::future::future::Future>::Output, libtmux::Error>
+function libtmux::Window::with_pane: fn<T, E>(&self, options: impl Into<libtmux::SplitOptions>, operation: impl FnOnce(&libtmux::Pane) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::WindowId::number: const fn(&self) -> u32
 function libtmux::control::BlockResult::number: const fn(&self) -> u64
 function libtmux::control::BlockResult::output: fn(&self) -> &[libtmux::TmuxText]
 function libtmux::control::BlockResult::refusal_for: fn(&self, operation: &'static str) -> Option<libtmux::Error>
 function libtmux::control::BlockResult::succeeded: const fn(&self) -> bool
-function libtmux::control::ControlEvents::next_event: async fn(&mut self) -> Option<Result<libtmux::control::Event, libtmux::Error>>
-function libtmux::control::ControlEvents::shutdown: async fn(self) -> Result<(), libtmux::Error>
-function libtmux::control::ControlMode::attach: async fn(server: &libtmux::Server, session: &libtmux::SessionId) -> Result<Self, libtmux::Error>
-function libtmux::control::ControlMode::attach_with_limits: async fn(server: &libtmux::Server, session: &libtmux::SessionId, limits: libtmux::ControlLimits) -> Result<Self, libtmux::Error>
-function libtmux::control::ControlMode::next_event: async fn(&mut self) -> Option<Result<libtmux::control::Event, libtmux::Error>>
+function libtmux::control::ControlEvents::next_event: fn(&mut self) -> Option<Result<libtmux::control::Event, libtmux::Error>>
+function libtmux::control::ControlEvents::next_event_timeout: fn(&mut self, timeout: Duration) -> Result<Option<libtmux::control::Event>, libtmux::Error>
+function libtmux::control::ControlEvents::shutdown: fn(self) -> Result<(), libtmux::Error>
+function libtmux::control::ControlMode::attach: fn(server: &libtmux::Server, session: &libtmux::SessionId) -> Result<Self, libtmux::Error>
+function libtmux::control::ControlMode::attach_with_limits: fn(server: &libtmux::Server, session: &libtmux::SessionId, limits: libtmux::ControlLimits) -> Result<Self, libtmux::Error>
+function libtmux::control::ControlMode::next_event: fn(&mut self) -> Option<Result<libtmux::control::Event, libtmux::Error>>
 function libtmux::control::ControlMode::reply_timeout: fn(self, timeout: Duration) -> Self
-function libtmux::control::ControlMode::send: async fn(&self, command: libtmux::Command) -> Result<libtmux::control::BlockResult, libtmux::Error>
-function libtmux::control::ControlMode::shutdown: async fn(self) -> Result<(), libtmux::Error>
+function libtmux::control::ControlMode::send: fn(&self, command: libtmux::Command) -> Result<libtmux::control::BlockResult, libtmux::Error>
+function libtmux::control::ControlMode::shutdown: fn(self) -> Result<(), libtmux::Error>
 function libtmux::control::ControlMode::split: fn(self) -> (libtmux::control::ControlSender, libtmux::control::ControlEvents)
 function libtmux::control::ControlSender::is_closed: fn(&self) -> bool
-function libtmux::control::ControlSender::mute_pane: async fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
-function libtmux::control::ControlSender::pause_after: async fn(&self, behind: Duration) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::mute_pane: fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::pause_after: fn(&self, behind: Duration) -> Result<(), libtmux::Error>
 function libtmux::control::ControlSender::reply_timeout: fn(self, timeout: Duration) -> Self
-function libtmux::control::ControlSender::resume_pane: async fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
-function libtmux::control::ControlSender::send: async fn(&self, command: libtmux::Command) -> Result<libtmux::control::BlockResult, libtmux::Error>
-function libtmux::control::ControlSender::subscribe: async fn(&self, name: &str, watching: &libtmux::control::Subscription, format: &str) -> Result<(), libtmux::Error>
-function libtmux::control::ControlSender::unmute_pane: async fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
-function libtmux::control::ControlSender::unsubscribe: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::control::ControlSender::watch_only: async fn(&self, panes: &[libtmux::PaneId]) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::resume_pane: fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::send: fn(&self, command: libtmux::Command) -> Result<libtmux::control::BlockResult, libtmux::Error>
+function libtmux::control::ControlSender::subscribe: fn(&self, name: &str, watching: &libtmux::control::Subscription, format: &str) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::unmute_pane: fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::unsubscribe: fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::watch_only: fn(&self, panes: &[libtmux::PaneId]) -> Result<(), libtmux::Error>
 function libtmux::control::Event::invalidates_listings: const fn(&self) -> bool
 function libtmux::control::Event::may_have_added_a_pane: const fn(&self) -> bool
 function libtmux::control::Event::pane: const fn(&self) -> Option<&libtmux::PaneId>
 function libtmux::control::Event::window: const fn(&self) -> Option<&libtmux::WindowId>
-function libtmux::control::PaneOutput::next_chunk: async fn(&mut self) -> Option<Vec<u8>>
+function libtmux::control::PaneOutput::next_chunk: fn(&mut self) -> Option<Vec<u8>>
+function libtmux::control::PaneOutput::next_chunk_timeout: fn(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>, libtmux::Error>
 function libtmux::control::PaneOutput::pane: const fn(&self) -> &libtmux::PaneId
 function libtmux::control::PaneOutput::sender: const fn(&self) -> &libtmux::control::ControlSender
-function libtmux::control::PaneOutput::shutdown: async fn(self) -> Result<(), libtmux::Error>
-function libtmux::control::PaneOutput::snapshot: async fn(&mut self, on_output: impl FnMut(&[u8])) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::control::PaneOutput::shutdown: fn(self) -> Result<(), libtmux::Error>
+function libtmux::control::PaneOutput::snapshot: fn(&mut self, on_output: impl FnMut(&[u8])) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
 function libtmux::escape_format: fn(text: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
 function libtmux::option_schema: fn(name: &str) -> Option<&'static libtmux::OptionSchema>
 function libtmux::plan::CapturePane::escape_sequences: const fn(self) -> Self
@@ -828,8 +844,8 @@ function libtmux::plan::Plan::is_empty: fn(&self) -> bool
 function libtmux::plan::Plan::len: fn(&self) -> usize
 function libtmux::plan::Plan::new: const fn() -> Self
 function libtmux::plan::Plan::preview: fn(&self) -> Vec<Option<libtmux::Command>>
-function libtmux::plan::Plan::run: async fn(&self, server: &libtmux::Server, planner: libtmux::plan::Planner) -> Result<libtmux::plan::PlanResult, libtmux::Error>
-function libtmux::plan::Plan::run_over_control_mode: async fn(&self, sender: &libtmux::control::ControlSender) -> Result<libtmux::plan::PlanResult, libtmux::Error>
+function libtmux::plan::Plan::run: fn(&self, server: &libtmux::Server, planner: libtmux::plan::Planner) -> Result<libtmux::plan::PlanResult, libtmux::Error>
+function libtmux::plan::Plan::run_over_control_mode: fn(&self, sender: &libtmux::control::ControlSender) -> Result<libtmux::plan::PlanResult, libtmux::Error>
 function libtmux::plan::Plan::steps: fn(&self) -> &[libtmux::plan::Op]
 function libtmux::plan::Plan::validate: fn(&self) -> Result<(), libtmux::plan::PlanValidationError>
 function libtmux::plan::PlanResult::created: fn(&self, step: usize) -> Option<&OsString>
@@ -880,6 +896,9 @@ function libtmux::plan::StepOutcome::refusal: fn(&self) -> Option<libtmux::Error
 function libtmux::plan::StepOutcome::stderr: fn(&self) -> &[u8]
 function libtmux::plan::StepOutcome::stdout: fn(&self) -> &[u8]
 function libtmux::plan::StepOutcome::step: const fn(&self) -> &libtmux::plan::Step
+function libtmux::protocol::Line::parse: fn(line: &[u8]) -> Self
+function libtmux::protocol::Line::parse_within_block: fn(line: &[u8], number: u64) -> Self
+function libtmux::protocol::unescape_output: fn(source: &[u8]) -> Vec<u8>
 function libtmux::query::BoolField::eq: fn(self, value: bool) -> libtmux::query::FilterExpr<T>
 function libtmux::query::BoolField::is_in: fn(self, values: impl IntoIterator<Item = bool>) -> libtmux::query::FilterExpr<T>
 function libtmux::query::BoolField::not_in: fn(self, values: impl IntoIterator<Item = bool>) -> libtmux::query::FilterExpr<T>
@@ -989,22 +1008,23 @@ function libtmux::test::RetryTimeout::waited: const fn(self) -> Duration
 function libtmux::test::TestServer::builder: fn() -> libtmux::test::TestServerBuilder
 function libtmux::test::TestServer::daemon_pid: const fn(&self) -> u32
 function libtmux::test::TestServer::daemon_state: fn(&mut self) -> libtmux::test::DaemonState
-function libtmux::test::TestServer::new: async fn() -> Result<Self, libtmux::test::TestServerError>
+function libtmux::test::TestServer::new: fn() -> Result<Self, libtmux::test::TestServerError>
 function libtmux::test::TestServer::server: fn(&self) -> &libtmux::Server
-function libtmux::test::TestServer::session: async fn(&self, options: impl Into<libtmux::NewSessionOptions>) -> Result<libtmux::Session, libtmux::Error>
-function libtmux::test::TestServer::shutdown: async fn(self) -> Result<(), libtmux::test::TestServerError>
+function libtmux::test::TestServer::session: fn(&self, options: impl Into<libtmux::NewSessionOptions>) -> Result<libtmux::Session, libtmux::Error>
+function libtmux::test::TestServer::shutdown: fn(self) -> Result<(), libtmux::test::TestServerError>
 function libtmux::test::TestServer::socket_path: fn(&self) -> &Path
+function libtmux::test::TestServerBuilder::cancellation_token: fn(self, token: libtmux::CancellationToken) -> Self
 function libtmux::test::TestServerBuilder::control_client_limits: const fn(self, limits: libtmux::ControlClientLimits) -> Self
 function libtmux::test::TestServerBuilder::dispatch_limits: const fn(self, limits: libtmux::DispatchLimits) -> Self
 function libtmux::test::TestServerBuilder::lifecycle_timeout: fn(self, timeout: Duration) -> Self
 function libtmux::test::TestServerBuilder::output_limits: const fn(self, limits: libtmux::OutputLimits) -> Self
-function libtmux::test::TestServerBuilder::start: async fn(self) -> Result<libtmux::test::TestServer, libtmux::test::TestServerError>
+function libtmux::test::TestServerBuilder::start: fn(self) -> Result<libtmux::test::TestServer, libtmux::test::TestServerError>
 function libtmux::test::TestServerBuilder::tmux_executable: fn(self, executable: impl Into<OsString>) -> Self
 function libtmux::test::TestServerError::kind: const fn(&self) -> libtmux::test::TestServerErrorKind
 function libtmux::test::TestServerError::stage: fn(&self) -> Option<&str>
 function libtmux::test::install_executable: fn(path: &std::path::Path, script: &str) -> std::io::Result<()>
 function libtmux::test::reap_abandoned_servers: fn(older_than: std::time::Duration) -> Result<Vec<std::path::PathBuf>, libtmux::test::TestServerError>
-function libtmux::test::retry_until: async fn(within: std::time::Duration, condition: impl AsyncFnMut() -> bool) -> Result<(), libtmux::test::RetryTimeout>
+function libtmux::test::retry_until: fn(within: std::time::Duration, condition: impl FnMut() -> bool) -> Result<(), libtmux::test::RetryTimeout>
 function libtmux::test::scaled: fn(base: std::time::Duration) -> std::time::Duration
 function libtmux::test::unique_name: fn(prefix: &str) -> String
 impl AsRef<[u8]> for libtmux::TmuxText
@@ -1013,6 +1033,7 @@ impl AsRef<str> for libtmux::SessionId
 impl AsRef<str> for libtmux::WindowId
 impl Clone for libtmux::AccessMode
 impl Clone for libtmux::AccessRule
+impl Clone for libtmux::CancellationToken
 impl Clone for libtmux::CaptureOptions
 impl Clone for libtmux::CapturedLine
 impl Clone for libtmux::ChannelWait
@@ -1123,6 +1144,7 @@ impl Clone for libtmux::plan::StepOutcome
 impl Clone for libtmux::plan::StepReason
 impl Clone for libtmux::plan::WindowSlot
 impl Clone for libtmux::plan::WindowTarget
+impl Clone for libtmux::protocol::Line
 impl Clone for libtmux::query::ExactlyOneError
 impl Clone for libtmux::query::FilterExpressionError
 impl Clone for libtmux::query::FilterExpressionErrorKind
@@ -1189,6 +1211,7 @@ impl Copy for libtmux::test::RetryTimeout
 impl Copy for libtmux::test::TestServerErrorKind
 impl Debug for libtmux::AccessMode
 impl Debug for libtmux::AccessRule
+impl Debug for libtmux::CancellationToken
 impl Debug for libtmux::CaptureOptions
 impl Debug for libtmux::CapturedLine
 impl Debug for libtmux::ChannelWait
@@ -1262,7 +1285,6 @@ impl Debug for libtmux::WindowPlacement
 impl Debug for libtmux::WindowTarget
 impl Debug for libtmux::WindowTree
 impl Debug for libtmux::WindowTreeFields
-impl Debug for libtmux::blocking::Runtime
 impl Debug for libtmux::control::BlockResult
 impl Debug for libtmux::control::ControlEvents
 impl Debug for libtmux::control::ControlMode
@@ -1308,6 +1330,7 @@ impl Debug for libtmux::plan::StepOutcome
 impl Debug for libtmux::plan::StepReason
 impl Debug for libtmux::plan::WindowSlot
 impl Debug for libtmux::plan::WindowTarget
+impl Debug for libtmux::protocol::Line
 impl Debug for libtmux::query::ExactlyOneError
 impl Debug for libtmux::query::FilterExpressionError
 impl Debug for libtmux::query::FilterExpressionErrorKind
@@ -1318,6 +1341,7 @@ impl Debug for libtmux::test::TestServer
 impl Debug for libtmux::test::TestServerBuilder
 impl Debug for libtmux::test::TestServerError
 impl Debug for libtmux::test::TestServerErrorKind
+impl Default for libtmux::CancellationToken
 impl Default for libtmux::ControlClientLimits
 impl Default for libtmux::ControlLimits
 impl Default for libtmux::DispatchLimits
@@ -1354,7 +1378,6 @@ impl Display for libtmux::query::MultipleItemsError
 impl Display for libtmux::test::DaemonState
 impl Display for libtmux::test::RetryTimeout
 impl Display for libtmux::test::TestServerError
-impl Drop for libtmux::blocking::Runtime
 impl Drop for libtmux::test::TestServer
 impl Eq for libtmux::AccessMode
 impl Eq for libtmux::AccessRule
@@ -1441,6 +1464,7 @@ impl Eq for libtmux::plan::Step
 impl Eq for libtmux::plan::StepReason
 impl Eq for libtmux::plan::WindowSlot
 impl Eq for libtmux::plan::WindowTarget
+impl Eq for libtmux::protocol::Line
 impl Eq for libtmux::query::ExactlyOneError
 impl Eq for libtmux::query::FilterExpressionError
 impl Eq for libtmux::query::FilterExpressionErrorKind
@@ -1551,6 +1575,8 @@ impl Hash for libtmux::Window
 impl Hash for libtmux::WindowId
 impl Hash for libtmux::WindowPlacement
 impl Hash for libtmux::WindowTarget
+impl Iterator for libtmux::control::ControlEvents
+impl Iterator for libtmux::control::PaneOutput
 impl JsonSchema for libtmux::plan::CapturePane
 impl JsonSchema for libtmux::plan::KillPane
 impl JsonSchema for libtmux::plan::KillWindow
@@ -1669,6 +1695,7 @@ impl PartialEq for libtmux::plan::Step
 impl PartialEq for libtmux::plan::StepReason
 impl PartialEq for libtmux::plan::WindowSlot
 impl PartialEq for libtmux::plan::WindowTarget
+impl PartialEq for libtmux::protocol::Line
 impl PartialEq for libtmux::query::ExactlyOneError
 impl PartialEq for libtmux::query::FilterExpressionError
 impl PartialEq for libtmux::query::FilterExpressionErrorKind
@@ -1719,8 +1746,6 @@ impl Serialize for libtmux::plan::SplitTarget
 impl Serialize for libtmux::plan::SplitWindow
 impl Serialize for libtmux::plan::WindowSlot
 impl Serialize for libtmux::plan::WindowTarget
-impl Stream for libtmux::control::ControlEvents
-impl Stream for libtmux::control::PaneOutput
 impl libtmux::plan::Chainable for libtmux::plan::KillPane
 impl libtmux::plan::Chainable for libtmux::plan::KillWindow
 impl libtmux::plan::Chainable for libtmux::plan::Pause
@@ -1881,6 +1906,7 @@ impl<Target> Debug for libtmux::PaneFields<Target>
 impl<Target> Debug for libtmux::SessionFields<Target>
 impl<Target> Debug for libtmux::WindowFields<Target>
 struct libtmux::AccessRule
+struct libtmux::CancellationToken
 struct libtmux::CaptureOptions
 struct libtmux::CapturedLine
 struct libtmux::Client
@@ -1927,7 +1953,6 @@ struct libtmux::WindowFields<Target>
 struct libtmux::WindowId
 struct libtmux::WindowTree
 struct libtmux::WindowTreeFields
-struct libtmux::blocking::Runtime
 struct libtmux::control::BlockResult
 struct libtmux::control::ControlEvents
 struct libtmux::control::ControlMode
@@ -2003,6 +2028,8 @@ struct_field libtmux::Error::AfterEffect::operation: &'static str
 struct_field libtmux::Error::AfterEffect::source: Box<libtmux::Error>
 struct_field libtmux::Error::AmbiguousLayout::candidates: Vec<&'static str>
 struct_field libtmux::Error::AmbiguousLayout::input: String
+struct_field libtmux::Error::Cancelled::command: libtmux::CommandSummary
+struct_field libtmux::Error::Cancelled::request_id: u64
 struct_field libtmux::Error::CapabilityDefective::broken_in: libtmux::ReleaseVersion
 struct_field libtmux::Error::CapabilityDefective::capability: &'static str
 struct_field libtmux::Error::CapabilityDefective::fixed_in: libtmux::ReleaseVersion
@@ -2165,6 +2192,7 @@ struct_field libtmux::PaneFields::wrap_flag: libtmux::query::BoolField<Target>
 struct_field libtmux::PaneSize::Cells::0: u32
 struct_field libtmux::PaneSize::Percent::0: u32
 struct_field libtmux::PaneTarget::Id::0: libtmux::PaneId
+struct_field libtmux::ScopeError::Cancelled::cleanup: Option<libtmux::Error>
 struct_field libtmux::ScopeError::Cleanup::cleanup: libtmux::Error
 struct_field libtmux::ScopeError::Cleanup::value: T
 struct_field libtmux::ScopeError::Creation::0: libtmux::Error
@@ -2282,6 +2310,12 @@ struct_field libtmux::plan::SplitTarget::Pane::0: libtmux::plan::PaneTarget
 struct_field libtmux::plan::SplitTarget::Window::0: libtmux::plan::WindowTarget
 struct_field libtmux::plan::WindowTarget::Id::0: libtmux::WindowId
 struct_field libtmux::plan::WindowTarget::Slot::0: libtmux::plan::Slot<libtmux::plan::WindowSlot>
+struct_field libtmux::protocol::Line::BlockEnd::number: u64
+struct_field libtmux::protocol::Line::BlockEnd::succeeded: bool
+struct_field libtmux::protocol::Line::BlockStart::flags: u64
+struct_field libtmux::protocol::Line::BlockStart::number: u64
+struct_field libtmux::protocol::Line::Event::0: libtmux::control::Event
+struct_field libtmux::protocol::Line::Text::0: libtmux::TmuxText
 struct_field libtmux::test::DaemonState::Gone::0: std::process::ExitStatus
 trait libtmux::plan::Chainable: libtmux::plan::Operation
 trait libtmux::plan::FromStep
@@ -2292,7 +2326,6 @@ trait libtmux::query::Filterable: Sized
 trait libtmux::query::Matcher<T>
 trait libtmux::query::QueryIteratorExt: Iterator + Sized
 trait libtmux::query::ReadField<Target>: Copy + sealed::Sealed
-trait libtmux::snapshot::sealed::Sealed
 type_alias libtmux::IndexedHooks = libtmux::SparseValues<libtmux::TmuxText>
 variant libtmux::AccessMode::ReadOnly
 variant libtmux::AccessMode::Write
@@ -2319,6 +2352,7 @@ variant libtmux::EnvironmentEntry::Removed
 variant libtmux::EnvironmentEntry::Set
 variant libtmux::Error::AfterEffect
 variant libtmux::Error::AmbiguousLayout
+variant libtmux::Error::Cancelled
 variant libtmux::Error::CapabilityDefective
 variant libtmux::Error::ClientSuspended
 variant libtmux::Error::CommandFailed
@@ -2358,6 +2392,7 @@ variant libtmux::Error::UnsupportedCapability
 variant libtmux::Error::UnsupportedTmuxVersion
 variant libtmux::Error::VersionProbeFailed
 variant libtmux::Error::WaitChild
+variant libtmux::ErrorKind::Cancelled
 variant libtmux::ErrorKind::Decode
 variant libtmux::ErrorKind::InvalidInput
 variant libtmux::ErrorKind::ObjectGone
@@ -2432,6 +2467,7 @@ variant libtmux::Respawn::OnlyIfDead
 variant libtmux::Respawn::Replacing
 variant libtmux::Rotation::Down
 variant libtmux::Rotation::Up
+variant libtmux::ScopeError::Cancelled
 variant libtmux::ScopeError::Cleanup
 variant libtmux::ScopeError::Creation
 variant libtmux::ScopeError::Operation
@@ -2443,6 +2479,7 @@ variant libtmux::ServerConfigurationErrorKind::InvalidSocketName
 variant libtmux::ServerConfigurationErrorKind::InvalidSocketPath
 variant libtmux::ServerConfigurationErrorKind::MalformedTmuxVariable
 variant libtmux::ServerConfigurationErrorKind::NotInsideTmux
+variant libtmux::ServerConfigurationErrorKind::RealUserIdUnavailable
 variant libtmux::ServerConfigurationErrorKind::SocketRootUnavailable
 variant libtmux::ServerConfigurationErrorKind::WorkingDirectoryUnavailable
 variant libtmux::ServerGoneKind::Lost
@@ -2557,6 +2594,10 @@ variant libtmux::plan::StepReason::MarkedFold
 variant libtmux::plan::StepReason::ReadsOutput
 variant libtmux::plan::WindowTarget::Id
 variant libtmux::plan::WindowTarget::Slot
+variant libtmux::protocol::Line::BlockEnd
+variant libtmux::protocol::Line::BlockStart
+variant libtmux::protocol::Line::Event
+variant libtmux::protocol::Line::Text
 variant libtmux::query::ExactlyOneError::MultipleItems
 variant libtmux::query::ExactlyOneError::NoItems
 variant libtmux::query::FilterExpressionErrorKind::ComplexityLimit
@@ -2571,6 +2612,7 @@ variant libtmux::query::FilterExpressionErrorKind::UnsupportedVersion
 variant libtmux::test::DaemonState::Gone
 variant libtmux::test::DaemonState::Running
 variant libtmux::test::DaemonState::Unreadable
+variant libtmux::test::TestServerErrorKind::Cancelled
 variant libtmux::test::TestServerErrorKind::CleanupFailed
 variant libtmux::test::TestServerErrorKind::DaemonExited
 variant libtmux::test::TestServerErrorKind::DaemonPidMismatch

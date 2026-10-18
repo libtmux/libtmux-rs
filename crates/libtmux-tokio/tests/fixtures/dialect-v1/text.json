@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "note": "Wire schema version 1 implies this dialect. A port that answers differently on any case below is not speaking version 1, whatever its expressions serialise to.",
+  "case_folding": [
+    {
+      "why": "full folding, not simple: one character folds to two",
+      "left": "Straße",
+      "right": "STRASSE",
+      "equal": true
+    },
+    {
+      "why": "the same, against an already-lowercase subject",
+      "left": "Straße",
+      "right": "strasse",
+      "equal": true
+    },
+    {
+      "why": "compatibility ligature folds to its letters",
+      "left": "ﬁle",
+      "right": "file",
+      "equal": true
+    },
+    {
+      "why": "Kelvin sign folds to the ordinary letter",
+      "left": "Kelvin",
+      "right": "kelvin",
+      "equal": true
+    },
+    {
+      "why": "Greek final sigma and medial sigma fold together",
+      "left": "ΣΊΣΥΦΟΣ",
+      "right": "σίσυφος",
+      "equal": true
+    },
+    {
+      "why": "no normalization: composed and decomposed are different text",
+      "left": "é",
+      "right": "é",
+      "equal": false
+    },
+    {
+      "why": "no normalization: the dotted capital I keeps its combining dot",
+      "left": "İstanbul",
+      "right": "istanbul",
+      "equal": false
+    }
+  ],
+  "regex_grammar": [
+    {
+      "why": "backreferences are not in this grammar",
+      "pattern": "(a)\\1",
+      "accepted": false
+    },
+    {
+      "why": "lookbehind is not in this grammar",
+      "pattern": "(?<=a)b",
+      "accepted": false
+    },
+    {
+      "why": "Unicode script classes are",
+      "pattern": "\\p{Greek}+",
+      "accepted": true
+    },
+    {
+      "why": "so is the Unicode word class",
+      "pattern": "^\\w+$",
+      "accepted": true
+    },
+    {
+      "why": "and bounded repetition",
+      "pattern": "a{2,3}",
+      "accepted": true
+    }
+  ],
+  "regex_ignore_case": [
+    {
+      "why": "a case-insensitive regex does NOT fold one character to two, which is where it parts company with the text operators above",
+      "pattern": "^strasse$",
+      "subject": "Straße",
+      "matches": false
+    },
+    {
+      "why": "and not in the other direction either",
+      "pattern": "^straße$",
+      "subject": "STRASSE",
+      "matches": false
+    },
+    {
+      "why": "it does apply simple case folding, including the long s",
+      "pattern": "^s$",
+      "subject": "ſ",
+      "matches": true
+    },
+    {
+      "why": "the ordinary case, so the flag is doing something",
+      "pattern": "^straae$",
+      "subject": "STRAAE",
+      "matches": true
+    }
+  ]
+}

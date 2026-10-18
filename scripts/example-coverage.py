@@ -12,7 +12,9 @@ anyone lands, and a trivial accessor inherits the example on its type.
 
 from __future__ import annotations
 
-import json
+import argparse
+
+import rustdoc_workspace
 import sys
 
 TYPES = {"struct", "enum", "trait", "type_alias"}
@@ -41,9 +43,8 @@ def exported_ids(doc: dict) -> set[str]:
     return found
 
 
-def main(path: str) -> int:
-    with open(path, encoding="utf-8") as handle:
-        doc = json.load(handle)
+def main(path: str, dependencies: list[str] | None = None) -> int:
+    doc = rustdoc_workspace.load(path, dependencies or [])
 
     index = doc["index"]
     have: list[str] = []
@@ -69,13 +70,12 @@ def main(path: str) -> int:
     return 0
 
 
-def main_strict(path: str) -> int:
+def main_strict(path: str, dependencies: list[str] | None = None) -> int:
     """As `main`, but a missing example is a failure rather than a number."""
-    outcome = main(path)
+    outcome = main(path, dependencies)
     if outcome != 0:
         return outcome
-    with open(path, encoding="utf-8") as handle:
-        doc = json.load(handle)
+    doc = rustdoc_workspace.load(path, dependencies or [])
     index = doc["index"]
     for identifier in exported_ids(doc):
         item = index.get(identifier)
@@ -94,13 +94,10 @@ def main_strict(path: str) -> int:
 
 
 if __name__ == "__main__":
-    arguments = sys.argv[1:]
-    strict = "--require-all" in arguments
-    paths = [value for value in arguments if value != "--require-all"]
-    if len(paths) != 1:
-        print(
-            "usage: example-coverage.py [--require-all] <rustdoc.json>",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    raise SystemExit(main_strict(paths[0]) if strict else main(paths[0]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("path")
+    parser.add_argument("--dependency-json", action="append", default=[])
+    parser.add_argument("--require-all", action="store_true")
+    arguments = parser.parse_args()
+    run = main_strict if arguments.require_all else main
+    raise SystemExit(run(arguments.path, arguments.dependency_json))

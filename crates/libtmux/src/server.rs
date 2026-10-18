@@ -49,15 +49,15 @@ use crate::version::since::SERVER_ACCESS as SERVER_ACCESS_SINCE;
 /// # Examples
 ///
 /// ```no_run
-/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 /// use libtmux::AccessMode;
 ///
 /// // Server access control is tmux 3.3 and later. `ReadOnly` lets another user
 /// // watch without being able to send keys.
-/// server.grant_access("observer", AccessMode::ReadOnly).await?;
-/// server.grant_access("pair", AccessMode::Write).await?;
+/// server.grant_access("observer", AccessMode::ReadOnly)?;
+/// server.grant_access("pair", AccessMode::Write)?;
 ///
-/// let rules = server.access_rules().await?;
+/// let rules = server.access_rules()?;
 /// assert_eq!(rules.len(), 2);
 /// # Ok(())
 /// # }
@@ -82,10 +82,10 @@ pub enum AccessMode {
 /// # Examples
 ///
 /// ```no_run
-/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 /// use libtmux::Principal;
 ///
-/// for rule in server.access_rules().await? {
+/// for rule in server.access_rules()? {
 ///     match rule.principal() {
 ///         Principal::User => println!("{} (user)", rule.name()),
 ///         Principal::Group => println!("{} (group)", rule.name()),
@@ -107,10 +107,10 @@ pub enum Principal {
 /// # Examples
 ///
 /// ```no_run
-/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 /// use libtmux::AccessMode;
 ///
-/// for rule in server.access_rules().await? {
+/// for rule in server.access_rules()? {
 ///     if rule.mode() == AccessMode::Write {
 ///         println!("{} can type", rule.name());
 ///     }
@@ -194,23 +194,19 @@ use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::PromptKind;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let version = guard.server().capabilities().await?.tmux_version().clone();
+/// let guard = libtmux::test::TestServer::new()?;
+/// let version = guard.server().capabilities()?.tmux_version().clone();
 ///
 /// // tmux keeps a separate history per prompt kind, so a command typed at the
 /// // `:` prompt is not offered when searching.
 /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
-///     assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
-///     assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
+///     assert!(guard.server().prompt_history(PromptKind::Command)?.is_empty());
+///     assert!(guard.server().prompt_history(PromptKind::Search)?.is_empty());
 /// }
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -241,10 +237,9 @@ impl PromptKind {
 /// A cloneable handle to one captured tmux server endpoint.
 ///
 /// Equality and hashing use only the captured [`ServerIdentity`]. Clones share
-/// capability detection, request IDs, and executor shutdown state.
-/// Dropping a handle is nonblocking and does not stop the tmux daemon. Runtime
-/// owners should await [`Server::shutdown`] before tearing down Tokio when
-/// deterministic client-child cleanup is required.
+/// capability detection, request IDs, and executor shutdown state. Dropping a handle
+/// does not stop the tmux daemon. Call [`Server::shutdown`] to wait for active client
+/// cleanup.
 ///
 /// # What is on here
 ///
@@ -339,21 +334,17 @@ impl PromptKind {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::test::TestServer;
 ///
 /// // In your own code this is `libtmux::Server::new()?`; the fixture keeps
 /// // the example off whichever tmux you are actually using.
-/// let guard = TestServer::new().await?;
+/// let guard = TestServer::new()?;
 /// let server = guard.server();
 ///
-/// server.new_session("work").await?;
-/// assert_eq!(server.sessions().await?.len(), 1);
+/// server.new_session("work")?;
+/// assert_eq!(server.sessions()?.len(), 1);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -390,6 +381,11 @@ pub enum ChannelWait {
 }
 
 impl Server {
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn control_request_ids(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.core.control_request_ids()
+    }
+
     /// Build a handle onto a connection an object already holds.
     ///
     /// Not feature-gated: a `Client` resolving what it is attached to needs a
@@ -399,12 +395,26 @@ impl Server {
         Self { core }
     }
 
+    /// Clone this handle with a cancellation token for its operations.
+    ///
+    /// The clone shares command admission, request IDs, capability detection,
+    /// channel waits, and shutdown with this handle. Cancelling its token does
+    /// not cancel calls made through handles carrying a different token.
+    #[must_use]
+    pub fn with_cancellation_token(&self, token: crate::CancellationToken) -> Self {
+        Self {
+            core: self.core.for_cancellation(token),
+        }
+    }
+
     #[cfg(feature = "control-mode")]
-    pub(crate) async fn spawn_control(
-        &self,
-        session: &SessionId,
-    ) -> Result<PersistentChild, Error> {
-        self.core.spawn_control(session).await
+    pub(crate) fn cancellation_token(&self) -> &crate::CancellationToken {
+        self.core.cancellation_token()
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn spawn_control(&self, session: &SessionId) -> Result<PersistentChild, Error> {
+        self.core.spawn_control(session)
     }
 
     /// Report whether this process itself opened the control client with
@@ -428,17 +438,13 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
     /// // Nothing has opened a control client yet.
     /// assert!(!server.owns_control_client(std::process::id()));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -633,18 +639,14 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// let server = libtmux::Server::new()?;
-    /// assert!(!server.capabilities().await?.tmux_version().raw().is_empty());
-    /// server.shutdown().await?;
-    /// # Ok::<(), libtmux::Error>(())
-    /// # })?;
+    /// assert!(!server.capabilities()?.tmux_version().raw().is_empty());
+    /// server.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn capabilities(&self) -> Result<&EngineCapabilities, Error> {
-        self.core.capabilities().await
+    pub fn capabilities(&self) -> Result<&EngineCapabilities, Error> {
+        self.core.capabilities()
     }
 
     /// Execute one raw logical tmux command.
@@ -655,28 +657,24 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when the process cannot be started, captured, awaited,
-    /// or is cancelled by timeout or shutdown.
+    /// Returns an error when the process cannot be started, captured, waited for, or is
+    /// cancelled by timeout or shutdown.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// let server = libtmux::Server::builder()
     ///     .socket_path("/tmp/libtmux-rs-test/command-example-absent.sock")
     ///     .build()?;
-    /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
+    /// let result = server.cmd(libtmux::Command::new("list-sessions"))?;
     /// assert!(result.exit_code().is_some());
-    /// server.shutdown().await?;
-    /// # Ok::<(), libtmux::Error>(())
-    /// # })?;
+    /// server.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
-        self.core.execute(command).await
+    pub fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
+        self.core.execute(command)
     }
 
     /// Validate every planned layout before scripts or tmux mutations.
@@ -697,19 +695,19 @@ impl Server {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn validate(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// #  fn validate(server: &libtmux::Server) -> Result<(), libtmux::Error> {
     /// use std::ffi::OsStr;
-    /// server.validate_layouts([(OsStr::new("even-h"), 2)]).await?;
+    /// server.validate_layouts([(OsStr::new("even-h"), 2)])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn validate_layouts<'a>(
+    pub fn validate_layouts<'a>(
         &self,
         layouts: impl IntoIterator<Item = (&'a OsStr, usize)>,
     ) -> Result<(), Error> {
         let pending = crate::layout::prepare(layouts)?;
         if !pending.is_empty() {
-            crate::layout::resolve(&pending, &crate::layout::version(self).await?)?;
+            crate::layout::resolve(&pending, &crate::layout::version(self)?)?;
         }
         Ok(())
     }
@@ -725,16 +723,14 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when the process cannot be started, captured, awaited,
-    /// or is cancelled by timeout or shutdown. A command tmux refuses is
-    /// reported through the returned [`CommandResult`], not as an error.
+    /// Returns an error when the process cannot be started, captured, waited for, or is
+    /// cancelled by timeout or shutdown. A command tmux refuses is reported through the
+    /// returned [`CommandResult`], not as an error.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{Command, CommandChain};
     ///
     /// let server = libtmux::Server::builder()
@@ -742,24 +738,21 @@ impl Server {
     ///     .build()?;
     /// let chain = CommandChain::new(Command::new("list-sessions"))
     ///     .then(Command::new("list-panes"));
-    /// let result = server.chain(chain).await?;
+    /// let result = server.chain(chain)?;
     /// assert!(result.exit_code().is_some());
-    /// server.shutdown().await?;
-    /// # Ok::<(), libtmux::Error>(())
-    /// # })?;
+    /// server.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
-        self.core.execute_chain(chain).await
+    pub fn chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
+        self.core.execute_chain(chain)
     }
 
     /// Stop accepting clients and wait for every active client process.
     ///
-    /// Shutdown is idempotent and affects every clone of this server.
-    /// It never stops the tmux daemon itself. Await it before dropping the
-    /// Tokio runtime when deterministic reaping matters. With control mode
-    /// enabled, this also closes persistent control connections.
+    /// Shutdown is idempotent and affects every clone of this server. It never stops
+    /// the tmux daemon itself. The call waits for client processes to be reaped. With
+    /// control mode enabled, it also closes persistent control connections.
     ///
     /// # Errors
     ///
@@ -769,18 +762,14 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// let server = libtmux::Server::new()?;
-    /// server.shutdown().await?;
-    /// server.shutdown().await?;
-    /// # Ok::<(), libtmux::Error>(())
-    /// # })?;
+    /// server.shutdown()?;
+    /// server.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn shutdown(&self) -> Result<(), Error> {
-        self.core.shutdown().await
+    pub fn shutdown(&self) -> Result<(), Error> {
+        self.core.shutdown()
     }
 
     /// Build a server from the `TMUX` variable tmux exports into every pane.
@@ -865,8 +854,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the session listing fails.
-    pub async fn attached_sessions(&self) -> Result<Vec<Session>, Error> {
-        let mut sessions = self.sessions().await?;
+    pub fn attached_sessions(&self) -> Result<Vec<Session>, Error> {
+        let mut sessions = self.sessions()?;
         sessions.retain(Session::is_attached);
 
         Ok(sessions)
@@ -889,13 +878,9 @@ impl Server {
     ///
     /// Returns an error when tmux refuses the command, which includes a name
     /// that already exists, and when its output cannot be decoded.
-    pub async fn new_session(
-        &self,
-        options: impl Into<NewSessionOptions>,
-    ) -> Result<Session, Error> {
+    pub fn new_session(&self, options: impl Into<NewSessionOptions>) -> Result<Session, Error> {
         let options = options.into();
-        let info =
-            listing::create_session(&self.core, |format| options.into_command(format)).await?;
+        let info = listing::create_session(&self.core, |format| options.into_command(format))?;
 
         Ok(Session::new(Arc::clone(&self.core), info))
     }
@@ -910,8 +895,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn lock_all(&self) -> Result<(), Error> {
-        listing::mutate(&self.core, "lock-server", Command::new("lock-server")).await
+    pub fn lock_all(&self) -> Result<(), Error> {
+        listing::mutate(&self.core, "lock-server", Command::new("lock-server"))
     }
 
     /// Stop the tmux daemon at this endpoint.
@@ -920,15 +905,15 @@ impl Server {
     ///
     /// Returns an error when tmux cannot be run. A daemon that was already
     /// stopped is not an error.
-    pub async fn kill(&self) -> Result<(), Error> {
-        let result = self.cmd(Command::new("kill-server")).await?;
+    pub fn kill(&self) -> Result<(), Error> {
+        let result = self.cmd(Command::new("kill-server"))?;
         if result.success() {
             return Ok(());
         }
 
         // tmux exits nonzero when no server was running, which is the state
         // the caller asked for.
-        if self.is_alive().await {
+        if self.is_alive() {
             return Err(Error::CommandFailed {
                 command: "kill-server",
                 exit_code: result.exit_code(),
@@ -946,18 +931,14 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the buffer name or data.
-    pub async fn set_buffer(
-        &self,
-        name: Option<&str>,
-        data: impl Into<OsString>,
-    ) -> Result<(), Error> {
+    pub fn set_buffer(&self, name: Option<&str>, data: impl Into<OsString>) -> Result<(), Error> {
         let mut command = Command::new("set-buffer");
         if let Some(name) = name {
             command = command.arg("-b").arg(OsString::from(name));
         }
         command = command.arg("--");
 
-        listing::mutate(&self.core, "set-buffer", command.sensitive_arg(data.into())).await
+        listing::mutate(&self.core, "set-buffer", command.sensitive_arg(data.into()))
     }
 
     /// Fill a paste buffer from a file, letting tmux read it.
@@ -974,11 +955,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux cannot read the path.
-    pub async fn load_buffer(
-        &self,
-        name: Option<&str>,
-        path: impl AsRef<Path>,
-    ) -> Result<(), Error> {
+    pub fn load_buffer(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), Error> {
         let mut command = Command::new("load-buffer");
         if let Some(name) = name {
             command = command.arg("-b").arg(OsString::from(name));
@@ -991,7 +968,6 @@ impl Server {
                 .arg("--")
                 .arg(path.as_ref().as_os_str().to_os_string()),
         )
-        .await
     }
 
     /// Write a paste buffer to a file, letting tmux do the writing.
@@ -1005,11 +981,7 @@ impl Server {
     ///
     /// Returns an error when the buffer is missing or tmux cannot write the
     /// path.
-    pub async fn save_buffer(
-        &self,
-        name: Option<&str>,
-        path: impl AsRef<Path>,
-    ) -> Result<(), Error> {
+    pub fn save_buffer(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), Error> {
         let mut command = Command::new("save-buffer");
         if let Some(name) = name {
             command = command.arg("-b").arg(OsString::from(name));
@@ -1022,7 +994,6 @@ impl Server {
                 .arg("--")
                 .arg(path.as_ref().as_os_str().to_os_string()),
         )
-        .await
     }
 
     /// Read a paste buffer's exact bytes.
@@ -1034,14 +1005,12 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached.
-    pub async fn buffer(&self, name: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, Error> {
-        let result = self
-            .cmd(
-                Command::new("show-buffer")
-                    .arg("-b")
-                    .arg(OsString::from_vec(name.as_ref().to_vec())),
-            )
-            .await?;
+    pub fn buffer(&self, name: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, Error> {
+        let result = self.cmd(
+            Command::new("show-buffer")
+                .arg("-b")
+                .arg(OsString::from_vec(name.as_ref().to_vec())),
+        )?;
 
         // tmux exits nonzero for a name it does not have, which is absence
         // rather than failure.
@@ -1063,15 +1032,13 @@ impl Server {
     ///
     /// Returns an error when tmux refuses the listing, and
     /// [`Error::DecodeListing`] when its output does not decode.
-    pub async fn buffer_names(&self) -> Result<Vec<TmuxText>, Error> {
-        let dialect = TransportDialect::for_version(self.capabilities().await?.tmux_version());
-        let result = self
-            .cmd(
-                Command::new("list-buffers")
-                    .arg("-F")
-                    .arg("#{q:buffer_name}="),
-            )
-            .await?;
+    pub fn buffer_names(&self) -> Result<Vec<TmuxText>, Error> {
+        let dialect = TransportDialect::for_version(self.capabilities()?.tmux_version());
+        let result = self.cmd(
+            Command::new("list-buffers")
+                .arg("-F")
+                .arg("#{q:buffer_name}="),
+        )?;
         if !result.success() {
             return Err(Error::CommandFailed {
                 command: "list-buffers",
@@ -1100,7 +1067,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when no buffer has that name.
-    pub async fn delete_buffer(&self, name: impl AsRef<[u8]>) -> Result<(), Error> {
+    pub fn delete_buffer(&self, name: impl AsRef<[u8]>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "delete-buffer",
@@ -1108,7 +1075,6 @@ impl Server {
                 .arg("-b")
                 .arg(OsString::from_vec(name.as_ref().to_vec())),
         )
-        .await
     }
 
     /// Bind a key in one key table.
@@ -1116,7 +1082,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the key or the command.
-    pub async fn bind_key(
+    pub fn bind_key(
         &self,
         table: &str,
         key: &str,
@@ -1132,7 +1098,6 @@ impl Server {
                 .arg(OsString::from(key))
                 .arg(command.into()),
         )
-        .await
     }
 
     /// Remove a key binding from one key table.
@@ -1140,7 +1105,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the key.
-    pub async fn unbind_key(&self, table: &str, key: &str) -> Result<(), Error> {
+    pub fn unbind_key(&self, table: &str, key: &str) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "unbind-key",
@@ -1150,7 +1115,6 @@ impl Server {
                 .arg("--")
                 .arg(OsString::from(key)),
         )
-        .await
     }
 
     /// List key bindings as tmux prints them.
@@ -1167,13 +1131,13 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the listing.
-    pub async fn key_bindings(&self, table: Option<&str>) -> Result<Vec<String>, Error> {
+    pub fn key_bindings(&self, table: Option<&str>) -> Result<Vec<String>, Error> {
         let mut command = Command::new("list-keys");
         if let Some(table) = table {
             command = command.arg("-T").arg(OsString::from(table));
         }
 
-        let result = self.cmd(command).await?;
+        let result = self.cmd(command)?;
         if !result.success() {
             return Err(Error::CommandFailed {
                 command: "list-keys",
@@ -1221,7 +1185,7 @@ impl Server {
     ///
     /// Returns [`Error::ServerMismatch`] when the pane belongs to another
     /// server, or an error when tmux rejects the format or the pane is gone.
-    pub async fn format(&self, pane: Option<&Pane>, format: &str) -> Result<TmuxText, Error> {
+    pub fn format(&self, pane: Option<&Pane>, format: &str) -> Result<TmuxText, Error> {
         let mut command = Command::new("display-message").arg("-p");
         if let Some(pane) = pane {
             self.core
@@ -1229,9 +1193,7 @@ impl Server {
             command = command.arg("-t").arg(pane.id().to_string());
         }
 
-        let result = self
-            .cmd(command.arg("--").arg(OsString::from(format)))
-            .await?;
+        let result = self.cmd(command.arg("--").arg(OsString::from(format)))?;
         if !result.success() {
             return Err(Error::from_refused_result("display-message", &result, None));
         }
@@ -1245,13 +1207,12 @@ impl Server {
     }
 
     /// Read this server's release and refuse a capability it is too old for.
-    pub(crate) async fn require(
+    pub(crate) fn require(
         &self,
         capability: &'static str,
         needs: ReleaseVersion,
     ) -> Result<(), Error> {
-        self.capabilities()
-            .await?
+        self.capabilities()?
             .tmux_version()
             .require(capability, needs)
     }
@@ -1260,13 +1221,13 @@ impl Server {
     ///
     /// `require` cannot express this: it asks for a floor, and a floor would
     /// refuse the older releases that work.
-    async fn refuse_if_defective(
+    fn refuse_if_defective(
         &self,
         capability: &'static str,
         broken_in: ReleaseVersion,
         fixed_in: ReleaseVersion,
     ) -> Result<(), Error> {
-        let found = self.capabilities().await?.tmux_version();
+        let found = self.capabilities()?.tmux_version();
         // A development build carries no numbered release to place in the
         // range, so it is taken at its word rather than refused, as in
         // `require`.
@@ -1300,35 +1261,29 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::PromptKind;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
-    /// let version = server.capabilities().await?.tmux_version().clone();
+    /// let version = server.capabilities()?.tmux_version().clone();
     ///
     /// // A fresh server has answered no prompts.
     /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
-    ///     assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
+    ///     assert!(server.prompt_history(PromptKind::Command)?.is_empty());
     /// }
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn prompt_history(&self, kind: PromptKind) -> Result<Vec<TmuxText>, Error> {
-        self.require("prompt history", PROMPT_HISTORY_SINCE).await?;
+    pub fn prompt_history(&self, kind: PromptKind) -> Result<Vec<TmuxText>, Error> {
+        self.require("prompt history", PROMPT_HISTORY_SINCE)?;
 
-        let result = self
-            .cmd(
-                Command::new("show-prompt-history")
-                    .arg("-T")
-                    .arg(kind.name()),
-            )
-            .await?;
+        let result = self.cmd(
+            Command::new("show-prompt-history")
+                .arg("-T")
+                .arg(kind.name()),
+        )?;
         if !result.success() {
             return Err(Error::from_refused_result(
                 "show-prompt-history",
@@ -1356,15 +1311,14 @@ impl Server {
     ///
     /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
     /// when tmux cannot be reached or refuses the command.
-    pub async fn clear_prompt_history(&self) -> Result<(), Error> {
-        self.require("prompt history", PROMPT_HISTORY_SINCE).await?;
+    pub fn clear_prompt_history(&self) -> Result<(), Error> {
+        self.require("prompt history", PROMPT_HISTORY_SINCE)?;
 
         listing::mutate(
             &self.core,
             "clear-prompt-history",
             Command::new("clear-prompt-history"),
         )
-        .await
     }
 
     /// The users on this server's access list.
@@ -1381,29 +1335,24 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let version = guard.server().capabilities().await?.tmux_version().clone();
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let version = guard.server().capabilities()?.tmux_version().clone();
     ///
     /// // Whoever started the server owns it and may act.
     /// if version.has_behavior(&libtmux::since::SERVER_ACCESS) {
-    ///     let rules = guard.server().access_rules().await?;
+    ///     let rules = guard.server().access_rules()?;
     ///     assert_eq!(rules.len(), 1);
     ///     assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
     /// }
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn access_rules(&self) -> Result<Vec<AccessRule>, Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
+    pub fn access_rules(&self) -> Result<Vec<AccessRule>, Error> {
+        self.require("the server access list", SERVER_ACCESS_SINCE)?;
 
-        let result = self.cmd(Command::new("server-access").arg("-l")).await?;
+        let result = self.cmd(Command::new("server-access").arg("-l"))?;
         if !result.success() {
             return Err(Error::from_refused_result("server-access", &result, None));
         }
@@ -1421,9 +1370,8 @@ impl Server {
     ///
     /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
     /// when tmux refuses -- which it does for the user who owns the server.
-    pub async fn grant_access(&self, user: &str, mode: AccessMode) -> Result<(), Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
+    pub fn grant_access(&self, user: &str, mode: AccessMode) -> Result<(), Error> {
+        self.require("the server access list", SERVER_ACCESS_SINCE)?;
 
         listing::mutate(
             &self.core,
@@ -1437,7 +1385,6 @@ impl Server {
                 .arg("--")
                 .arg(OsString::from(user)),
         )
-        .await
     }
 
     /// Stop a user attaching to this server.
@@ -1446,9 +1393,8 @@ impl Server {
     ///
     /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
     /// when tmux refuses -- which it does for the user who owns the server.
-    pub async fn revoke_access(&self, user: &str) -> Result<(), Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
+    pub fn revoke_access(&self, user: &str) -> Result<(), Error> {
+        self.require("the server access list", SERVER_ACCESS_SINCE)?;
 
         listing::mutate(
             &self.core,
@@ -1458,7 +1404,6 @@ impl Server {
                 .arg("--")
                 .arg(OsString::from(user)),
         )
-        .await
     }
 
     /// Load a tmux configuration file into this server.
@@ -1467,7 +1412,7 @@ impl Server {
     ///
     /// Returns an error when tmux cannot read the file or a command in it
     /// fails.
-    pub async fn source_file(&self, path: impl Into<PathBuf>) -> Result<(), Error> {
+    pub fn source_file(&self, path: impl Into<PathBuf>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "source-file",
@@ -1475,7 +1420,6 @@ impl Server {
                 .arg("--")
                 .arg(path.into().into_os_string()),
         )
-        .await
     }
 
     /// Create a session, run an operation with it, then kill it.
@@ -1490,26 +1434,33 @@ impl Server {
     /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
     /// fails. The operation's error needs no conversion into [`Error`].
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
-    /// of their own, so the session is killed even if this future is dropped
-    /// or the operation panics, while the Tokio runtime is alive. A cleanup
-    /// failure then has no caller to reach; the `tracing` feature records it.
-    pub async fn with_session<T, E>(
+    /// Cancellation before creation starts leaves tmux untouched. After creation
+    /// starts, the call waits for the resource ID and kills the session before
+    /// reporting cancellation. Once the callback starts, cancellation is cooperative:
+    /// its tmux operations observe the token. Cleanup runs before return and during
+    /// panic unwinding, using an uncancelled handle.
+    pub fn with_session<T, E>(
         &self,
         options: impl Into<NewSessionOptions>,
-        operation: impl AsyncFnOnce(&Session) -> Result<T, E>,
+        operation: impl FnOnce(&Session) -> Result<T, E>,
     ) -> Result<T, crate::ScopeError<T, E>> {
-        let server = self.clone();
+        let mut server = self.clone();
+        server.core = self.core.for_cleanup();
+        let callback_core = Arc::clone(&self.core);
         let options = options.into();
         scoped::run(
+            self.core.cancellation_token(),
             "with-session",
-            async move { server.new_session(options).await },
-            Session::kill,
+            move || {
+                server
+                    .new_session(options)
+                    .map(|resource| resource.with_core(callback_core))
+            },
+            Session::kill_for_cleanup,
             operation,
         )
-        .await
     }
 
     /// Run a shell command through tmux and collect its output.
@@ -1528,26 +1479,23 @@ impl Server {
     /// empty listing there would be a wrong answer the caller could not
     /// detect. 3.2a and 3.5 onwards are unaffected.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// The effect may have happened, and may still be happening. The shell
-    /// command runs under the tmux server, not this dispatch, so a dropped
-    /// call stops waiting for it without stopping it, and its output is lost.
-    pub async fn run_shell(&self, command: impl Into<OsString>) -> Result<Vec<TmuxText>, Error> {
+    /// The effect may have happened, and may still be happening. The shell command runs
+    /// under the tmux server, not this dispatch, so cancelling the call stops waiting
+    /// for it without stopping it, and its output is lost.
+    pub fn run_shell(&self, command: impl Into<OsString>) -> Result<Vec<TmuxText>, Error> {
         self.refuse_if_defective(
             "run-shell output",
             ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL),
             ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
-        )
-        .await?;
+        )?;
 
-        let result = self
-            .cmd(
-                Command::new("run-shell")
-                    .arg("--")
-                    .sensitive_arg(command.into()),
-            )
-            .await?;
+        let result = self.cmd(
+            Command::new("run-shell")
+                .arg("--")
+                .sensitive_arg(command.into()),
+        )?;
         if !result.success() {
             return Err(Error::from_refused_result("run-shell", &result, None));
         }
@@ -1572,7 +1520,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses to enqueue the command.
-    pub async fn spawn_shell(&self, command: impl Into<OsString>) -> Result<(), Error> {
+    pub fn spawn_shell(&self, command: impl Into<OsString>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "run-shell",
@@ -1581,7 +1529,6 @@ impl Server {
                 .arg("--")
                 .sensitive_arg(command.into()),
         )
-        .await
     }
 
     /// Start a tmux server without creating a session.
@@ -1589,8 +1536,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be run.
-    pub async fn start(&self) -> Result<(), Error> {
-        listing::mutate(&self.core, "start-server", Command::new("start-server")).await
+    pub fn start(&self) -> Result<(), Error> {
+        listing::mutate(&self.core, "start-server", Command::new("start-server"))
     }
 
     /// Which tmux daemon is answering on this endpoint.
@@ -1616,27 +1563,23 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
-    /// server.new_session("work").await?;
+    /// server.new_session("work")?;
     ///
-    /// let generation = server.generation().await?;
+    /// let generation = server.generation()?;
     /// // Unchanged while the daemon is the same one.
-    /// server.require_generation(generation).await?;
+    /// server.require_generation(generation)?;
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn generation(&self) -> Result<ServerGeneration, Error> {
+    pub fn generation(&self) -> Result<ServerGeneration, Error> {
         // Both are server-scoped and available in every list profile since
         // 3.2a. The start time is what defeats pid reuse: a replacement daemon
         // can be handed the pid of the one it replaced.
-        let answer = self.format(None, "#{pid} #{start_time}").await?;
+        let answer = self.format(None, "#{pid} #{start_time}")?;
         let text = answer.to_string_lossy();
         let mut parts = text.split_whitespace();
         let pid = parts.next().and_then(|pid| pid.parse::<u32>().ok());
@@ -1661,8 +1604,8 @@ impl Server {
     ///
     /// Returns [`Error::ServerGenerationChanged`] when a different daemon now
     /// holds this endpoint, or a transport error when tmux cannot be reached.
-    pub async fn require_generation(&self, expected: ServerGeneration) -> Result<(), Error> {
-        let found = self.generation().await?;
+    pub fn require_generation(&self, expected: ServerGeneration) -> Result<(), Error> {
+        let found = self.generation()?;
         if found == expected {
             return Ok(());
         }
@@ -1674,8 +1617,9 @@ impl Server {
     ///
     /// Every failure becomes `false`, including a missing executable. Use
     /// [`Server::check_alive`] when the difference matters.
-    pub async fn is_alive(&self) -> bool {
-        self.check_alive().await.is_ok()
+    #[must_use = "inspect whether the server is reachable"]
+    pub fn is_alive(&self) -> bool {
+        self.check_alive().is_ok()
     }
 
     /// Require a tmux daemon to be answering at this endpoint.
@@ -1684,8 +1628,8 @@ impl Server {
     ///
     /// Returns [`Error::ServerGone`] when no daemon is answering, or another
     /// dispatch error when tmux cannot be asked.
-    pub async fn check_alive(&self) -> Result<(), Error> {
-        let result = self.cmd(Command::new("list-sessions")).await?;
+    pub fn check_alive(&self) -> Result<(), Error> {
+        let result = self.cmd(Command::new("list-sessions"))?;
         if result.success() {
             return Ok(());
         }
@@ -1738,30 +1682,26 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::control::ControlMode;
     /// use libtmux::test::TestServer;
     ///
-    /// let guard = TestServer::new().await?;
-    /// let session = guard.server().new_session("routed").await?;
+    /// let guard = TestServer::new()?;
+    /// let session = guard.server().new_session("routed")?;
     ///
     /// let (sender, events) = ControlMode::attach(guard.server(), session.id())
-    ///     .await?
+    ///     ?
     ///     .split();
-    /// let routed = guard.server().over_control_mode(&sender).await?;
+    /// let routed = guard.server().over_control_mode(&sender)?;
     ///
     /// // One line on the connection, not a process.
-    /// assert_eq!(routed.sessions().await?.len(), 1);
+    /// assert_eq!(routed.sessions()?.len(), 1);
     ///
     /// // And a handle it found keeps the route.
-    /// let pane = routed.panes().await?.remove(0);
-    /// pane.send_line("true").await?;
+    /// let pane = routed.panes()?.remove(0);
+    /// pane.send_line("true")?;
     ///
-    /// events.shutdown().await?;
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// events.shutdown()?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1771,13 +1711,10 @@ impl Server {
     /// [`ControlEvents`]: crate::control::ControlEvents
     /// [`ControlSender::watch_only`]: crate::control::ControlSender::watch_only
     #[cfg(feature = "control-mode")]
-    pub async fn over_control_mode(
-        &self,
-        sender: &crate::control::ControlSender,
-    ) -> Result<Self, Error> {
+    pub fn over_control_mode(&self, sender: &crate::control::ControlSender) -> Result<Self, Error> {
         self.core
             .require_same_server(sender.identity(), "over_control_mode")?;
-        let capabilities = self.core.capabilities().await?.clone();
+        let capabilities = self.core.capabilities()?.clone();
 
         Ok(Self {
             core: Arc::new(self.core.over_control_mode(sender.clone(), capabilities)),
@@ -1815,351 +1752,8 @@ impl fmt::Debug for Server {
 }
 
 #[cfg(test)]
-mod tests {
-
-    use std::os::unix::process::ExitStatusExt as _;
-    use std::process::ExitStatus;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-    use tokio::sync::{Notify, watch};
-
-    use super::{AccessMode, NewSessionOptions, Principal, Server, parse_access_rule};
-    use crate::command::{CommandRequest, CommandResult, ProcessStatus};
-    use crate::formats::{DecoderKind, FormatDescriptor, FormatPlan, ListProfile};
-    use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
-    use crate::{Error, ErrorKind, TmuxVersion};
-
-    struct RefusingExecutor {
-        calls: AtomicUsize,
-    }
-
-    #[derive(Clone, Copy)]
-    enum SessionFollowup {
-        DispatchError,
-        EmptyListing,
-    }
-
-    struct ComposedSessionExecutor {
-        calls: AtomicUsize,
-        sessions_stdout: Vec<u8>,
-        followup: SessionFollowup,
-    }
-
-    impl Executor for ComposedSessionExecutor {
-        fn execute(&self, request: CommandRequest) -> DispatchFuture {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            let sessions_stdout = self.sessions_stdout.clone();
-            let followup = self.followup;
-            DispatchFuture::new(async move {
-                if call == 3 && matches!(followup, SessionFollowup::DispatchError) {
-                    return Err(Error::Overloaded {
-                        request_id: request.request_id().get(),
-                        command: request.summary().clone(),
-                        in_flight: 1,
-                    });
-                }
-
-                let stdout = match call {
-                    0 => b"tmux 3.7b\n".to_vec(),
-                    1 => sessions_stdout,
-                    2 | 3 => Vec::new(),
-                    _ => panic!("one probe, one listing, one mutation, and one refresh"),
-                };
-                Ok(CommandResult::new(
-                    request.request_id(),
-                    request.summary().clone(),
-                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
-                    stdout,
-                    Vec::new(),
-                ))
-            })
-        }
-
-        fn shutdown(&self) -> ShutdownFuture {
-            ShutdownFuture::new(async { Ok(()) })
-        }
-    }
-
-    fn default_format_value(descriptor: &FormatDescriptor) -> &'static [u8] {
-        match descriptor.name() {
-            "session_id" => b"$1",
-            "window_id" => b"@1",
-            "pane_id" => b"%1",
-            "client_name" => b"client",
-            _ => match descriptor.decoder() {
-                DecoderKind::Ascii => b"ascii",
-                DecoderKind::Text => b"text",
-                DecoderKind::Bool
-                | DecoderKind::U8
-                | DecoderKind::U32
-                | DecoderKind::U64
-                | DecoderKind::I32
-                | DecoderKind::Timestamp
-                | DecoderKind::PaneProgress => b"0",
-                DecoderKind::SessionId => b"$1",
-                DecoderKind::WindowId => b"@1",
-                DecoderKind::PaneId => b"%1",
-                DecoderKind::PaneProgressState => b"normal",
-            },
-        }
-    }
-
-    fn session_listing_stdout() -> Vec<u8> {
-        let version = TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version");
-        let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
-        let mut stdout = Vec::new();
-        for descriptor in plan.descriptors_for_test() {
-            for byte in default_format_value(descriptor) {
-                if matches!(*byte, b'\\' | b'%' | b'=') {
-                    stdout.push(b'\\');
-                }
-                stdout.push(*byte);
-            }
-            stdout.push(b'=');
-        }
-        stdout.push(b'\n');
-        stdout
-    }
-
-    impl Executor for RefusingExecutor {
-        fn execute(&self, request: CommandRequest) -> DispatchFuture {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            DispatchFuture::new(async move {
-                let (status, stdout, stderr) = if call == 0 {
-                    (0, b"tmux 3.7b\n".to_vec(), Vec::new())
-                } else {
-                    assert_eq!(call, 1, "one probe and one run-shell dispatch");
-                    assert_eq!(request.summary().sensitive_argument_count(), 1);
-                    (1 << 8, Vec::new(), b"sentinel-run-shell-output\n".to_vec())
-                };
-                Ok(CommandResult::new(
-                    request.request_id(),
-                    request.summary().clone(),
-                    ProcessStatus::from_exit_status(ExitStatus::from_raw(status)),
-                    stdout,
-                    stderr,
-                ))
-            })
-        }
-
-        fn shutdown(&self) -> ShutdownFuture {
-            ShutdownFuture::new(async { Ok(()) })
-        }
-    }
-
-    struct BlockingShutdownExecutor {
-        closed: AtomicBool,
-        shutdown_started: Notify,
-        release: watch::Receiver<bool>,
-    }
-
-    impl Executor for BlockingShutdownExecutor {
-        fn execute(&self, request: CommandRequest) -> DispatchFuture {
-            let closed = self.closed.load(Ordering::SeqCst);
-            DispatchFuture::new(async move {
-                assert!(
-                    closed,
-                    "test dispatch occurs only after shutdown closes admission"
-                );
-                Err(Error::executor_shutdown(
-                    request.request_id().get(),
-                    request.summary().clone(),
-                ))
-            })
-        }
-
-        fn shutdown(&self) -> ShutdownFuture {
-            self.closed.store(true, Ordering::SeqCst);
-            self.shutdown_started.notify_one();
-            let mut release = self.release.clone();
-            ShutdownFuture::new(async move {
-                while !*release.borrow() {
-                    release
-                        .changed()
-                        .await
-                        .expect("test release sender remains alive");
-                }
-                Ok(())
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn aborting_one_server_shutdown_keeps_all_clones_closed_until_later_completion() {
-        let (release_sender, release_receiver) = watch::channel(false);
-        let executor = Arc::new(BlockingShutdownExecutor {
-            closed: AtomicBool::new(false),
-            shutdown_started: Notify::new(),
-            release: release_receiver,
-        });
-        let server = Server::from_executor_for_test(executor.clone());
-        let started = executor.shutdown_started.notified();
-        let shutdown_server = server.clone();
-        let shutdown = tokio::spawn(async move { shutdown_server.shutdown().await });
-        started.await;
-        shutdown.abort();
-        assert!(
-            shutdown
-                .await
-                .expect_err("shutdown task was aborted")
-                .is_cancelled()
-        );
-
-        assert!(matches!(
-            server.cmd(crate::Command::new("display-message")).await,
-            Err(Error::ExecutorShutdown { .. })
-        ));
-        release_sender
-            .send(true)
-            .expect("test release receiver remains alive");
-        server
-            .clone()
-            .shutdown()
-            .await
-            .expect("later clone completes shutdown");
-    }
-
-    #[tokio::test]
-    async fn run_shell_failure_withholds_sensitive_output() {
-        let server = Server::from_executor_for_test(Arc::new(RefusingExecutor {
-            calls: AtomicUsize::new(0),
-        }));
-
-        let error = server
-            .run_shell("sentinel-run-shell-command")
-            .await
-            .expect_err("the command is refused");
-        let diagnostic = format!("{error:?} {error}");
-        for secret in ["sentinel-run-shell-command", "sentinel-run-shell-output"] {
-            assert!(!diagnostic.contains(secret), "{diagnostic}");
-        }
-    }
-
-    #[tokio::test]
-    async fn session_refresh_failure_after_rename_marks_the_completed_effect() {
-        let executor = Arc::new(ComposedSessionExecutor {
-            calls: AtomicUsize::new(0),
-            sessions_stdout: session_listing_stdout(),
-            followup: SessionFollowup::DispatchError,
-        });
-        let server = Server::from_executor_for_test(executor.clone());
-        let mut session = server
-            .sessions()
-            .await
-            .expect("fixture session listing")
-            .pop()
-            .expect("one fixture session");
-
-        let error = session
-            .rename("renamed")
-            .await
-            .expect_err("refresh dispatch fails after rename succeeds");
-
-        assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
-        assert_eq!(error.kind(), ErrorKind::PartialEffect);
-        assert!(
-            matches!(
-                error,
-                Error::AfterEffect { operation: "rename-session", source }
-                    if source.kind() == ErrorKind::Refused && source.is_transient()
-            ),
-            "the refresh error remains available as the source",
-        );
-    }
-
-    #[tokio::test]
-    async fn successful_session_step_requires_an_active_window_postcondition() {
-        let executor = Arc::new(ComposedSessionExecutor {
-            calls: AtomicUsize::new(0),
-            sessions_stdout: session_listing_stdout(),
-            followup: SessionFollowup::EmptyListing,
-        });
-        let server = Server::from_executor_for_test(executor.clone());
-        let session = server
-            .sessions()
-            .await
-            .expect("fixture session listing")
-            .pop()
-            .expect("one fixture session");
-
-        let error = session
-            .next_window()
-            .await
-            .expect_err("an accepted step must leave an active window");
-
-        assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
-        assert!(matches!(
-            error,
-            Error::AfterEffect { operation: "next-window", source }
-                if matches!(*source, Error::ObjectGone { .. })
-        ));
-    }
-
-    #[test]
-    fn new_session_options_redact_the_shell_command() {
-        let secret = "sentinel-session-command";
-        let options = NewSessionOptions::new("work").command(secret);
-        assert!(!format!("{options:?}").contains(secret));
-
-        let summary = options.into_command("#{session_id}").summary();
-        assert_eq!(summary.sensitive_argument_count(), 1);
-        assert!(!summary.to_string().contains(secret));
-    }
-
-    #[test]
-    fn access_rule_lines_decode_both_the_legacy_and_the_group_acl_grammar() {
-        // A release before group ACLs prints no principal marker at all, and
-        // every row it can print names a user.
-        let legacy_write = parse_access_rule("alice (W)").expect("legacy write row parses");
-        assert_eq!(legacy_write.name(), "alice");
-        assert_eq!(legacy_write.principal(), Principal::User);
-        assert_eq!(legacy_write.mode(), AccessMode::Write);
-
-        let legacy_read = parse_access_rule("bob (R)").expect("legacy read-only row parses");
-        assert_eq!(legacy_read.principal(), Principal::User);
-        assert_eq!(legacy_read.mode(), AccessMode::ReadOnly);
-
-        // A release with group ACLs marks every row, owner included, so the
-        // decoder must not assume the legacy shape just because a row is
-        // read-write.
-        let user_row = parse_access_rule("carol (U,W)").expect("compound user row parses");
-        assert_eq!(user_row.name(), "carol");
-        assert_eq!(user_row.principal(), Principal::User);
-        assert_eq!(user_row.mode(), AccessMode::Write);
-
-        let group_row = parse_access_rule("admins (G,R)").expect("compound group row parses");
-        assert_eq!(group_row.name(), "admins");
-        assert_eq!(group_row.principal(), Principal::Group);
-        assert_eq!(group_row.mode(), AccessMode::ReadOnly);
-    }
-
-    /// An unrecognized `server-access -l` marker is reported through
-    /// `Error::UnreadableAccessRule` rather than silently dropped: a
-    /// listing with only such a row used to come back empty.
-    #[test]
-    fn an_unrecognized_access_rule_marker_is_reported_not_dropped() {
-        let bad_principal = parse_access_rule("mallory (X,W)")
-            .expect_err("an unknown principal letter is rejected");
-        assert!(
-            matches!(&bad_principal, Error::UnreadableAccessRule { marker } if marker == "(X,W)"),
-            "the refusal names the marker rather than silently dropping the row: \
-             {bad_principal:?}",
-        );
-        assert_eq!(bad_principal.kind(), ErrorKind::Decode);
-
-        let bad_mode =
-            parse_access_rule("mallory (U,X)").expect_err("an unknown mode letter is rejected");
-        assert!(matches!(
-            &bad_mode,
-            Error::UnreadableAccessRule { marker } if marker == "(U,X)"
-        ));
-
-        let no_marker =
-            parse_access_rule("mallory").expect_err("a line with no trailing marker is rejected");
-        assert!(matches!(no_marker, Error::UnreadableAccessRule { .. }));
-    }
-}
+#[path = "server/sync_tests.rs"]
+mod tests;
 
 /// Options for creating a session.
 ///
@@ -2170,23 +1764,19 @@ mod tests {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::NewSessionOptions;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux::test::TestServer::new()?;
 /// let server = guard.server();
 ///
 /// let session = server
 ///     .new_session(NewSessionOptions::new("work").window_name("editor"))
-///     .await?;
+///     ?;
 ///
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window = session.active_window()?.expect("a session has a window");
 /// assert_eq!(window.name().to_string_lossy(), "editor");
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -2330,13 +1920,13 @@ impl<T: Into<OsString>> From<T> for NewSessionOptions {
 /// # Examples
 ///
 /// ```no_run
-/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 /// use libtmux::Chooser;
 ///
 /// // A chooser draws in an attached client's terminal, so this needs one; with
 /// // no client tmux has nowhere to put it.
-/// let client = server.clients().await?.into_iter().next();
-/// server.choose(Chooser::Tree, client.as_ref()).await?;
+/// let client = server.clients()?.into_iter().next();
+/// server.choose(Chooser::Tree, client.as_ref())?;
 /// # Ok(())
 /// # }
 /// ```

@@ -56,26 +56,22 @@ fn spawned(log: &Path) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
-    let guard = TestServer::new().await.expect("a private tmux starts");
+#[test]
+fn typed_calls_route_over_the_connection_and_spawn_nothing() {
+    let guard = TestServer::new().expect("a private tmux starts");
     let real = guard.server().clone();
     let session = real
         .new_session("routed")
-        .await
         .expect("the fixture holds a session");
     let version = real
         .capabilities()
-        .await
         .expect("the fixture reports its release")
         .tmux_version()
         .raw()
         .to_owned();
 
     // The connection belongs to the caller. Everything below borrows it.
-    let control = ControlMode::attach(&real, session.id())
-        .await
-        .expect("a control client attaches");
+    let control = ControlMode::attach(&real, session.id()).expect("a control client attaches");
     let (sender, events) = control.split();
 
     let directory = tempfile::tempdir().expect("a scratch directory");
@@ -88,7 +84,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
 
     let routed = probe
         .over_control_mode(&sender)
-        .await
         .expect("the connection reaches the same server");
 
     // The version probe is the one process this whole test lets the routed
@@ -102,7 +97,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     // A listing: the typed call renders a format plan and decodes rows.
     let names: Vec<String> = routed
         .sessions()
-        .await
         .expect("the routed handle lists sessions")
         .iter()
         .map(|found| found.name().to_string_lossy().into_owned())
@@ -112,7 +106,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     // A mutation, and a chain, which takes the other dispatch path.
     let window = session
         .new_window("second")
-        .await
         .expect("the fixture can be changed through the connection's server");
     let chained = routed
         .chain(
@@ -124,7 +117,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
             )
             .then(Command::new("list-windows").arg("-F").arg("#{window_name}")),
         )
-        .await
         .expect("a chain routes as one line");
     // tmux answers each command of a chain with its own block, so the last
     // command's output is only here if every block was read.
@@ -143,7 +135,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
             CommandChain::new(Command::new("list-panes").arg("-t").arg("%4294967294"))
                 .then(Command::new("display-message").arg("-p").arg("skipped")),
         )
-        .await
         .expect("a refused chain still answers");
     assert!(!stopped.success(), "the first command was refused");
     assert!(
@@ -155,7 +146,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     // process: tmux answers the block with `%error`.
     let refused = routed
         .cmd(Command::new("list-panes").arg("-t").arg("%4294967294"))
-        .await
         .expect("a refused command still answers");
     assert!(!refused.success(), "tmux refused the target");
     assert_eq!(refused.exit_code(), Some(1));
@@ -170,7 +160,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     assert!(
         routed
             .pane_by_id(&"%4294967294".parse().expect("a well-formed pane id"))
-            .await
             .expect("a filtered listing succeeds with no rows")
             .is_none(),
         "the predicate reached tmux intact and matched nothing",
@@ -182,16 +171,13 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     // stream would make the error generic instead of "the pane is gone".
     let doomed = session
         .new_window("doomed")
-        .await
         .expect("a window to take away again");
     let doomed_pane = doomed
         .active_pane()
-        .await
         .expect("the new window reports its pane")
         .expect("a window has a pane");
     let routed_pane = routed
         .pane_by_id(doomed_pane.id())
-        .await
         .expect("the routed handle finds it")
         .expect("it is still there");
     routed
@@ -200,12 +186,10 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
                 .arg("-t")
                 .arg(doomed.id().to_string()),
         )
-        .await
         .expect("the window is killed over the connection");
 
     let gone = routed_pane
         .capture()
-        .await
         .expect_err("capturing a pane that is gone fails");
     assert!(
         gone.is_object_gone(),
@@ -216,11 +200,9 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     // rather than falling back to the process transport it was built from.
     let pane = routed
         .panes()
-        .await
         .expect("the routed handle lists panes")
         .remove(0);
     pane.send_line("true")
-        .await
         .expect("an inherited handle sends over the connection");
 
     // Nothing above added a line: every one of those calls was written to the
@@ -233,7 +215,7 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     );
 
     // And the real daemon agrees the work happened.
-    let windows = real.windows().await.expect("the fixture lists its windows");
+    let windows = real.windows().expect("the fixture lists its windows");
     let window_names: Vec<String> = windows
         .iter()
         .map(|found| found.name().to_string_lossy().into_owned())
@@ -243,38 +225,33 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         "the rename reached tmux: {window_names:?}",
     );
 
-    events.shutdown().await.expect("the connection closes");
-    guard.shutdown().await.expect("the fixture stops");
+    events.shutdown().expect("the connection closes");
+    guard.shutdown().expect("the fixture stops");
 }
 
 /// A connection runs one command at a time, and tmux closes a blocking
 /// `wait-for` as soon as it queues it: routed, the wait would report a signal
 /// nobody sent and the connection would answer nothing else until the channel
 /// was signalled.
-#[tokio::test]
-async fn a_blocking_channel_call_is_refused_rather_than_routed() {
-    let guard = TestServer::new().await.expect("a private tmux starts");
+#[test]
+fn a_blocking_channel_call_is_refused_rather_than_routed() {
+    let guard = TestServer::new().expect("a private tmux starts");
     let real = guard.server().clone();
     let session = real
         .new_session("routed")
-        .await
         .expect("the fixture holds a session");
 
-    let control = ControlMode::attach(&real, session.id())
-        .await
-        .expect("a control client attaches");
+    let control = ControlMode::attach(&real, session.id()).expect("a control client attaches");
     let (sender, events) = control.split();
     let routed = real
         .over_control_mode(&sender)
-        .await
         .expect("the connection reaches the same server");
 
     for refused in [
         routed
             .wait_for_channel("never-signalled", std::time::Duration::from_secs(5))
-            .await
             .err(),
-        routed.lock_channel("never-signalled").await.err(),
+        routed.lock_channel("never-signalled").err(),
     ] {
         let refused = refused.expect("a blocking channel call is refused");
         assert!(
@@ -292,49 +269,42 @@ async fn a_blocking_channel_call_is_refused_rather_than_routed() {
     // The connection still answers, and the half that does not block routes.
     routed
         .signal_channel("never-signalled")
-        .await
         .expect("signalling does not block, so it routes");
     assert_eq!(
         routed
             .sessions()
-            .await
             .expect("the connection still answers")
             .len(),
         1,
     );
 
-    events.shutdown().await.expect("the connection closes");
-    guard.shutdown().await.expect("the fixture stops");
+    events.shutdown().expect("the connection closes");
+    guard.shutdown().expect("the fixture stops");
 }
 
-#[tokio::test]
-async fn a_sender_for_another_server_is_refused() {
-    let first = TestServer::new().await.expect("a private tmux starts");
-    let second = TestServer::new()
-        .await
-        .expect("a second private tmux starts");
+#[test]
+fn a_sender_for_another_server_is_refused() {
+    let first = TestServer::new().expect("a private tmux starts");
+    let second = TestServer::new().expect("a second private tmux starts");
     let session = first
         .server()
         .new_session("origin")
-        .await
         .expect("the first fixture holds a session");
 
-    let control = ControlMode::attach(first.server(), session.id())
-        .await
-        .expect("a control client attaches");
+    let control =
+        ControlMode::attach(first.server(), session.id()).expect("a control client attaches");
     let (sender, events) = control.split();
 
     let error = second
         .server()
         .over_control_mode(&sender)
-        .await
         .expect_err("a sender reaching another server is refused");
     assert!(
         matches!(error, libtmux::Error::ServerMismatch { .. }),
         "the mismatch is reported rather than silently followed: {error:?}",
     );
 
-    events.shutdown().await.expect("the connection closes");
-    first.shutdown().await.expect("the first fixture stops");
-    second.shutdown().await.expect("the second fixture stops");
+    events.shutdown().expect("the connection closes");
+    first.shutdown().expect("the first fixture stops");
+    second.shutdown().expect("the second fixture stops");
 }

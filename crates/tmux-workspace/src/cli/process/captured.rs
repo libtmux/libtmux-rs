@@ -127,6 +127,10 @@ fn chunk(
 /// (a missing or non-executable `before_script`, tmuxp's
 /// `BeforeLoadScriptNotExists`) can tell it apart from every other io error
 /// this function can also raise.
+#[allow(
+    clippy::unnecessary_debug_formatting,
+    reason = "executable diagnostics escape control characters and preserve non-UTF-8 bytes"
+)]
 fn spawn(
     command: &mut tokio::process::Command,
     program: &OsString,
@@ -205,7 +209,7 @@ pub(in crate::cli) async fn run(
     let mut err_buffer = vec![0; 8192];
     let (mut out_pending, mut err_pending) = (Vec::new(), Vec::new());
     let (mut out_done, mut err_done, mut status) = (false, false, None);
-    let mut drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(86_400);
+    let mut drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_hours(24);
     while !out_done || !err_done || status.is_none() {
         tokio::select! {
             read = stdout.read(&mut out_buffer), if !out_done => {

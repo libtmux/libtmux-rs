@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "language": "rust",
+  "nativeInventory": "crates/libtmux-tokio/docs/public-api.txt",
+  "setupFiles": [
+    {
+      "sourceFile": "crates/libtmux-tokio/examples/api/consumer.toml",
+      "name": "Cargo.toml"
+    },
+    {
+      "sourceFile": "rust-toolchain.toml",
+      "name": "rust-toolchain.toml"
+    }
+  ],
+  "programFileName": "src/main.rs",
+  "runCommand": "cargo run --quiet",
+  "examples": [
+    {
+      "id": "rust-construction",
+      "title": "Construct a private server",
+      "description": "Construct a handle without starting tmux, then create a session on its own socket.",
+      "sourceFile": "crates/libtmux-tokio/examples/api_construction.rs",
+      "cargoExample": "api_construction",
+      "targets": [
+        "libtmux_tokio::Server",
+        "libtmux_tokio::Server::builder",
+        "libtmux_tokio::ServerBuilder::socket_path",
+        "libtmux_tokio::ServerBuilder::config_file",
+        "libtmux_tokio::ServerBuilder::default_timeout",
+        "libtmux_tokio::ServerBuilder::build"
+      ],
+      "expectedOutput": "construction: private daemon started by new_session"
+    },
+    {
+      "id": "rust-listings",
+      "title": "List sessions, windows and panes",
+      "description": "Read each collection and its relations, then inspect a hierarchy snapshot.",
+      "sourceFile": "crates/libtmux-tokio/examples/api_listings.rs",
+      "cargoExample": "api_listings",
+      "targets": [
+        "libtmux_tokio::Server::sessions",
+        "libtmux_tokio::Server::windows",
+        "libtmux_tokio::Server::panes",
+        "libtmux_tokio::Server::hierarchy",
+        "libtmux_tokio::Session::windows",
+        "libtmux_tokio::Session::panes",
+        "libtmux_tokio::Window::panes"
+      ],
+      "expectedOutput": "listings: 1 session, 2 windows, 2 panes"
+    },
+    {
+      "id": "rust-creation",
+      "title": "Create windows and split panes",
+      "description": "Create a session and a second window, then split from a window and from a pane.",
+      "sourceFile": "crates/libtmux-tokio/examples/api_creation.rs",
+      "cargoExample": "api_creation",
+      "targets": [
+        "libtmux_tokio::Server::new_session",
+        "libtmux_tokio::NewSessionOptions",
+        "libtmux_tokio::Session::new_window",
+        "libtmux_tokio::NewWindowOptions",
+        "libtmux_tokio::Window::split",
+        "libtmux_tokio::Pane::split",
+        "libtmux_tokio::SplitOptions"
+      ],
+      "expectedOutput": "creation: 2 windows, 4 panes"
+    },
+    {
+      "id": "rust-query",
+      "title": "Filter snapshots with typed fields",
+      "description": "Match a session name prefix without changing the source snapshot.",
+      "sourceFile": "crates/libtmux-tokio/examples/api_query.rs",
+      "cargoExample": "api_query",
+      "targets": [
+        "libtmux_tokio::query::Filterable",
+        "libtmux_tokio::query::QueryIteratorExt::matching"
+      ],
+      "expectedOutput": "query: prod-api"
+    },
+    {
+      "id": "rust-cardinality",
+      "title": "Handle missing and ambiguous matches",
+      "description": "Compare exactly_one and one_or_none for no match, one match and multiple matches.",
+      "sourceFile": "crates/libtmux-tokio/examples/api_cardinality.rs",
+      "cargoExample": "api_cardinality",
+      "targets": [
+        "libtmux_tokio::query::QueryIteratorExt::exactly_one",
+        "libtmux_tokio::query::QueryIteratorExt::one_or_none",
+        "libtmux_tokio::query::ExactlyOneError",
+        "libtmux_tokio::query::MultipleItemsError"
+      ],
+      "expectedOutput": "cardinality: none, one, multiple"
+    },
+    {
+      "id": "rust-input",
+      "title": "Send literal text and named keys",
+      "description": "Wait for a shell prompt, send literal text without Enter, then submit a named Enter key.",
+      "sourceFile": "crates/libtmux-tokio/examples/api_input.rs",
+      "cargoExample": "api_input",
+      "targets": [
+        "libtmux_tokio::Pane::send_keys",
+        "libtmux_tokio::Pane::send_key_names"
+      ],
+      "expectedOutput": "input: C-c is text"
+    },
+    {
+      "id": "rust-capture",
+      "title": "Capture complete output lines",
+      "description": "Submit a shell command atomically and wait for whole output lines within a deadline.",
+      "sourceFile": "crates/libtmux-tokio/examples/api_capture.rs",
+      "cargoExample": "api_capture",
+      "targets": [
+        "libtmux_tokio::Pane::send_line",
+        "libtmux_tokio::Pane::capture",
+        "libtmux_tokio::Pane::wait_for_text"
+      ],
+      "expectedOutput": "capture: first line, second line"
+    }
+  ]
+}

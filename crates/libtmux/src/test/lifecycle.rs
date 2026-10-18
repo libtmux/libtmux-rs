@@ -537,11 +537,11 @@ impl Drop for StartupGuard {
     }
 }
 
-pub(super) async fn server_startup_failure(
+pub(super) fn server_startup_failure(
     server: &Server,
     primary: TestServerErrorKind,
 ) -> Result<TestServer, TestServerError> {
-    let kind = if server.shutdown().await.is_err() {
+    let kind = if server.shutdown().is_err() {
         TestServerErrorKind::ShutdownFailed
     } else {
         primary
@@ -549,11 +549,11 @@ pub(super) async fn server_startup_failure(
     Err(TestServerError::new(kind))
 }
 
-pub(super) async fn startup_timeout(
+pub(super) fn startup_timeout(
     server: &Server,
     startup: StartupGuard,
 ) -> Result<TestServer, TestServerError> {
-    let executor_failed = server.shutdown().await.is_err();
+    let executor_failed = server.shutdown().is_err();
     let mut lifecycle = startup
         .disarm()
         .ok_or_else(|| TestServerError::new(TestServerErrorKind::CleanupFailed))?;
@@ -578,12 +578,12 @@ pub(super) async fn startup_timeout(
     Err(TestServerError::new(TestServerErrorKind::StartupTimedOut))
 }
 
-pub(super) async fn startup_failure(
+pub(super) fn startup_failure(
     server: &Server,
     startup: StartupGuard,
     primary: TestServerErrorKind,
 ) -> Result<TestServer, TestServerError> {
-    let executor_failed = server.shutdown().await.is_err();
+    let executor_failed = server.shutdown().is_err();
     let lifecycle = startup
         .disarm()
         .ok_or_else(|| TestServerError::new(TestServerErrorKind::CleanupFailed))?;
@@ -662,33 +662,32 @@ fn unlink_fixed(directory: &OwnedFd, name: &OsStr) -> bool {
     }
 }
 
-async fn readiness_probe(server: &Server) -> Result<Option<u32>, ()> {
-    let output = server
-        .cmd(Command::new("display-message").arg("-p").arg("#{pid}"))
-        .await
-        .map_err(|_| ())?;
-    if !output.success() {
-        return Ok(None);
-    }
-    let value = output.stdout_utf8().map_err(|_| ())?.trim();
-    value.parse::<u32>().map(Some).map_err(|_| ())
-}
-
 pub(super) fn remaining_timeout(started: Instant, timeout: Duration) -> Option<Duration> {
     timeout.checked_sub(started.elapsed())
 }
 
-pub(super) async fn readiness_with_timeout(
+pub(super) fn readiness_with_timeout(
     server: &Server,
     timeout: Duration,
 ) -> Result<Result<Option<u32>, ()>, ()> {
-    if timeout == Duration::MAX {
-        Ok(readiness_probe(server).await)
-    } else {
-        tokio::time::timeout(timeout, readiness_probe(server))
-            .await
-            .map_err(|_| ())
+    let output = match server.execute_with_timeout(
+        Command::new("display-message").arg("-p").arg("#{pid}"),
+        timeout,
+    ) {
+        Ok(output) => output,
+        Err(crate::Error::Timeout { .. }) => return Err(()),
+        Err(_) => return Ok(Err(())),
+    };
+    if !output.success() {
+        return Ok(Ok(None));
     }
+    Ok(output
+        .stdout_utf8()
+        .map_err(|_| ())?
+        .trim()
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| ()))
 }
 
 fn signal_result(result: rustix::io::Result<()>) -> bool {

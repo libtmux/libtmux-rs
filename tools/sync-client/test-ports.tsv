@@ -1,0 +1,4 @@
+# native module	canonical test module SHA-256	blocking test module	reviewed adaptation
+server.rs	146a6f31dddee6a232cd1e262c8da37cad5ab4aa076ea2560dc7fefe7e73baf4	server/sync_tests.rs	Async task abort becomes native thread detachment; both retain shared admission closure until cleanup completes. Ordinary composed-command assertions are unchanged.
+internal/listing.rs	eb9e89161cab93e15335e407807ca9fa71294626c8f408bfd152a9f062dd99fc	internal/listing/sync_tests.rs	Lazy fake dispatch futures become closures; listing classification and byte decoding assertions are unchanged.
+plan/run.rs	d24d7962b73327a300e93878f93bba19a13bd61effc4bbef1a6f9b66eed5aeb6	plan/run/sync_tests.rs	Lazy fake dispatch futures become closures; plan ordering, attribution and after-effect assertions are unchanged.

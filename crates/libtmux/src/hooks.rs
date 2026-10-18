@@ -26,13 +26,11 @@ use crate::formats::TmuxText;
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux::test::TestServer::new()?;
 /// let server = guard.server();
 ///
-/// server.set_hook("after-new-window", "display-message built").await?;
-/// let hooks = server.hook("after-new-window").await?.expect("the hook is set");
+/// server.set_hook("after-new-window", "display-message built")?;
+/// let hooks = server.hook("after-new-window")?.expect("the hook is set");
 ///
 /// assert_eq!(hooks.len(), 1);
 /// assert_eq!(
@@ -40,9 +38,7 @@ use crate::formats::TmuxText;
 ///     Some("display-message built".to_owned()),
 /// );
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -60,12 +56,10 @@ pub struct SparseValues<T> {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
 /// use std::collections::BTreeMap;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux::test::TestServer::new()?;
 /// let server = guard.server();
 ///
 /// // The indices are tmux's own and are sparse: removing one does not renumber
@@ -75,15 +69,13 @@ pub struct SparseValues<T> {
 /// entries.insert(4, TmuxText::from("display-message fifth"));
 /// server
 ///     .set_hooks("after-new-window", &IndexedHooks::from(entries), ReplaceMode::Replace)
-///     .await?;
+///     ?;
 ///
-/// let hooks: IndexedHooks = server.hook("after-new-window").await?.expect("just written");
+/// let hooks: IndexedHooks = server.hook("after-new-window")?.expect("just written");
 /// assert_eq!(hooks.len(), 2);
 /// assert_eq!(hooks.indices().copied().collect::<Vec<_>>(), vec![0, 4]);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -173,12 +165,10 @@ impl<'values, T> IntoIterator for &'values SparseValues<T> {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
 /// use std::collections::BTreeMap;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux::test::TestServer::new()?;
 /// let server = guard.server();
 ///
 /// let mut first = BTreeMap::new();
@@ -186,21 +176,19 @@ impl<'values, T> IntoIterator for &'values SparseValues<T> {
 /// first.insert(1, TmuxText::from("display-message two"));
 /// server
 ///     .set_hooks("after-new-window", &IndexedHooks::from(first), ReplaceMode::Replace)
-///     .await?;
+///     ?;
 ///
 /// // `Merge` writes the indices it names and leaves the rest alone.
 /// let mut second = BTreeMap::new();
 /// second.insert(1, TmuxText::from("display-message replaced"));
 /// server
 ///     .set_hooks("after-new-window", &IndexedHooks::from(second), ReplaceMode::Merge)
-///     .await?;
+///     ?;
 ///
-/// let hooks = server.hook("after-new-window").await?.expect("just written");
+/// let hooks = server.hook("after-new-window")?.expect("just written");
 /// assert_eq!(hooks.len(), 2);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```

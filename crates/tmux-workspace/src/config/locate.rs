@@ -139,10 +139,10 @@ impl Recorder<'_> {
             }) => {
                 // A block mapping is marked at its first key's `:`, so it
                 // takes its first key's position instead.
-                if key_mark.is_none() {
-                    if let Some(at) = self.positions.get_mut(mapping.as_str()) {
-                        *at = position(mark);
-                    }
+                if key_mark.is_none()
+                    && let Some(at) = self.positions.get_mut(mapping.as_str())
+                {
+                    *at = position(mark);
                 }
                 *key_mark = Some(mark);
             }

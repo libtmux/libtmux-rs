@@ -24,13 +24,12 @@ fn stdout(result: &CommandResult) -> String {
     result.stdout_lossy().into_owned()
 }
 
-#[tokio::test]
-async fn a_chain_runs_every_member_in_order_as_one_dispatch() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_chain_runs_every_member_in_order_as_one_dispatch() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     server
         .new_session("chain-order")
-        .await
         .expect("session is created");
 
     let result = server
@@ -39,22 +38,20 @@ async fn a_chain_runs_every_member_in_order_as_one_dispatch() {
                 .then(say("second"))
                 .then(say("third")),
         )
-        .await
         .expect("chain dispatches");
 
     assert!(result.success());
     assert_eq!(stdout(&result), "first\nsecond\nthird\n");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_chain_stops_at_its_first_failure_and_drops_the_remainder() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_chain_stops_at_its_first_failure_and_drops_the_remainder() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     server
         .new_session("chain-abort")
-        .await
         .expect("session is created");
 
     let result = server
@@ -63,7 +60,6 @@ async fn a_chain_stops_at_its_first_failure_and_drops_the_remainder() {
                 .then(refused())
                 .then(say("never")),
         )
-        .await
         .expect("chain dispatches");
 
     assert!(!result.success());
@@ -73,16 +69,15 @@ async fn a_chain_stops_at_its_first_failure_and_drops_the_remainder() {
         "the member before the failure ran; the member after it did not",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_merged_chain_result_cannot_say_which_member_failed() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_merged_chain_result_cannot_say_which_member_failed() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     server
         .new_session("chain-attribution")
-        .await
         .expect("session is created");
 
     // The same failure at three different positions. Only the stdout of the
@@ -93,7 +88,7 @@ async fn a_merged_chain_result_cannot_say_which_member_failed() {
         CommandChain::new(say("a")).then(refused()).then(say("b")),
         CommandChain::new(say("a")).then(say("b")).then(refused()),
     ] {
-        let result = server.chain(chain).await.expect("chain dispatches");
+        let result = server.chain(chain).expect("chain dispatches");
         outcomes.push((result.exit_code(), result.stderr_lossy().into_owned()));
     }
 
@@ -116,47 +111,43 @@ async fn a_merged_chain_result_cannot_say_which_member_failed() {
             )
             .then(refused()),
         )
-        .await
         .expect("chain dispatches");
     assert!(!silent.success());
     assert_eq!(stdout(&silent), "");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_caller_supplied_semicolon_stays_an_argument_in_a_chain() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_caller_supplied_semicolon_stays_an_argument_in_a_chain() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     server
         .new_session("chain-literal")
-        .await
         .expect("session is created");
 
     // If `;` leaked through as a boundary, tmux would parse `kill-server` as a
     // command and the fixture would die instead of echoing the text back.
     let result = server
         .chain(CommandChain::new(say("; kill-server")).then(say("after")))
-        .await
         .expect("chain dispatches");
 
     assert!(result.success());
     assert_eq!(stdout(&result), "; kill-server\nafter\n");
     assert!(
-        server.is_alive().await,
+        server.is_alive(),
         "the literal argument never reached tmux as a command",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_created_id_is_still_captured_when_a_later_member_fails() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_created_id_is_still_captured_when_a_later_member_fails() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     let session = server
         .new_session("chain-capture")
-        .await
         .expect("session is created");
 
     let result = server
@@ -171,7 +162,6 @@ async fn a_created_id_is_still_captured_when_a_later_member_fails() {
             )
             .then(refused()),
         )
-        .await
         .expect("chain dispatches");
 
     assert!(!result.success());
@@ -182,5 +172,5 @@ async fn a_created_id_is_still_captured_when_a_later_member_fails() {
         stdout(&result),
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }

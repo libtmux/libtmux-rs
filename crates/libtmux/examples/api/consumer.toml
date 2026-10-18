@@ -8,6 +8,5 @@ publish = false
 exclude = ["libtmux-source"]
 
 [dependencies]
-libtmux = { path = "libtmux-source/crates/libtmux" }
+libtmux = { path = "libtmux-source/crates/libtmux", features = ["query"] }
 tempfile = "3.20"
-tokio = { version = "1.40", features = ["macros", "rt", "time"] }

@@ -32,23 +32,19 @@ mod settings;
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{PaneDirection, SplitDirection};
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
-/// let lower = window.split(SplitDirection::Below).await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let window = session.active_window()?.expect("a session has a window");
+/// let lower = window.split(SplitDirection::Below)?;
 ///
 /// // Focus follows the layout, and tmux wraps at the edge rather than
 /// // refusing, so this always names a pane.
-/// let focused = window.focus_direction(PaneDirection::Below).await?;
+/// let focused = window.focus_direction(PaneDirection::Below)?;
 /// assert_eq!(focused.id(), lower.id());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -93,21 +89,17 @@ impl PaneDirection {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::SplitDirection;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let window = session.active_window()?.expect("a session has a window");
 ///
 /// // Splitting is detached by default, so focus stays where it was.
-/// window.split(SplitDirection::Below).await?;
-/// assert_eq!(window.panes().await?.len(), 2);
+/// window.split(SplitDirection::Below)?;
+/// assert_eq!(window.panes()?.len(), 2);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -139,27 +131,23 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::Window;
     ///
-    /// let session = server.new_session("locating-window").await?;
-    /// let pane = session.panes().await?.remove(0);
+    /// let session = server.new_session("locating-window")?;
+    /// let pane = session.panes()?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
-    /// let found = Window::from_env_value(server, Some(pane.id().as_ref())).await?;
+    /// let found = Window::from_env_value(server, Some(pane.id().as_ref()))?;
     ///
     /// assert_eq!(found.expect("the window exists").id(), pane.window_id());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_env(server: &crate::Server) -> Result<Option<Self>, Error> {
-        Self::from_env_value(server, std::env::var_os("TMUX_PANE")).await
+    pub fn from_env(server: &crate::Server) -> Result<Option<Self>, Error> {
+        Self::from_env_value(server, std::env::var_os("TMUX_PANE"))
     }
 
     /// Find a window from an explicit `TMUX_PANE` value.
@@ -168,15 +156,15 @@ impl Window {
     ///
     /// Returns an error when the value is absent or is not a pane ID, or when
     /// the listing fails.
-    pub async fn from_env_value(
+    pub fn from_env_value(
         server: &crate::Server,
         value: Option<impl AsRef<OsStr>>,
     ) -> Result<Option<Self>, Error> {
-        let Some(pane) = Pane::from_env_value(server, value).await? else {
+        let Some(pane) = Pane::from_env_value(server, value)? else {
             return Ok(None);
         };
 
-        server.window_by_id(pane.window_id()).await
+        server.window_by_id(pane.window_id())
     }
 
     /// Return the tmux window identity.
@@ -272,21 +260,17 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use std::time::{Duration, SystemTime};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("busy").await?;
-    /// let window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("busy")?;
+    /// let window = session.active_window()?.expect("a window");
     ///
     /// // A window that has just been made has already produced output.
     /// let idle = SystemTime::now().duration_since(window.last_activity())?;
     /// assert!(idle < Duration::from_secs(3600));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -322,15 +306,14 @@ impl Window {
     ///
     /// Returns [`Error::ObjectGone`] when this session no longer links the
     /// window, or a listing error when tmux could not be read.
-    pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
+    pub fn refresh(&mut self) -> Result<&mut Self, Error> {
         let session = self.session_id().clone();
-        self.refresh_in(&session).await
+        self.refresh_in(&session)
     }
 
-    async fn refresh_in(&mut self, session: &SessionId) -> Result<&mut Self, Error> {
+    fn refresh_in(&mut self, session: &SessionId) -> Result<&mut Self, Error> {
         let session = session.to_string();
-        let projection = listing::windows(&self.core, listing::Scope::Target(&session), None)
-            .await?
+        let projection = listing::windows(&self.core, listing::Scope::Target(&session), None)?
             .into_iter()
             .find(|projection| projection.window().window_id() == self.id())
             .ok_or_else(|| Error::ObjectGone {
@@ -348,9 +331,9 @@ impl Window {
     ///
     /// Returns [`Error::ObjectGone`] when this session no longer links the
     /// window, or a listing error when tmux could not be read.
-    pub async fn refreshed(&self) -> Result<Self, Error> {
+    pub fn refreshed(&self) -> Result<Self, Error> {
         let mut refreshed = self.clone();
-        refreshed.refresh().await?;
+        refreshed.refresh()?;
         Ok(refreshed)
     }
 
@@ -360,12 +343,11 @@ impl Window {
     ///
     /// Returns an error when tmux refuses the split, which includes a target
     /// pane that is too small to divide.
-    pub async fn split(&self, options: impl Into<SplitOptions>) -> Result<Pane, Error> {
+    pub fn split(&self, options: impl Into<SplitOptions>) -> Result<Pane, Error> {
         let options = options.into();
         let window = self.id().to_string();
         let projection =
-            listing::create_pane(&self.core, |format| options.into_command(&window, format))
-                .await?;
+            listing::create_pane(&self.core, |format| options.into_command(&window, format))?;
 
         Ok(Pane::new(Arc::clone(&self.core), projection))
     }
@@ -381,7 +363,7 @@ impl Window {
     /// tmux expands the name as a format before it checks it, so `#(command)`
     /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
     /// before passing text a caller supplied.
-    pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
+    pub fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "rename-window",
@@ -390,11 +372,9 @@ impl Window {
                 .arg(self.id().to_string())
                 .arg("--")
                 .arg(name.into().into_os_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("rename-window"))?;
         Ok(self)
     }
@@ -413,18 +393,16 @@ impl Window {
     ///
     /// Returns an error when tmux refuses the command, and
     /// [`Error::ObjectGone`] when the window is no longer on the server.
-    pub async fn select(&mut self) -> Result<&mut Self, Error> {
+    pub fn select(&mut self) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "select-window",
             Command::new("select-window")
                 .arg("-t")
                 .arg(self.id().to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("select-window"))?;
         Ok(self)
     }
@@ -449,42 +427,33 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::Layout;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("arranged").await?;
-    /// let mut window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("arranged")?;
+    /// let mut window = session.active_window()?.expect("a window");
     ///
-    /// window.select_layout(Layout::Tiled).await?;
+    /// window.select_layout(Layout::Tiled)?;
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn select_layout(
-        &mut self,
-        layout: impl Into<LayoutSpec>,
-    ) -> Result<&mut Self, Error> {
+    pub fn select_layout(&mut self, layout: impl Into<LayoutSpec>) -> Result<&mut Self, Error> {
         let layout = layout.into();
         let argument = match &layout {
             LayoutSpec::Named(named) => {
                 crate::Server::from_core(Arc::clone(&self.core))
-                    .require(named.as_str(), named.minimum_release())
-                    .await?;
+                    .require(named.as_str(), named.minimum_release())?;
                 OsString::from(named.as_str())
             }
             LayoutSpec::Saved(saved) => {
                 let server = crate::Server::from_core(Arc::clone(&self.core));
-                Self::validate_saved_layout(server.capabilities().await?.tmux_version(), saved)?
+                Self::validate_saved_layout(server.capabilities()?.tmux_version(), saved)?
             }
         };
         crate::Server::from_core(Arc::clone(&self.core))
-            .validate_layouts([(argument.as_os_str(), 1)])
-            .await?;
+            .validate_layouts([(argument.as_os_str(), 1)])?;
 
         listing::mutate(
             &self.core,
@@ -494,11 +463,9 @@ impl Window {
                 .arg(self.id().to_string())
                 .arg("--")
                 .arg(argument),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("select-layout"))?;
         Ok(self)
     }
@@ -562,7 +529,7 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when a pane is still running and `kill` is not set.
-    pub async fn respawn(
+    pub fn respawn(
         &mut self,
         command: Option<impl Into<OsString>>,
         respawn_mode: Respawn,
@@ -577,9 +544,8 @@ impl Window {
             respawn = respawn.arg("--").arg(command.into());
         }
 
-        listing::mutate(&self.core, "respawn-window", respawn).await?;
+        listing::mutate(&self.core, "respawn-window", respawn)?;
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("respawn-window"))?;
         Ok(self)
     }
@@ -593,8 +559,8 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn next_layout(&mut self) -> Result<&mut Self, Error> {
-        self.step_layout("-n").await
+    pub fn next_layout(&mut self) -> Result<&mut Self, Error> {
+        self.step_layout("-n")
     }
 
     /// Move to the previous named layout, and return the window.
@@ -602,12 +568,12 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn previous_layout(&mut self) -> Result<&mut Self, Error> {
-        self.step_layout("-p").await
+    pub fn previous_layout(&mut self) -> Result<&mut Self, Error> {
+        self.step_layout("-p")
     }
 
     /// Step through tmux's layout list in one direction.
-    async fn step_layout(&mut self, flag: &'static str) -> Result<&mut Self, Error> {
+    fn step_layout(&mut self, flag: &'static str) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "select-layout",
@@ -615,11 +581,9 @@ impl Window {
                 .arg(flag)
                 .arg("-t")
                 .arg(self.id().to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("select-layout"))?;
         Ok(self)
     }
@@ -638,31 +602,27 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{Rotation, SplitDirection, SplitOptions};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("turning").await?;
-    /// let mut window = session.active_window().await?.expect("a window");
-    /// window.split(SplitOptions::new(SplitDirection::Below)).await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("turning")?;
+    /// let mut window = session.active_window()?.expect("a window");
+    /// window.split(SplitOptions::new(SplitDirection::Below))?;
     ///
-    /// let before: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
-    /// window.rotate(Rotation::Up).await?;
-    /// let after: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// let before: Vec<_> = window.panes()?.iter().map(|p| p.id().clone()).collect();
+    /// window.rotate(Rotation::Up)?;
+    /// let after: Vec<_> = window.panes()?.iter().map(|p| p.id().clone()).collect();
     ///
     /// assert_ne!(before, after, "the panes moved");
-    /// window.rotate(Rotation::Down).await?;
-    /// let back: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// window.rotate(Rotation::Down)?;
+    /// let back: Vec<_> = window.panes()?.iter().map(|p| p.id().clone()).collect();
     /// assert_eq!(before, back, "and the other way undoes it");
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn rotate(&self, rotation: Rotation) -> Result<(), Error> {
+    pub fn rotate(&self, rotation: Rotation) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "rotate-window",
@@ -671,7 +631,6 @@ impl Window {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
     }
 
     /// Kill the window, closing it in every session that links it.
@@ -682,7 +641,7 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn kill(self) -> Result<(), Error> {
+    pub fn kill(self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "kill-window",
@@ -690,7 +649,16 @@ impl Window {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
+    }
+
+    pub(crate) fn with_core(mut self, core: Arc<Core>) -> Self {
+        self.core = core;
+        self
+    }
+
+    pub(crate) fn kill_for_cleanup(mut self) -> Result<(), Error> {
+        self.core = self.core.for_cleanup();
+        self.kill()
     }
 
     /// Remove this session's link to the window, leaving other links intact.
@@ -699,7 +667,7 @@ impl Window {
     ///
     /// Returns an error when tmux refuses the command, which includes
     /// unlinking a window that only one session holds.
-    pub async fn unlink(self) -> Result<(), Error> {
+    pub fn unlink(self) -> Result<(), Error> {
         // `session:id` rather than `session:index`. A link is what this
         // removes, so the session half is needed; the window half is an
         // identity, and a cached index stops being one the moment anything
@@ -712,13 +680,15 @@ impl Window {
                 self.session_id(),
                 self.id()
             )),
-        )
-        .await
-        else {
+        ) else {
             return Ok(());
         };
 
-        Err(link_or_object_gone(&self.core, error, &[(self.session_id(), self.id())]).await)
+        Err(link_or_object_gone(
+            &self.core,
+            error,
+            &[(self.session_id(), self.id())],
+        ))
     }
 
     /// Run a raw tmux command against this window.
@@ -733,34 +703,27 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns an error when the process cannot be started, captured, or
-    /// awaited.
+    /// Returns an error when the process cannot be started, captured, or waited for.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("raw").await?;
-    /// let window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("raw")?;
+    /// let window = session.active_window()?.expect("a window");
     ///
     /// let result = window
     ///     .cmd(libtmux::Command::new("display-message").arg("-p").arg("#{window_id}"))
-    ///     .await?;
+    ///     ?;
     /// assert_eq!(result.stdout_lossy().trim(), window.id().to_string());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
-        self.core
-            .execute(command.targeting(self.id().to_string()))
-            .await
+    pub fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
+        self.core.execute(command.targeting(self.id().to_string()))
     }
 
     /// Expand a tmux format string in this window's context.
@@ -777,30 +740,24 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("shown").await?;
-    /// let window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("shown")?;
+    /// let window = session.active_window()?.expect("a window");
     ///
-    /// let expanded = window.format("#{window_id}").await?;
+    /// let expanded = window.format("#{window_id}")?;
     /// assert_eq!(expanded.to_string_lossy(), window.id().to_string());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn format(&self, template: &str) -> Result<TmuxText, Error> {
-        let result = self
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("--")
-                    .arg(OsString::from(template)),
-            )
-            .await?;
+    pub fn format(&self, template: &str) -> Result<TmuxText, Error> {
+        let result = self.cmd(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("--")
+                .arg(OsString::from(template)),
+        )?;
         if !result.success() {
             return Err(Error::from_refused_result(
                 "display-message",
@@ -828,14 +785,12 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses the message.
-    pub async fn display(&self, message: &str) -> Result<(), Error> {
-        let result = self
-            .cmd(
-                Command::new("display-message")
-                    .arg("--")
-                    .arg(OsString::from(message)),
-            )
-            .await?;
+    pub fn display(&self, message: &str) -> Result<(), Error> {
+        let result = self.cmd(
+            Command::new("display-message")
+                .arg("--")
+                .arg(OsString::from(message)),
+        )?;
         if result.success() {
             return Ok(());
         }
@@ -859,26 +814,33 @@ impl Window {
     /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
     /// fails. The operation's error needs no conversion into [`Error`].
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
-    /// of their own, so the pane is killed even if this future is dropped or
-    /// the operation panics, while the Tokio runtime is alive. A cleanup
-    /// failure then has no caller to reach; the `tracing` feature records it.
-    pub async fn with_pane<T, E>(
+    /// Cancellation before creation starts leaves tmux untouched. After creation
+    /// starts, the call waits for the resource ID and kills the pane before reporting
+    /// cancellation. Once the callback starts, cancellation is cooperative: its tmux
+    /// operations observe the token. Cleanup runs before return and during panic
+    /// unwinding, using an uncancelled handle.
+    pub fn with_pane<T, E>(
         &self,
         options: impl Into<SplitOptions>,
-        operation: impl AsyncFnOnce(&Pane) -> Result<T, E>,
+        operation: impl FnOnce(&Pane) -> Result<T, E>,
     ) -> Result<T, crate::ScopeError<T, E>> {
-        let window = self.clone();
+        let mut window = self.clone();
+        window.core = self.core.for_cleanup();
+        let callback_core = Arc::clone(&self.core);
         let options = options.into();
         scoped::run(
+            self.core.cancellation_token(),
             "with-pane",
-            async move { window.split(options).await },
-            Pane::kill,
+            move || {
+                window
+                    .split(options)
+                    .map(|resource| resource.with_core(callback_core))
+            },
+            Pane::kill_for_cleanup,
             operation,
         )
-        .await
     }
 
     /// Swap this window's position with another.
@@ -887,7 +849,7 @@ impl Window {
     ///
     /// Returns [`Error::ServerMismatch`] when `other` belongs to another
     /// server, or an error when tmux refuses the swap.
-    pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
+    pub fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
         self.core
             .require_same_server(other.server_identity(), "swap-window")?;
         if let Err(error) = listing::mutate(
@@ -901,9 +863,7 @@ impl Window {
                 // which of the target's links to swap, and the id half cannot
                 // go stale under a renumber the way a cached index does.
                 .arg(format!("{}:{}", other.session_id(), other.id())),
-        )
-        .await
-        {
+        ) {
             // Either half can be the one tmux could not resolve, and a window
             // still linked elsewhere is not a window that is gone.
             return Err(link_or_object_gone(
@@ -913,12 +873,10 @@ impl Window {
                     (self.session_id(), self.id()),
                     (other.session_id(), other.id()),
                 ],
-            )
-            .await);
+            ));
         }
 
         self.refresh_in(other.session_id())
-            .await
             .map_err(|error| error.after_effect("swap-window"))?;
         Ok(self)
     }
@@ -933,7 +891,7 @@ impl Window {
     ///
     /// Returns [`Error::ServerMismatch`] when `session` belongs to another
     /// server, or an error when the destination is occupied or absent.
-    pub async fn move_to(&mut self, session: &Session, index: i32) -> Result<&mut Self, Error> {
+    pub fn move_to(&mut self, session: &Session, index: i32) -> Result<&mut Self, Error> {
         self.core
             .require_same_server(session.server_identity(), "move-window")?;
         listing::mutate(
@@ -944,11 +902,9 @@ impl Window {
                 .arg(self.link_target())
                 .arg("-t")
                 .arg(format!("{}:{index}", session.id())),
-        )
-        .await?;
+        )?;
 
         self.refresh_in(session.id())
-            .await
             .map_err(|error| error.after_effect("move-window"))?;
         Ok(self)
     }
@@ -971,25 +927,21 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::ResizeDirection;
     ///
-    /// let session = server.new_session("resized-window").await?;
-    /// let mut window = session.windows().await?.remove(0);
+    /// let session = server.new_session("resized-window")?;
+    /// let mut window = session.windows()?.remove(0);
     ///
-    /// window.resize(80, 24).await?;
-    /// window.resize_by(ResizeDirection::Down, 4).await?;
+    /// window.resize(80, 24)?;
+    /// window.resize_by(ResizeDirection::Down, 4)?;
     /// assert_eq!(window.height(), 28);
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn resize_by(
+    pub fn resize_by(
         &mut self,
         direction: ResizeDirection,
         cells: u32,
@@ -1002,11 +954,9 @@ impl Window {
                 .arg(self.id().to_string())
                 .arg(direction.flag())
                 .arg(cells.to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("resize-window"))?;
         Ok(self)
     }
@@ -1029,25 +979,21 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
-    /// let source = server.new_session("linking-from").await?;
-    /// let target = server.new_session("linking-to").await?;
-    /// let window = source.windows().await?.remove(0);
+    /// let source = server.new_session("linking-from")?;
+    /// let target = server.new_session("linking-to")?;
+    /// let window = source.windows()?.remove(0);
     ///
-    /// window.link_to(&target, None).await?;
+    /// window.link_to(&target, None)?;
     ///
-    /// let linked = target.windows().await?;
+    /// let linked = target.windows()?;
     /// assert!(linked.iter().any(|other| other.id() == window.id()));
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn link_to(&self, session: &Session, index: Option<i32>) -> Result<(), Error> {
+    pub fn link_to(&self, session: &Session, index: Option<i32>) -> Result<(), Error> {
         self.core
             .require_same_server(session.server_identity(), "link-window")?;
         let target = index.map_or_else(
@@ -1063,8 +1009,7 @@ impl Window {
                 .arg(self.link_target())
                 .arg("-t")
                 .arg(target),
-        )
-        .await?;
+        )?;
 
         Ok(())
     }
@@ -1081,22 +1026,18 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
-    /// let session = server.new_session("sized").await?;
-    /// let mut window = session.windows().await?.remove(0);
+    /// let session = server.new_session("sized")?;
+    /// let mut window = session.windows()?.remove(0);
     ///
-    /// window.resize(100, 40).await?;
+    /// window.resize(100, 40)?;
     /// assert_eq!((window.width(), window.height()), (100, 40));
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn resize(&mut self, width: u32, height: u32) -> Result<&mut Self, Error> {
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "resize-window",
@@ -1107,11 +1048,9 @@ impl Window {
                 .arg(width.to_string())
                 .arg("-y")
                 .arg(height.to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("resize-window"))?;
         Ok(self)
     }
@@ -1165,14 +1104,12 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::query::Filterable as _;
     /// use libtmux::{Availability, Window};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("read")?;
+    /// let window = session.active_window()?.expect("a session has a window");
     /// let fields = Window::filter_fields();
     ///
     /// // The layout as shown, which only differs from the layout while zoomed.
@@ -1182,9 +1119,7 @@ impl Window {
     /// );
     /// assert_eq!(window.get(fields.window_id), Availability::Available(window.id()));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1243,23 +1178,19 @@ impl FilterSchema for Window {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{Rotation, SplitDirection};
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
-/// window.split(SplitDirection::Below).await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let window = session.active_window()?.expect("a session has a window");
+/// window.split(SplitDirection::Below)?;
 ///
 /// // Rotating moves panes between positions; it does not create or destroy any.
-/// let before = window.panes().await?.len();
-/// window.rotate(Rotation::Down).await?;
-/// assert_eq!(window.panes().await?.len(), before);
+/// let before = window.panes()?.len();
+/// window.rotate(Rotation::Down)?;
+/// assert_eq!(window.panes()?.len(), before);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1291,20 +1222,16 @@ impl Rotation {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::Layout;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("arranged").await?;
-/// let mut window = session.active_window().await?.expect("a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("arranged")?;
+/// let mut window = session.active_window()?.expect("a window");
 ///
-/// window.select_layout(Layout::EvenHorizontal).await?;
+/// window.select_layout(Layout::EvenHorizontal)?;
 /// assert_eq!(Layout::EvenHorizontal.as_str(), "even-horizontal");
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1395,23 +1322,19 @@ impl fmt::Display for Layout {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::Layout;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("restored").await?;
-/// let mut window = session.active_window().await?.expect("a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("restored")?;
+/// let mut window = session.active_window()?.expect("a window");
 ///
 /// // Keep what tmux reports, rearrange, then put it back exactly.
 /// let before = window.layout().to_owned();
-/// window.select_layout(Layout::EvenVertical).await?;
-/// window.select_layout(&before).await?;
+/// window.select_layout(Layout::EvenVertical)?;
+/// window.select_layout(&before)?;
 /// assert_eq!(window.layout().as_bytes(), before.as_bytes());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1482,11 +1405,11 @@ impl From<&TmuxText> for LayoutSpec {
 /// # Examples
 ///
 /// ```no_run
-/// # async fn restart(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
+/// #  fn restart(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
 /// use libtmux::Respawn;
 ///
 /// // Rerun the pane's own command, killing it first if it is still running.
-/// pane.respawn(None::<&str>, Respawn::Replacing).await?;
+/// pane.respawn(None::<&str>, Respawn::Replacing)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1588,22 +1511,18 @@ impl SavedLayout {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::SplitDirection;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let window = session.active_window()?.expect("a session has a window");
 ///
 /// // The direction names where the *new* pane lands, not which edge moves.
-/// window.split(SplitDirection::Right).await?;
-/// window.split(SplitDirection::Below).await?;
-/// assert_eq!(window.panes().await?.len(), 3);
+/// window.split(SplitDirection::Right)?;
+/// window.split(SplitDirection::Below)?;
+/// assert_eq!(window.panes()?.len(), 3);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1648,26 +1567,22 @@ impl SplitDirection {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{JoinOptions, SplitDirection};
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("moving").await?;
-/// let window = session.active_window().await?.expect("a window");
-/// let second = session.new_window("elsewhere").await?;
-/// let stranded = second.panes().await?.remove(0);
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("moving")?;
+/// let window = session.active_window()?.expect("a window");
+/// let second = session.new_window("elsewhere")?;
+/// let stranded = second.panes()?.remove(0);
 ///
 /// // Put a pane from the other window beside this one.
-/// let here = window.panes().await?.remove(0);
+/// let here = window.panes()?.remove(0);
 /// let moved = stranded
 ///     .join_into(&here, JoinOptions::new(SplitDirection::Below))
-///     .await?;
+///     ?;
 /// assert_eq!(moved.window_id(), window.id());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1726,26 +1641,22 @@ impl JoinOptions {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{PaneSize, SplitDirection, SplitOptions};
 ///
 /// // A size renders as tmux's own `-l` argument, cells bare and shares suffixed.
 /// assert_eq!(PaneSize::Cells(20).to_string(), "20");
 /// assert_eq!(PaneSize::Percent(25).to_string(), "25%");
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let window = session.active_window()?.expect("a session has a window");
 ///
 /// let pane = window
 ///     .split(SplitOptions::new(SplitDirection::Below).size(PaneSize::Percent(25)))
-///     .await?;
+///     ?;
 /// assert!(pane.height() > 0);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1772,23 +1683,19 @@ impl fmt::Display for PaneSize {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::ResizeDirection;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let mut window = session.active_window().await?.expect("a session has a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let mut window = session.active_window()?.expect("a session has a window");
 ///
 /// // The direction names the edge that moves, so `Down` makes a window taller
 /// // rather than shorter.
 /// let before = window.height();
-/// window.resize_by(ResizeDirection::Down, 3).await?;
+/// window.resize_by(ResizeDirection::Down, 3)?;
 /// assert!(window.height() >= before);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1825,25 +1732,21 @@ impl ResizeDirection {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{SplitDirection, SplitOptions};
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("split").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("split")?;
+/// let window = session.active_window()?.expect("a session has a window");
 ///
 /// // Splitting leaves focus where it was unless asked otherwise, so a caller
 /// // that wants the new pane selected says so.
 /// let pane = window
 ///     .split(SplitOptions::new(SplitDirection::Right).select())
-///     .await?;
-/// assert_eq!(window.active_pane().await?.map(|active| active.id().to_string()),
+///     ?;
+/// assert_eq!(window.active_pane()?.map(|active| active.id().to_string()),
 ///            Some(pane.id().to_string()));
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -2035,11 +1938,7 @@ impl fmt::Display for Window {
 /// named is the one to ask about: a command carrying both a source and a
 /// destination fails on whichever it could not resolve, and probing the other
 /// would answer about a window that was never in question.
-async fn link_or_object_gone(
-    core: &Arc<Core>,
-    error: Error,
-    links: &[(&SessionId, &WindowId)],
-) -> Error {
+fn link_or_object_gone(core: &Arc<Core>, error: Error, links: &[(&SessionId, &WindowId)]) -> Error {
     let Error::ObjectGone {
         kind: ObjectKind::Window,
         ref id,
@@ -2055,7 +1954,6 @@ async fn link_or_object_gone(
 
     let alive = crate::Server::from_core(Arc::clone(core))
         .window_by_id(window)
-        .await
         .is_ok_and(|found| found.is_some());
 
     if alive {

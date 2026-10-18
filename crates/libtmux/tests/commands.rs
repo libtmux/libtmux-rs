@@ -2,15 +2,16 @@
 
 #![cfg(feature = "test-support")]
 
-use std::sync::Arc;
+mod common;
+
 use std::time::Duration;
 
 use libtmux::test::{TestServer, retry_until};
 use libtmux::{ChannelWait, Command, NewWindowOptions, SplitDirection, SplitOptions};
 
-#[tokio::test]
-async fn a_listed_buffer_name_passes_back_unchanged() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_listed_buffer_name_passes_back_unchanged() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // `=` ends a field in the framed listing and a space is shell-quoted;
@@ -18,7 +19,6 @@ async fn a_listed_buffer_name_passes_back_unchanged() {
     let mut expected = vec![libtmux::TmuxText::from("a=b c")];
     server
         .set_buffer(Some("a=b c"), "framed")
-        .await
         .expect("buffer is stored");
     // tmux before 3.7 stores a newline in a name; 3.7 refuses one.
     let multiline = server
@@ -29,116 +29,101 @@ async fn a_listed_buffer_name_passes_back_unchanged() {
                 .arg("--")
                 .arg("x"),
         )
-        .await
         .expect("tmux answers");
     if multiline.success() {
         expected.push(libtmux::TmuxText::from("two\nlines"));
     }
 
-    let mut names = server.buffer_names().await.expect("names");
+    let mut names = server.buffer_names().expect("names");
     names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     assert_eq!(names, expected);
 
     for name in &names {
-        assert!(
-            server.buffer(name).await.expect("read").is_some(),
-            "{name:?}"
-        );
-        server.delete_buffer(name).await.expect("buffer is deleted");
+        assert!(server.buffer(name).expect("read").is_some(), "{name:?}");
+        server.delete_buffer(name).expect("buffer is deleted");
     }
-    assert!(server.buffer_names().await.expect("names").is_empty());
+    assert!(server.buffer_names().expect("names").is_empty());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn buffers_hold_exact_bytes_and_report_absence() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn buffers_hold_exact_bytes_and_report_absence() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    assert!(server.buffer_names().await.expect("names").is_empty());
+    assert!(server.buffer_names().expect("names").is_empty());
     assert!(
-        server.buffer("absent").await.expect("read").is_none(),
+        server.buffer("absent").expect("read").is_none(),
         "an unknown buffer is absent rather than an error",
     );
 
     // A buffer holds bytes, including ones no string type would keep.
     server
         .set_buffer(Some("payload"), "line one\nline two\ttabbed")
-        .await
         .expect("buffer is stored");
 
     assert_eq!(
-        server.buffer("payload").await.expect("read"),
+        server.buffer("payload").expect("read"),
         Some(b"line one\nline two\ttabbed".to_vec()),
     );
 
-    let names = server.buffer_names().await.expect("names");
+    let names = server.buffer_names().expect("names");
     assert_eq!(names, ["payload"]);
 
-    server
-        .delete_buffer("payload")
-        .await
-        .expect("buffer is deleted");
-    assert!(server.buffer("payload").await.expect("read").is_none());
+    server.delete_buffer("payload").expect("buffer is deleted");
+    assert!(server.buffer("payload").expect("read").is_none());
     assert!(
-        server.delete_buffer("payload").await.is_err(),
+        server.delete_buffer("payload").is_err(),
         "deleting a buffer that is gone is a failure, not a silent success",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn flag_shaped_buffer_data_and_channels_stay_literal() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn flag_shaped_buffer_data_and_channels_stay_literal() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     server
         .set_buffer(Some("-literal-buffer"), "-literal-payload")
-        .await
         .expect("flag-shaped buffer data stays literal");
     assert_eq!(
-        server.buffer("-literal-buffer").await.expect("read"),
+        server.buffer("-literal-buffer").expect("read"),
         Some(b"-literal-payload".to_vec()),
     );
 
     server
         .lock_channel("-literal-lock")
-        .await
         .expect("a flag-shaped channel locks");
     server
         .unlock_channel("-literal-lock")
-        .await
         .expect("a flag-shaped channel unlocks");
     server
         .signal_channel("-literal-signal")
-        .await
         .expect("a flag-shaped channel signals");
     assert_eq!(
         server
             .wait_for_channel("-literal-signal", Duration::from_secs(5))
-            .await
             .expect("a flag-shaped channel waits"),
         ChannelWait::Signalled,
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn key_bindings_can_be_added_and_removed() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn key_bindings_can_be_added_and_removed() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     server
         .bind_key("prefix", "Y", "display-message bound")
-        .await
         .expect("key is bound");
 
     let listed = server
         .key_bindings(Some("prefix"))
-        .await
         .expect("bindings are listed");
     assert!(
         listed
@@ -147,17 +132,13 @@ async fn key_bindings_can_be_added_and_removed() {
         "the new binding appears in tmux's own listing",
     );
 
-    server
-        .unbind_key("prefix", "Y")
-        .await
-        .expect("key is unbound");
+    server.unbind_key("prefix", "Y").expect("key is unbound");
     let listed = server
         .key_bindings(Some("prefix"))
-        .await
         .expect("bindings are listed");
     assert!(!listed.iter().any(|line| line.contains(" Y ")));
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Each field reads back as tmux holds it, for the shapes the `bind-key` lines
@@ -166,28 +147,26 @@ async fn key_bindings_can_be_added_and_removed() {
 ///
 /// `solo` holds one binding, the listing tmux 3.7 through 3.7c print nowhere
 /// when asked for with `-T`.
-#[tokio::test]
-async fn real_tmux_compat_key_bindings_read_as_fields() {
+#[test]
+fn real_tmux_compat_key_bindings_read_as_fields() {
     use libtmux::{Error, since};
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     let version = server
         .capabilities()
-        .await
         .expect("capabilities")
         .tmux_version()
         .clone();
     if !version.has_behavior(&since::LIST_KEYS_FORMAT) {
         let refused = server
             .typed_key_bindings(None)
-            .await
             .expect_err("list-keys -F is 3.7 and later");
         assert!(
             matches!(refused, Error::UnsupportedCapability { .. }),
             "{refused:?}"
         );
-        guard.shutdown().await.expect("tmux fixture shuts down");
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     }
 
@@ -206,13 +185,12 @@ async fn real_tmux_compat_key_bindings_read_as_fields() {
             .arg("M-'")
             .arg("display-message a=b ; display-message c"),
     ] {
-        let bound = server.cmd(command).await.expect("bind-key runs");
+        let bound = server.cmd(command).expect("bind-key runs");
         assert!(bound.success(), "{:?}", bound.stderr_lossy());
     }
 
     let spaced = server
         .typed_key_bindings(Some("sp ace"))
-        .await
         .expect("bindings decode");
     assert_eq!(spaced.len(), 1);
     assert_eq!(spaced[0].table(), "sp ace");
@@ -226,7 +204,6 @@ async fn real_tmux_compat_key_bindings_read_as_fields() {
 
     let solo = server
         .typed_key_bindings(Some("solo"))
-        .await
         .expect("bindings decode");
     assert_eq!(solo.len(), 1, "a one-binding table is listed");
     assert_eq!(solo[0].key(), "M-'");
@@ -239,14 +216,8 @@ async fn real_tmux_compat_key_bindings_read_as_fields() {
 
     // Nothing tmux printed was dropped: one binding per `bind-key` line, and
     // the command is the text that line ends with.
-    let all = server
-        .typed_key_bindings(None)
-        .await
-        .expect("bindings decode");
-    let lines = server
-        .key_bindings(None)
-        .await
-        .expect("bindings are listed");
+    let all = server.typed_key_bindings(None).expect("bindings decode");
+    let lines = server.key_bindings(None).expect("bindings are listed");
     assert_eq!(all.len(), lines.len());
     let command = solo[0].command().as_str().expect("the command is UTF-8");
     assert!(
@@ -258,25 +229,23 @@ async fn real_tmux_compat_key_bindings_read_as_fields() {
     assert!(
         server
             .typed_key_bindings(Some("no-such-table"))
-            .await
             .expect("bindings decode")
             .is_empty()
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn formats_expand_against_a_target() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn formats_expand_against_a_target() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("formatted").await.expect("session");
+    let session = server.new_session("formatted").expect("session");
 
     // A format is evaluated against a pane, and resolves the session and
     // window around it from there.
     let pane = session
         .panes()
-        .await
         .expect("panes")
         .into_iter()
         .next()
@@ -285,35 +254,33 @@ async fn formats_expand_against_a_target() {
     // The trailing newline display-message adds is framing, not content.
     let name = server
         .format(Some(&pane), "#{session_name}")
-        .await
         .expect("format expands");
     assert_eq!(name.as_bytes(), b"formatted");
 
     let combined = server
         .format(Some(&pane), "#{session_name}:#{session_windows}")
-        .await
         .expect("format expands");
     assert_eq!(combined.as_bytes(), b"formatted:1");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn sourcing_a_file_applies_its_commands() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn sourcing_a_file_applies_its_commands() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     let directory = tempfile::tempdir().expect("temporary directory");
     let config = directory.path().join("extra.conf");
     std::fs::write(&config, "set-option -s @sourced yes\n").expect("config is written");
 
-    server.source_file(&config).await.expect("file is sourced");
+    server.source_file(&config).expect("file is sourced");
     assert_eq!(
-        server.typed_option("@sourced").await.expect("read"),
+        server.typed_option("@sourced").expect("read"),
         Some(libtmux::OptionValue::from("yes")),
         "the sourced option is set",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A caller's own error type, without a libtmux conversion.
@@ -322,159 +289,156 @@ enum Failure {
     Deliberate,
 }
 
-#[tokio::test]
-async fn scoped_operations_clean_up_after_success_and_failure() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn scoped_operations_clean_up_after_success_and_failure() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // Success: the session exists inside the scope and not after it.
     let seen = server
-        .with_session("scoped", async |session| {
+        .with_session("scoped", |session| {
             Ok::<_, libtmux::Error>(session.id().to_string())
         })
-        .await
         .expect("the scope runs and the operation succeeds");
     assert!(seen.starts_with('$'));
-    assert!(server.sessions().await.expect("sessions").is_empty());
+    assert!(server.sessions().expect("sessions").is_empty());
 
-    let outcome = server
-        .with_session("failing", async |_session| {
-            Err::<(), Failure>(Failure::Deliberate)
-        })
-        .await;
+    let outcome = server.with_session("failing", |_session| {
+        Err::<(), Failure>(Failure::Deliberate)
+    });
     assert!(matches!(
         outcome,
         Err(libtmux::ScopeError::Operation(Failure::Deliberate))
     ));
     assert!(
-        server.sessions().await.expect("sessions").is_empty(),
+        server.sessions().expect("sessions").is_empty(),
         "cleanup runs even when the operation failed",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn scoped_windows_and_panes_nest() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+#[allow(
+    clippy::result_large_err,
+    reason = "scoped failures retain the caller error and cleanup error by value"
+)]
+fn scoped_windows_and_panes_nest() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("nested").await.expect("session");
+    let session = server.new_session("nested").expect("session");
 
-    let before = session.windows().await.expect("windows").len();
+    let before = session.windows().expect("windows").len();
 
     let pane_count = session
         .with_window(
             NewWindowOptions::new("temporary").command("sleep 300"),
-            async |window| {
-                window
-                    .with_pane(
-                        SplitOptions::new(SplitDirection::Below).command("sleep 300"),
-                        async |_pane| {
-                            Ok::<_, libtmux::Error>(window.panes().await.expect("panes").len())
-                        },
-                    )
-                    .await
+            |window| {
+                window.with_pane(
+                    SplitOptions::new(SplitDirection::Below).command("sleep 300"),
+                    |_pane| Ok::<_, libtmux::Error>(window.panes().expect("panes").len()),
+                )
             },
         )
-        .await
         .expect("both scopes run and the operation succeeds");
 
     assert_eq!(pane_count, 2, "the scoped pane existed inside its scope");
     assert_eq!(
-        session.windows().await.expect("windows").len(),
+        session.windows().expect("windows").len(),
         before,
         "the scoped window is gone afterwards",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn scoped_operations_clean_up_after_cancellation() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server().clone();
-    let anchor = server.new_session("anchor").await.expect("session");
+#[test]
+#[allow(
+    clippy::result_large_err,
+    reason = "scoped failures retain the caller error and cleanup error by value"
+)]
+fn scoped_operations_clean_up_after_cancellation() {
+    let guard = TestServer::builder().start().expect("tmux starts");
+    let server = guard.server();
+    let anchor = server.new_session("anchor").expect("session");
     let window = anchor
         .active_window()
-        .await
         .expect("window lookup")
         .expect("window");
-    let ready = Arc::new(tokio::sync::Barrier::new(4));
+    let (cancellable, token) = common::cancellable(server);
+    let cancellable_anchor = cancellable
+        .session_by_id(anchor.id())
+        .expect("session lookup")
+        .expect("session");
+    let cancellable_window = cancellable
+        .window_by_id(window.id())
+        .expect("window lookup")
+        .expect("window");
+    let (ready, entered) = std::sync::mpsc::channel();
 
-    let session_scope = tokio::spawn({
-        let server = server.clone();
-        let ready = Arc::clone(&ready);
-        async move {
-            server
-                .with_session("cancelled-session", async move |_session| {
-                    ready.wait().await;
-                    std::future::pending::<Result<(), libtmux::Error>>().await
-                })
-                .await
+    let session_scope = std::thread::spawn({
+        let ready = ready.clone();
+        let token = token.clone();
+        move || {
+            cancellable.with_session("cancelled-session", |session| {
+                ready.send(()).expect("scope entered");
+                common::until(Duration::from_secs(5), || token.is_cancelled());
+                session.panes().map(|_| ())
+            })
         }
     });
-    let window_scope = tokio::spawn({
-        let anchor = anchor.clone();
-        let ready = Arc::clone(&ready);
-        async move {
-            anchor
-                .with_window("cancelled-window", async move |_window| {
-                    ready.wait().await;
-                    std::future::pending::<Result<(), libtmux::Error>>().await
-                })
-                .await
+    let window_scope = std::thread::spawn({
+        let ready = ready.clone();
+        let token = token.clone();
+        move || {
+            cancellable_anchor.with_window("cancelled-window", |window| {
+                ready.send(()).expect("scope entered");
+                common::until(Duration::from_secs(5), || token.is_cancelled());
+                window.panes().map(|_| ())
+            })
         }
     });
-    let pane_scope = tokio::spawn({
-        let window = window.clone();
-        let ready = Arc::clone(&ready);
-        async move {
-            window
-                .with_pane(SplitDirection::Below, async move |_pane| {
-                    ready.wait().await;
-                    std::future::pending::<Result<(), libtmux::Error>>().await
-                })
-                .await
+    let pane_scope = std::thread::spawn({
+        let token = token.clone();
+        move || {
+            cancellable_window.with_pane(SplitDirection::Below, |pane| {
+                ready.send(()).expect("scope entered");
+                common::until(Duration::from_secs(5), || token.is_cancelled());
+                pane.capture().map(|_| ())
+            })
         }
     });
-
-    tokio::time::timeout(Duration::from_secs(5), ready.wait())
-        .await
-        .expect("all scoped objects are created");
-    session_scope.abort();
-    window_scope.abort();
-    pane_scope.abort();
-    for scope in [session_scope, window_scope, pane_scope] {
-        assert!(scope.await.expect_err("scope is aborted").is_cancelled());
+    for _ in 0..3 {
+        entered
+            .recv_timeout(Duration::from_secs(5))
+            .expect("all scoped resources were created");
     }
-
-    let cleanup = retry_until(Duration::from_secs(5), async || {
-        matches!(server.sessions().await, Ok(objects) if objects.len() == 1)
-            && matches!(anchor.windows().await, Ok(objects) if objects.len() == 1)
-            && matches!(window.panes().await, Ok(objects) if objects.len() == 1)
-    })
-    .await;
-    let sessions = server.sessions().await.expect("sessions").len();
-    let windows = anchor.windows().await.expect("windows").len();
-    let panes = window.panes().await.expect("panes").len();
-    guard.shutdown().await.expect("tmux fixture shuts down");
-
-    assert!(
-        cleanup.is_ok(),
-        "aborted scopes left sessions={sessions}, windows={windows}, panes={panes}",
-    );
+    token.cancel();
+    for scope in [session_scope, window_scope, pane_scope] {
+        let error = common::join(scope)
+            .expect("scope thread joins")
+            .expect_err("callback observes cancellation");
+        assert_eq!(
+            error.into_operation().expect("operation failure").kind(),
+            libtmux::ErrorKind::Cancelled
+        );
+    }
+    assert_eq!(server.sessions().expect("sessions").len(), 1);
+    assert_eq!(anchor.windows().expect("windows").len(), 1);
+    assert_eq!(window.panes().expect("panes").len(), 1);
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn shell_commands_run_through_tmux_and_report_their_output() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn shell_commands_run_through_tmux_and_report_their_output() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // tmux 3.3 through 3.4 route run-shell output into a pane's copy-mode
     // buffer rather than to the client, and still exit zero. The crate refuses
     // there rather than reporting an empty listing, which would be a wrong
     // answer the caller could not tell from a command that printed nothing.
-    let outcome = server.run_shell("printf 'first\\nsecond\\n'").await;
+    let outcome = server.run_shell("printf 'first\\nsecond\\n'");
     let Ok(lines) = outcome else {
         let error = outcome.expect_err("refused");
         assert!(
@@ -483,7 +447,7 @@ async fn shell_commands_run_through_tmux_and_report_their_output() {
             "an affected release refuses with the reason, got {error:?}",
         );
         assert_eq!(error.kind(), libtmux::ErrorKind::UnsupportedVersion);
-        guard.shutdown().await.expect("tmux fixture shuts down");
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     };
 
@@ -496,42 +460,31 @@ async fn shell_commands_run_through_tmux_and_report_their_output() {
     );
 
     // A command producing nothing is an empty listing, not a failure.
-    assert!(server.run_shell("true").await.expect("runs").is_empty());
+    assert!(server.run_shell("true").expect("runs").is_empty());
 
     // Background acceptance says nothing about the command's own outcome.
     server
         .spawn_shell("false")
-        .await
         .expect("tmux accepts a background command whatever it later does");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn wait_for_channels_lock_and_release() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn wait_for_channels_lock_and_release() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // Locking an unheld channel takes it; unlocking releases it again.
-    server
-        .lock_channel("gate")
-        .await
-        .expect("channel is locked");
-    server
-        .unlock_channel("gate")
-        .await
-        .expect("channel is unlocked");
+    server.lock_channel("gate").expect("channel is locked");
+    server.unlock_channel("gate").expect("channel is unlocked");
 
     // Signalling a channel nobody waits on is accepted, and tmux keeps it:
     // the next wait spends the latch rather than blocking.
-    server
-        .signal_channel("gate")
-        .await
-        .expect("channel is signalled");
+    server.signal_channel("gate").expect("channel is signalled");
     assert_eq!(
         server
             .wait_for_channel("gate", Duration::from_secs(5))
-            .await
             .expect("waiting is not an error"),
         ChannelWait::Signalled,
         "a signal with nobody waiting is kept, not dropped",
@@ -542,13 +495,12 @@ async fn wait_for_channels_lock_and_release() {
     assert_eq!(
         server
             .wait_for_channel("gate", Duration::from_millis(300))
-            .await
             .expect("running out of time is not an error"),
         ChannelWait::TimedOut,
         "the latch releases one wait, not every later one",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Cancelling a queued `lock_channel` wedges the channel for every later
@@ -561,25 +513,24 @@ async fn wait_for_channels_lock_and_release() {
 /// channel for everyone behind it, even though nobody ever unlocked it
 /// explicitly. Pinned with a tight bound so this fails loudly, not
 /// silently, if a tmux release ever fixes the defect.
-#[tokio::test]
-async fn real_tmux_compat_cancelling_a_queued_lock_wedges_the_channel() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn real_tmux_compat_cancelling_a_queued_lock_wedges_the_channel() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // Uncontested: takes the lock and returns at once. Never unlocked.
     server
         .lock_channel("wedge")
-        .await
         .expect("the first lock is uncontested");
 
     // Contested: queues behind the holder above, then is cancelled while
     // still queued -- what `kill_on_drop` is for, killing the underlying
     // `tmux wait-for -L` subprocess rather than leaving it running.
-    let cancelled = tokio::time::timeout(
-        libtmux::test::scaled(Duration::from_secs(2)),
-        server.lock_channel("wedge"),
-    )
-    .await;
+    let (contender, token) = common::cancellable(server);
+    let cancelled =
+        common::with_deadline(token, libtmux::test::scaled(Duration::from_secs(2)), || {
+            contender.lock_channel("wedge")
+        });
     assert!(
         cancelled.is_err(),
         "the second lock is genuinely contested and queues",
@@ -589,17 +540,18 @@ async fn real_tmux_compat_cancelling_a_queued_lock_wedges_the_channel() {
     // second never acquired the channel, only queued -- yet tmux hands it
     // to the dead second locker anyway and never notices it is gone, so
     // this wedges rather than resolving at a sensible bound.
-    let wedged = tokio::time::timeout(
+    let (contender, token) = common::cancellable(server);
+    let wedged = common::with_deadline(
+        token,
         libtmux::test::scaled(Duration::from_millis(800)),
-        server.lock_channel("wedge"),
-    )
-    .await;
+        || contender.lock_channel("wedge"),
+    );
     assert!(
         wedged.is_err(),
         "cancelling the queued locker corrupts the channel for good, per the defect this pins",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Waiting blocks until something signals, rather than returning at once.
@@ -608,52 +560,50 @@ async fn real_tmux_compat_cancelling_a_queued_lock_wedges_the_channel() {
 /// that returned immediately would satisfy a test that only checks the
 /// outcome. So this signals from elsewhere, after a delay, and requires that
 /// the wait actually spanned it.
-#[tokio::test]
-async fn a_wait_blocks_until_something_signals_the_channel() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_wait_blocks_until_something_signals_the_channel() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     let signaller = server.clone();
-    let signalling = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(400)).await;
+    let signalling = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
         signaller
             .signal_channel("ready")
-            .await
             .expect("channel is signalled");
     });
 
     let started = std::time::Instant::now();
     let outcome = server
         .wait_for_channel("ready", Duration::from_secs(10))
-        .await
         .expect("waiting is not an error");
     let waited = started.elapsed();
 
-    signalling.await.expect("the signalling task finishes");
+    common::join(signalling).expect("the signalling task finishes");
     assert_eq!(outcome, ChannelWait::Signalled);
     assert!(
         waited >= Duration::from_millis(300),
         "the wait returned in {waited:?}, so it did not wait for the signal",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn client_operations_need_a_client_and_report_when_there_is_none() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn client_operations_need_a_client_and_report_when_there_is_none() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    server.new_session("headless").await.expect("session");
+    server.new_session("headless").expect("session");
 
     // A test server has no terminal attached, so there are no clients and the
     // operations that need one fail loudly rather than pretending to work.
-    assert!(server.clients().await.expect("clients list").is_empty());
+    assert!(server.clients().expect("clients list").is_empty());
     assert!(
-        server.display_popup(None, "true").await.is_err(),
+        server.display_popup(None, "true").is_err(),
         "a popup needs a client with a terminal",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Exercise `Client` against the one kind of client a headless test can make.
@@ -662,32 +612,26 @@ async fn client_operations_need_a_client_and_report_when_there_is_none() {
 /// tmux counts it as a client like any other, so it is what makes the
 /// positive case testable at all.
 #[cfg(feature = "control-mode")]
-#[tokio::test]
-async fn a_client_reports_itself_while_it_is_attached() {
+#[test]
+fn a_client_reports_itself_while_it_is_attached() {
     use libtmux::control::ControlMode;
     use std::time::Duration;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let first = server.new_session("client-one").await.expect("session");
-    let second = server.new_session("client-two").await.expect("session");
+    let first = server.new_session("client-one").expect("session");
+    let second = server.new_session("client-two").expect("session");
 
-    let control = ControlMode::attach(server, first.id())
-        .await
-        .expect("control mode attaches");
+    let control = ControlMode::attach(server, first.id()).expect("control mode attaches");
 
     // tmux registers the client as part of attaching, but the listing is a
     // separate command, so wait for it rather than assuming the order.
-    retry_until(Duration::from_secs(10), async || {
-        server
-            .clients()
-            .await
-            .is_ok_and(|clients| !clients.is_empty())
+    retry_until(Duration::from_secs(10), || {
+        server.clients().is_ok_and(|clients| !clients.is_empty())
     })
-    .await
     .expect("the attached client is listed");
 
-    let mut client = server.clients().await.expect("clients").remove(0);
+    let mut client = server.clients().expect("clients").remove(0);
     assert!(client.is_control_mode(), "this client attached with -C");
     assert!(!client.name().as_bytes().is_empty());
     assert!(client.pid() > 0);
@@ -695,43 +639,36 @@ async fn a_client_reports_itself_while_it_is_attached() {
     // A client is attached to exactly one session, and switching moves it.
     client
         .switch_to(&second)
-        .await
         .expect("the client switches session");
-    retry_until(Duration::from_secs(10), async || {
+    retry_until(Duration::from_secs(10), || {
         second
             .refreshed()
-            .await
             .is_ok_and(|session| session.is_attached())
     })
-    .await
     .expect("the second session reports the client");
 
-    client.refresh().await.expect("the client still exists");
+    client.refresh().expect("the client still exists");
 
     // Detaching consumes the handle, and the listing empties out.
-    client.detach().await.expect("the client detaches");
-    retry_until(Duration::from_secs(10), async || {
-        server
-            .clients()
-            .await
-            .is_ok_and(|clients| clients.is_empty())
+    client.detach().expect("the client detaches");
+    retry_until(Duration::from_secs(10), || {
+        server.clients().is_ok_and(|clients| clients.is_empty())
     })
-    .await
     .expect("the detached client stops being listed");
 
-    let _ = control.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    let _ = control.shutdown();
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "control-mode")]
-#[tokio::test]
-async fn server_operations_reject_foreign_handles() {
+#[test]
+fn server_operations_reject_foreign_handles() {
     use libtmux::control::ControlMode;
     use libtmux::{Chooser, Error, ErrorKind};
 
     macro_rules! error_kind {
         ($future:expr) => {
-            match $future.await {
+            match $future {
                 Err(error @ Error::ServerMismatch { .. }) => error.kind(),
                 Err(error) => panic!("foreign handle returned {error:?}"),
                 Ok(_) => panic!("foreign handle was accepted"),
@@ -739,26 +676,20 @@ async fn server_operations_reject_foreign_handles() {
         };
     }
 
-    let left_guard = TestServer::builder().start().await.expect("tmux starts");
-    let right_guard = TestServer::builder().start().await.expect("tmux starts");
+    let left_guard = TestServer::builder().start().expect("tmux starts");
+    let right_guard = TestServer::builder().start().expect("tmux starts");
     let left = left_guard.server();
     let right = right_guard.server();
-    let left_session = left.new_session("left").await.expect("left session");
-    let right_session = right.new_session("right").await.expect("right session");
-    let right_pane = right_session.panes().await.expect("right panes").remove(0);
-    let control = ControlMode::attach(right, right_session.id())
-        .await
-        .expect("control mode attaches");
+    let left_session = left.new_session("left").expect("left session");
+    let right_session = right.new_session("right").expect("right session");
+    let right_pane = right_session.panes().expect("right panes").remove(0);
+    let control = ControlMode::attach(right, right_session.id()).expect("control mode attaches");
 
-    retry_until(Duration::from_secs(10), async || {
-        right
-            .clients()
-            .await
-            .is_ok_and(|clients| !clients.is_empty())
+    retry_until(Duration::from_secs(10), || {
+        right.clients().is_ok_and(|clients| !clients.is_empty())
     })
-    .await
     .expect("the foreign client is listed");
-    let foreign_client = right.clients().await.expect("right clients").remove(0);
+    let foreign_client = right.clients().expect("right clients").remove(0);
 
     let kinds = [
         error_kind!(left.format(Some(&right_pane), "#{session_name}")),
@@ -781,25 +712,20 @@ async fn server_operations_reject_foreign_handles() {
 
     assert_eq!(kinds, [ErrorKind::InvalidInput; 8]);
 
-    let _ = control.shutdown().await;
+    let _ = control.shutdown();
     right_guard
         .shutdown()
-        .await
         .expect("right tmux fixture shuts down");
-    left_guard
-        .shutdown()
-        .await
-        .expect("left tmux fixture shuts down");
+    left_guard.shutdown().expect("left tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn pane_modes_enter_and_leave() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn pane_modes_enter_and_leave() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("modes").await.expect("session");
+    let session = server.new_session("modes").expect("session");
     let mut pane = session
         .panes()
-        .await
         .expect("panes")
         .into_iter()
         .next()
@@ -807,15 +733,15 @@ async fn pane_modes_enter_and_leave() {
 
     assert!(!pane.is_in_mode(), "a fresh pane has no mode open");
 
-    pane.copy_mode().await.expect("copy mode is entered");
-    pane.refresh().await.expect("the pane still exists");
+    pane.copy_mode().expect("copy mode is entered");
+    pane.refresh().expect("the pane still exists");
     assert!(pane.is_in_mode(), "copy mode is a pane mode");
 
-    pane.exit_mode().await.expect("the mode is cancelled");
-    pane.refresh().await.expect("the pane still exists");
+    pane.exit_mode().expect("the mode is cancelled");
+    pane.refresh().expect("the pane still exists");
     assert!(!pane.is_in_mode(), "cancelling leaves the mode");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A mode that is not copy mode must be leavable too.
@@ -828,25 +754,24 @@ async fn pane_modes_enter_and_leave() {
 ///
 /// The old test entered copy mode, which is the one mode the cancel key does
 /// leave, so it passed throughout.
-#[tokio::test]
-async fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("clocked").await.expect("session");
+    let session = server.new_session("clocked").expect("session");
     let mut pane = session
         .panes()
-        .await
         .expect("panes")
         .into_iter()
         .next()
         .expect("one pane");
 
-    pane.clock_mode().await.expect("clock mode is entered");
-    pane.refresh().await.expect("the pane still exists");
+    pane.clock_mode().expect("clock mode is entered");
+    pane.refresh().expect("the pane still exists");
     assert!(pane.is_in_mode(), "clock mode is a pane mode");
 
-    pane.exit_mode().await.expect("clock mode is left");
-    pane.refresh().await.expect("the pane still exists");
+    pane.exit_mode().expect("clock mode is left");
+    pane.refresh().expect("the pane still exists");
     assert!(
         !pane.is_in_mode(),
         "a mode that is not copy mode is left as well"
@@ -855,10 +780,9 @@ async fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
     // A pane in no mode is left alone rather than refused, so a caller can
     // reach a known state without asking first.
     pane.exit_mode()
-        .await
         .expect("leaving no mode at all is not a failure");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A pane's edge flags must follow the split that made it.
@@ -866,26 +790,24 @@ async fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
 /// These read from the snapshot rather than dispatching, so nothing catches
 /// them being wired to the wrong format field: `pane_at_left` and
 /// `pane_at_right` differ only in a word.
-#[tokio::test]
-async fn edge_flags_follow_the_split_that_made_them() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn edge_flags_follow_the_split_that_made_them() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("edges").await.expect("session");
+    let session = server.new_session("edges").expect("session");
     let window = session
         .active_window()
-        .await
         .expect("windows")
         .expect("a session has a window");
 
-    let only = window.panes().await.expect("panes").remove(0);
+    let only = window.panes().expect("panes").remove(0);
     assert!(only.is_at_left(), "an undivided pane touches both edges");
     assert!(only.is_at_right(), "an undivided pane touches both edges");
 
     only.split(SplitOptions::new(SplitDirection::Right))
-        .await
         .expect("the pane splits sideways");
 
-    let panes = window.panes().await.expect("panes");
+    let panes = window.panes().expect("panes");
     assert_eq!(panes.len(), 2, "the split produced a second pane");
     let (left, right) = (&panes[0], &panes[1]);
 
@@ -894,7 +816,7 @@ async fn edge_flags_follow_the_split_that_made_them() {
     assert!(right.is_at_right(), "the new pane takes the right edge");
     assert!(!right.is_at_left(), "and does not hold the left one");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A global window option must be read from the global table, not the window
@@ -909,29 +831,25 @@ async fn edge_flags_follow_the_split_that_made_them() {
 /// `-wg` return the same value and no assertion here can tell them apart.
 /// Dropping `-w` in the scope leaves this test passing, which was checked
 /// rather than assumed.
-#[tokio::test]
-async fn a_global_window_option_is_read_globally() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_global_window_option_is_read_globally() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("options").await.expect("session");
+    let session = server.new_session("options").expect("session");
     let window = session
         .active_window()
-        .await
         .expect("windows")
         .expect("a session has a window");
 
     server
         .set_global_window_option("main-pane-width", "123")
-        .await
         .expect("the global window option is set");
     window
         .set_option("main-pane-width", "456")
-        .await
         .expect("the window takes a value of its own");
 
     let read = server
         .typed_global_window_option("main-pane-width")
-        .await
         .expect("the option is readable");
     assert_eq!(
         read,
@@ -939,7 +857,7 @@ async fn a_global_window_option_is_read_globally() {
         "the global read is not answered by the window's own value"
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Piping a pane must start and stop with the same call.
@@ -953,12 +871,12 @@ async fn a_global_window_option_is_read_globally() {
 /// the fixture's own cleanup and kept the directory in the shared root --
 /// `just fixture-root` reported it. A temporary directory is removed whether
 /// the test returns or panics.
-#[tokio::test]
-async fn a_pane_pipes_until_it_is_told_to_stop() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_pane_pipes_until_it_is_told_to_stop() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("piped").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("piped").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     let mut pane = pane;
     assert!(!pane.is_piped(), "nothing yet");
@@ -970,41 +888,38 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
     let sink = sink_dir.path().join("seen");
 
     pane.pipe(Some(format!("cat >{}", sink.display())))
-        .await
         .expect("the pane pipes");
-    pane.refresh().await.expect("the pane still exists");
+    pane.refresh().expect("the pane still exists");
     assert!(pane.is_piped(), "now piping");
 
-    pane.send_keys("printf 'piped\n'").await.expect("keys");
-    pane.send_key_names(["Enter"]).await.expect("enter");
-    retry_until(Duration::from_secs(10), async || {
+    pane.send_keys("printf 'piped\n'").expect("keys");
+    pane.send_key_names(["Enter"]).expect("enter");
+    retry_until(Duration::from_secs(10), || {
         std::fs::read(&sink).is_ok_and(|seen| seen.windows(5).any(|word| word == b"piped"))
     })
-    .await
     .expect("what the pane printed reaches the pipe");
 
-    pane.pipe(None::<String>).await.expect("the pipe stops");
-    pane.refresh().await.expect("the pane still exists");
+    pane.pipe(None::<String>).expect("the pipe stops");
+    pane.refresh().expect("the pane still exists");
     assert!(!pane.is_piped(), "the same call with no command stops it");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A pane must report the terminal tmux gave it.
 ///
 /// Reads from the snapshot, so a field wired to the wrong name would return
 /// some other pane's string rather than fail.
-#[tokio::test]
-async fn a_pane_reports_its_own_terminal() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_pane_reports_its_own_terminal() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("ttys").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("ttys").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     let reported = pane.tty().as_str().expect("a tty path is text").to_owned();
     let asked = server
         .format(Some(&pane), "#{pane_tty}")
-        .await
         .expect("tmux answers for the same pane");
 
     assert_eq!(
@@ -1014,7 +929,7 @@ async fn a_pane_reports_its_own_terminal() {
     );
     assert!(reported.starts_with("/dev/"), "and it is a device path");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A window's activity and bell flags must each read their own field.
@@ -1025,14 +940,13 @@ async fn a_pane_reports_its_own_terminal() {
 /// leaves the bell low first, which was measured rather than assumed -- the
 /// first version of this test passed with `has_bell` wired to the activity
 /// field.
-#[tokio::test]
-async fn window_flags_each_read_their_own_field() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn window_flags_each_read_their_own_field() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("flags").await.expect("session");
+    let session = server.new_session("flags").expect("session");
     let window = session
         .active_window()
-        .await
         .expect("windows")
         .expect("a session has a window");
 
@@ -1040,22 +954,19 @@ async fn window_flags_each_read_their_own_field() {
     // second window is what makes the first one eligible.
     server
         .set_global_window_option("monitor-activity", "on")
-        .await
         .expect("activity is monitored");
     session
         .new_window(NewWindowOptions::new("elsewhere"))
-        .await
         .expect("a second window takes the focus");
 
-    let panes = window.panes().await.expect("panes");
-    panes[0].send_keys("printf 'noise\n'").await.expect("keys");
-    panes[0].send_key_names(["Enter"]).await.expect("enter");
+    let panes = window.panes().expect("panes");
+    panes[0].send_keys("printf 'noise\n'").expect("keys");
+    panes[0].send_key_names(["Enter"]).expect("enter");
 
     let mut window = window;
-    retry_until(Duration::from_secs(10), async || {
-        window.refresh().await.is_ok() && window.has_activity()
+    retry_until(Duration::from_secs(10), || {
+        window.refresh().is_ok() && window.has_activity()
     })
-    .await
     .expect("the background window records activity");
 
     assert!(
@@ -1075,43 +986,39 @@ async fn window_flags_each_read_their_own_field() {
                     .arg(window.id().to_string())
                     .arg(format),
             )
-            .await
             .expect("tmux answers");
         let asked = asked.stdout_lossy().trim() == "1";
         assert_eq!(reported, asked, "{format} agrees with the accessor");
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Pasting a buffer must put its bytes into the pane.
-#[tokio::test]
-async fn a_buffer_pastes_into_a_pane() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_buffer_pastes_into_a_pane() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("pasted").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("pasted").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     server
         .set_buffer(Some("greeting"), "printf 'pasted-here\n'")
-        .await
         .expect("the buffer is set");
     pane.paste_buffer(Some("greeting"))
-        .await
         .expect("the buffer pastes");
-    pane.send_key_names(["Enter"]).await.expect("enter");
+    pane.send_key_names(["Enter"]).expect("enter");
 
-    retry_until(Duration::from_secs(10), async || {
-        pane.capture().await.is_ok_and(|lines| {
+    retry_until(Duration::from_secs(10), || {
+        pane.capture().is_ok_and(|lines| {
             lines
                 .iter()
                 .any(|line| line.as_bytes().windows(11).any(|w| w == b"pasted-here"))
         })
     })
-    .await
     .expect("what was pasted runs in the pane");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Searching a window's panes must find one that matches.
@@ -1120,32 +1027,30 @@ async fn a_buffer_pastes_into_a_pane() {
 /// that never matched and a search that failed look alike to a caller. This
 /// covers the case where it does match, which is the one that would be silent.
 #[cfg(feature = "query")]
-#[tokio::test]
-async fn searching_a_window_finds_the_pane_that_matches() {
+#[test]
+fn searching_a_window_finds_the_pane_that_matches() {
     use libtmux::query::Filterable as _;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("searched").await.expect("session");
+    let session = server.new_session("searched").expect("session");
     let window = session
         .active_window()
-        .await
         .expect("windows")
         .expect("a session has a window");
 
-    let panes = window.panes().await.expect("panes");
+    let panes = window.panes().expect("panes");
     let wanted = panes[0].id().to_string();
 
     let fields = libtmux::Pane::filter_fields();
     let found = window
         .search_panes(fields.pane_id.eq(wanted.as_str()))
-        .await
         .unwrap_or_default();
 
     assert_eq!(found.len(), 1, "the pane that matches is returned");
     assert_eq!(found[0].id().to_string(), wanted);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A client's own fields must each name the client, not its neighbour.
@@ -1158,27 +1063,21 @@ async fn searching_a_window_finds_the_pane_that_matches() {
 /// `suspend` is deliberately absent: it sends SIGTSTP to the client, and the
 /// only client here is the control connection this test is holding.
 #[cfg(feature = "control-mode")]
-#[tokio::test]
-async fn a_client_reports_its_own_terminal_and_type() {
+#[test]
+fn a_client_reports_its_own_terminal_and_type() {
     use libtmux::control::ControlMode;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("client-fields").await.expect("session");
-    let control = ControlMode::attach(server, session.id())
-        .await
-        .expect("control mode attaches");
+    let session = server.new_session("client-fields").expect("session");
+    let control = ControlMode::attach(server, session.id()).expect("control mode attaches");
 
-    retry_until(Duration::from_secs(10), async || {
-        server
-            .clients()
-            .await
-            .is_ok_and(|clients| !clients.is_empty())
+    retry_until(Duration::from_secs(10), || {
+        server.clients().is_ok_and(|clients| !clients.is_empty())
     })
-    .await
     .expect("the attached client is listed");
 
-    let client = server.clients().await.expect("clients").remove(0);
+    let client = server.clients().expect("clients").remove(0);
     let name = client.name().to_string_lossy().into_owned();
 
     assert_ne!(
@@ -1211,7 +1110,6 @@ async fn a_client_reports_its_own_terminal_and_type() {
                     .arg(&name)
                     .arg(format),
             )
-            .await
             .expect("tmux answers for this client");
         assert_eq!(
             reported.as_str().expect("client text"),
@@ -1224,10 +1122,10 @@ async fn a_client_reports_its_own_terminal_and_type() {
         !client.is_readonly(),
         "a client that attached without -r may act"
     );
-    client.redraw().await.expect("the client redraws");
+    client.redraw().expect("the client redraws");
 
-    let _ = control.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    let _ = control.shutdown();
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Every timestamp accessor is a `SystemTime` inside the test's own window,
@@ -1236,8 +1134,8 @@ async fn a_client_reports_its_own_terminal_and_type() {
 /// A unit error -- milliseconds for seconds, or an offset -- lands outside the
 /// window, which a check for "positive" did not catch.
 #[cfg(all(feature = "control-mode", feature = "query"))]
-#[tokio::test]
-async fn timestamps_are_system_times_that_agree_with_their_handles() {
+#[test]
+fn timestamps_are_system_times_that_agree_with_their_handles() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use libtmux::control::ControlMode;
@@ -1250,29 +1148,22 @@ async fn timestamps_are_system_times_that_agree_with_their_handles() {
         .expect("the clock is past 1970");
     let before = UNIX_EPOCH + Duration::from_secs(since_epoch.as_secs());
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let mut session = server.new_session("clock").await.expect("session");
-    let control = ControlMode::attach(server, session.id())
-        .await
-        .expect("control mode attaches");
-    retry_until(Duration::from_secs(10), async || {
-        server
-            .clients()
-            .await
-            .is_ok_and(|clients| !clients.is_empty())
+    let mut session = server.new_session("clock").expect("session");
+    let control = ControlMode::attach(server, session.id()).expect("control mode attaches");
+    retry_until(Duration::from_secs(10), || {
+        server.clients().is_ok_and(|clients| !clients.is_empty())
     })
-    .await
     .expect("the attached client is listed");
 
-    session.refresh().await.expect("session refreshes");
+    session.refresh().expect("session refreshes");
     let window = session
         .active_window()
-        .await
         .expect("window lookup")
         .expect("a window");
-    let client = server.clients().await.expect("clients").remove(0);
-    let generation = server.generation().await.expect("generation");
+    let client = server.clients().expect("clients").remove(0);
+    let generation = server.generation().expect("generation");
     let after = SystemTime::now();
 
     let seconds = |time: SystemTime| {
@@ -1326,8 +1217,8 @@ async fn timestamps_are_system_times_that_agree_with_their_handles() {
         "Display prints the same moment as Unix seconds",
     );
 
-    let _ = control.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    let _ = control.shutdown();
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// The remaining dispatch-only commands must reach tmux and be accepted.
@@ -1335,25 +1226,24 @@ async fn timestamps_are_system_times_that_agree_with_their_handles() {
 /// These change something a headless server cannot show back -- a prefix key
 /// arriving, a prompt history no client has filled -- so what is covered is
 /// that the command is built and accepted, not what it did.
-#[tokio::test]
-async fn dispatch_only_commands_are_accepted() {
+#[test]
+fn dispatch_only_commands_are_accepted() {
     use libtmux::since;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("dispatch").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("dispatch").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
-    pane.send_prefix().await.expect("the prefix key is sent");
+    pane.send_prefix().expect("the prefix key is sent");
 
     // The prompt history arrived in 3.3, and the crate refuses it below that
     // rather than dispatching something tmux will reject. Both answers are
     // asserted, because a skip would leave the refusal untested on exactly
     // the releases that produce it.
-    let cleared = server.clear_prompt_history().await;
+    let cleared = server.clear_prompt_history();
     if server
         .capabilities()
-        .await
         .expect("capabilities")
         .tmux_version()
         .has_behavior(&since::PROMPT_HISTORY)
@@ -1369,7 +1259,7 @@ async fn dispatch_only_commands_are_accepted() {
         );
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Unlinking a link that is already gone must not say the window is gone.
@@ -1384,23 +1274,21 @@ async fn dispatch_only_commands_are_accepted() {
 ///
 /// That is what costs a caller something: `is_object_gone` is what they branch
 /// on to drop a handle.
-#[tokio::test]
-async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let home = server.new_session("home").await.expect("session");
-    let elsewhere = server.new_session("elsewhere").await.expect("session");
+    let home = server.new_session("home").expect("session");
+    let elsewhere = server.new_session("elsewhere").expect("session");
 
     let shared = home
         .new_window(NewWindowOptions::new("shared"))
-        .await
         .expect("a window to share");
     let shared_id = shared.id().to_string();
     let index = shared.index();
 
     shared
         .link_to(&elsewhere, None)
-        .await
         .expect("the window is linked into a second session");
 
     // Two handles to the same link, taken before either is used: `unlink`
@@ -1410,7 +1298,6 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
     for _ in 0..2 {
         handles.push(
             home.windows()
-                .await
                 .expect("windows")
                 .into_iter()
                 .find(|window| window.index() == index)
@@ -1421,12 +1308,11 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
     let first = handles.pop().expect("two handles");
 
     // The first removal succeeds: two links, one goes.
-    first.unlink().await.expect("the link is removed");
+    first.unlink().expect("the link is removed");
 
     // The window itself is still running, held by the other session.
     let alive = server
         .windows()
-        .await
         .expect("windows")
         .into_iter()
         .any(|window| window.id().to_string() == shared_id);
@@ -1435,7 +1321,6 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
     // Removing the same link again fails, and what it says matters.
     let again = home
         .windows()
-        .await
         .expect("windows")
         .into_iter()
         .find(|window| window.index() == index);
@@ -1444,14 +1329,14 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
         "the session no longer holds a window at that index"
     );
 
-    let refused = second.unlink().await.expect_err("the link is already gone");
+    let refused = second.unlink().expect_err("the link is already gone");
 
     assert!(
         !refused.is_object_gone(),
         "a missing link is not a missing object; the window is still alive. got {refused:?}"
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A `TMUX_PANE` that is set and wrong is not the same as one that is unset.
@@ -1459,16 +1344,15 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
 /// Both used to answer "not inside tmux", which sends a caller who *is* inside
 /// tmux to check the wrong thing entirely. `Server::from_env_value` already
 /// drew this line for `TMUX`, ten lines away, with a comment making the case.
-#[tokio::test]
-async fn a_malformed_pane_variable_is_not_being_outside_tmux() {
+#[test]
+fn a_malformed_pane_variable_is_not_being_outside_tmux() {
     use libtmux::ServerConfigurationErrorKind as Kind;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    server.new_session("env").await.expect("session");
+    server.new_session("env").expect("session");
 
     let absent = libtmux::Pane::from_env_value(server, None::<std::ffi::OsString>)
-        .await
         .expect_err("nothing set the variable");
     assert!(
         matches!(
@@ -1483,7 +1367,6 @@ async fn a_malformed_pane_variable_is_not_being_outside_tmux() {
 
     for wrong in ["%abc", "@0", "%-1", "#{pane_id}", ""] {
         let malformed = libtmux::Pane::from_env_value(server, Some(wrong))
-            .await
             .expect_err("the variable is set and does not name a pane");
         assert!(
             matches!(
@@ -1497,7 +1380,7 @@ async fn a_malformed_pane_variable_is_not_being_outside_tmux() {
         );
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A chooser opens in a pane, so it needs no client; a popup needs one.
@@ -1511,26 +1394,25 @@ async fn a_malformed_pane_variable_is_not_being_outside_tmux() {
 /// Asserting the return value alone cannot tell them apart -- that was the
 /// mistake this test replaces. `Ok` from `choose` was read as an empty promise
 /// until somebody looked at the pane, which is in a mode.
-#[tokio::test]
-async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
+#[test]
+fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
     use libtmux::Chooser;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("nobody").await.expect("session");
+    let session = server.new_session("nobody").expect("session");
     assert!(
-        server.clients().await.expect("clients").is_empty(),
+        server.clients().expect("clients").is_empty(),
         "nothing is attached"
     );
 
-    let mut pane = session.panes().await.expect("panes").remove(0);
+    let mut pane = session.panes().expect("panes").remove(0);
     assert!(!pane.is_in_mode(), "the pane starts in no mode");
 
     server
         .choose(Chooser::Tree, None)
-        .await
         .expect("a chooser needs no client");
-    pane.refresh().await.expect("the pane still exists");
+    pane.refresh().expect("the pane still exists");
     assert!(
         pane.is_in_mode(),
         "the chooser is open in the pane, which is what the Ok meant"
@@ -1538,11 +1420,10 @@ async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
 
     let refused = server
         .display_popup(None, "true")
-        .await
         .expect_err("a popup draws on a client and there is none");
     assert_eq!(refused.kind(), libtmux::ErrorKind::Refused);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// One dead object must answer the same way whichever call asks.
@@ -1560,33 +1441,29 @@ async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
 /// The option is set before the pane is killed. Without that, `Ok(None)` is
 /// indistinguishable from a legitimate "never set" and the test proves
 /// nothing.
-#[tokio::test]
-async fn a_dead_pane_says_so_however_the_question_is_asked() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_dead_pane_says_so_however_the_question_is_asked() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("gone").await.expect("session");
+    let session = server.new_session("gone").expect("session");
     let window = session
         .active_window()
-        .await
         .expect("windows")
         .expect("a session has a window");
     let doomed = window
         .panes()
-        .await
         .expect("panes")
         .remove(0)
         .split(SplitOptions::new(SplitDirection::Below))
-        .await
         .expect("a second pane to kill");
 
     // The positive control: the option is really set, on a pane that is really
     // there, so a later `None` cannot mean "never set".
     doomed
         .set_option("@marker", "here")
-        .await
         .expect("the user option is set");
     assert_eq!(
-        doomed.typed_option("@marker").await.expect("readable"),
+        doomed.typed_option("@marker").expect("readable"),
         Some(libtmux::OptionValue::from("here")),
     );
 
@@ -1594,16 +1471,15 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
     // through a second one taken before it.
     let asking = window
         .panes()
-        .await
         .expect("panes")
         .into_iter()
         .find(|pane| pane.id() == doomed.id())
         .expect("the doomed pane is listed");
-    doomed.kill().await.expect("the pane is killed");
+    doomed.kill().expect("the pane is killed");
     let doomed = asking;
 
     // Every route to the same fact agrees.
-    let by_capture = doomed.capture().await.expect_err("the pane is gone");
+    let by_capture = doomed.capture().expect_err("the pane is gone");
     assert!(
         by_capture.is_object_gone(),
         "capture says so: {by_capture:?}"
@@ -1611,7 +1487,6 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
 
     let by_option = doomed
         .typed_option("remain-on-exit")
-        .await
         .expect_err("the pane is gone");
     assert!(
         by_option.is_object_gone(),
@@ -1620,14 +1495,13 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
 
     let by_user_option = doomed
         .typed_option("@marker")
-        .await
         .expect_err("the pane is gone, not the option unset");
     assert!(
         by_user_option.is_object_gone(),
         "a user option must not report a gone pane as an unset option: {by_user_option:?}"
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A variable nobody set and a session that has ended are different answers.
@@ -1642,61 +1516,54 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
 ///
 /// The variable is set before the session is killed, so `Ok(None)` afterwards
 /// cannot be read as a legitimate "never set".
-#[tokio::test]
-async fn a_dead_session_is_not_an_unset_variable() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_dead_session_is_not_an_unset_variable() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     // A second session keeps the server alive once the first is killed.
-    server.new_session("keeper").await.expect("session");
-    let doomed = server.new_session("doomed").await.expect("session");
+    server.new_session("keeper").expect("session");
+    let doomed = server.new_session("doomed").expect("session");
 
     doomed
         .set_environment("FOO", "bar")
-        .await
         .expect("the variable is set");
     assert!(
-        doomed.environment("FOO").await.expect("readable").is_some(),
+        doomed.environment("FOO").expect("readable").is_some(),
         "the positive control: it really is set"
     );
     assert!(
-        doomed
-            .environment("NEVER_SET")
-            .await
-            .expect("readable")
-            .is_none(),
+        doomed.environment("NEVER_SET").expect("readable").is_none(),
         "a name tmux does not hold is still None"
     );
 
     let asking = server
         .sessions()
-        .await
         .expect("sessions")
         .into_iter()
         .find(|session| session.id() == doomed.id())
         .expect("the doomed session is listed");
-    doomed.kill().await.expect("the session is killed");
+    doomed.kill().expect("the session is killed");
 
     let refused = asking
         .environment("FOO")
-        .await
         .expect_err("the session is gone, not the variable unset");
     assert!(
         refused.is_object_gone(),
         "a gone session must not read as an unset variable: {refused:?}"
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn interactive_commands_need_a_client() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn interactive_commands_need_a_client() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    server.new_session("interactive").await.expect("session");
+    server.new_session("interactive").expect("session");
 
     // A headless server has no terminal, so commands that draw on one fail
     // loudly rather than reporting a success nobody could see.
-    assert!(server.display_panes(None).await.is_err());
+    assert!(server.display_panes(None).is_err());
     assert!(
         server
             .display_menu(
@@ -1704,13 +1571,11 @@ async fn interactive_commands_need_a_client() {
                 "menu",
                 [libtmux::MenuItem::new("Item", "i", "kill-pane")]
             )
-            .await
             .is_err(),
     );
     assert!(
         server
             .command_prompt(None, Some("question"), "kill-pane")
-            .await
             .is_err(),
     );
 
@@ -1719,59 +1584,54 @@ async fn interactive_commands_need_a_client() {
     // symmetry would suggest.
     server
         .choose(libtmux::Chooser::Tree, None)
-        .await
         .expect("tmux accepts a chooser with no client");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn retry_until_waits_for_tmux_rather_than_sleeping() {
+#[test]
+fn retry_until_waits_for_tmux_rather_than_sleeping() {
     use libtmux::test::{retry_until, scaled, unique_name};
     use std::time::Duration;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // A unique name lets concurrent tests share one server without colliding.
     let name = unique_name("retry");
-    let session = server.new_session(name.as_str()).await.expect("session");
+    let session = server.new_session(name.as_str()).expect("session");
     assert_ne!(unique_name("retry"), name);
 
     // tmux applies a split before the new pane's command has necessarily
     // execed, so wait for the state under test.
     session
         .windows()
-        .await
         .expect("windows")
         .into_iter()
         .next()
         .expect("one window")
         .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
-        .await
         .expect("pane is created");
 
-    retry_until(Duration::from_secs(5), async || {
-        session.panes().await.is_ok_and(|panes| panes.len() == 2)
+    retry_until(Duration::from_secs(5), || {
+        session.panes().is_ok_and(|panes| panes.len() == 2)
     })
-    .await
     .expect("the second pane appears");
 
     // A condition that never holds reports the deadline instead of hanging.
-    let waited = retry_until(Duration::from_millis(50), async || false)
-        .await
+    let waited = retry_until(Duration::from_millis(50), || false)
         .expect_err("a condition that never holds times out");
     assert_eq!(waited.waited(), scaled(Duration::from_millis(50)));
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_scoped_raw_command_targets_its_own_object() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_scoped_raw_command_targets_its_own_object() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let first = server.new_session("first").await.expect("first session");
-    let second = server.new_session("second").await.expect("second session");
+    let first = server.new_session("first").expect("first session");
+    let second = server.new_session("second").expect("second session");
 
     // Each handle addresses itself, not whatever tmux considers current.
     for (session, expected) in [(&first, "first"), (&second, "second")] {
@@ -1781,7 +1641,6 @@ async fn a_scoped_raw_command_targets_its_own_object() {
                     .arg("-p")
                     .arg("#{session_name}"),
             )
-            .await
             .expect("the command runs");
         assert_eq!(named.stdout_lossy().trim(), expected);
     }
@@ -1792,12 +1651,10 @@ async fn a_scoped_raw_command_targets_its_own_object() {
     // through the handle puts `-t` where tmux still reads it.
     let window = second
         .active_window()
-        .await
         .expect("active window")
         .expect("a session has a window");
     let pane = window
         .active_pane()
-        .await
         .expect("active pane")
         .expect("a window has a pane");
 
@@ -1807,30 +1664,27 @@ async fn a_scoped_raw_command_targets_its_own_object() {
             .arg("echo scoped")
             .arg("Enter"),
     )
-    .await
     .expect("keys are sent");
 
-    let seen = retry_until(Duration::from_secs(5), async || {
-        pane.capture().await.is_ok_and(|lines| {
+    let seen = retry_until(Duration::from_secs(5), || {
+        pane.capture().is_ok_and(|lines| {
             lines
                 .iter()
                 .any(|line| String::from_utf8_lossy(line.as_bytes()).contains("scoped"))
         })
-    })
-    .await;
+    });
     assert!(seen.is_ok(), "the keys reached this pane, not another");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn formatting_returns_text_and_displaying_returns_nothing() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn formatting_returns_text_and_displaying_returns_nothing() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("split").await.expect("session");
+    let session = server.new_session("split").expect("session");
     let window = session
         .active_window()
-        .await
         .expect("active window")
         .expect("a session has a window");
 
@@ -1839,7 +1693,6 @@ async fn formatting_returns_text_and_displaying_returns_nothing() {
     assert_eq!(
         session
             .format("#{session_name}")
-            .await
             .expect("format")
             .to_string_lossy(),
         "split",
@@ -1847,7 +1700,6 @@ async fn formatting_returns_text_and_displaying_returns_nothing() {
     assert_eq!(
         window
             .format("#{window_id}")
-            .await
             .expect("format")
             .to_string_lossy(),
         window.id().to_string(),
@@ -1858,7 +1710,6 @@ async fn formatting_returns_text_and_displaying_returns_nothing() {
     assert!(
         session
             .format("#{?0,yes,}")
-            .await
             .expect("format")
             .as_bytes()
             .is_empty(),
@@ -1868,26 +1719,22 @@ async fn formatting_returns_text_and_displaying_returns_nothing() {
     // headless server shows the message to no one, which is not a failure.
     let pane = window
         .active_pane()
-        .await
         .expect("active pane")
         .expect("a window has a pane");
     assert_eq!(
-        pane.format("#{pane_id}")
-            .await
-            .expect("format")
-            .to_string_lossy(),
+        pane.format("#{pane_id}").expect("format").to_string_lossy(),
         pane.id().to_string(),
     );
 
-    session.display("hello").await.expect("display");
-    window.display("hello").await.expect("display");
-    pane.display("hello").await.expect("display");
+    session.display("hello").expect("display");
+    window.display("hello").expect("display");
+    pane.display("hello").expect("display");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_capability_too_new_for_this_tmux_is_refused_rather_than_ignored() {
+#[test]
+fn a_capability_too_new_for_this_tmux_is_refused_rather_than_ignored() {
     // Follows the compat suite's convention: `LIBTMUX_TEST_TMUX` points this
     // at one release of the version matrix, so the same assertion runs across
     // every supported tmux rather than only whichever is on PATH.
@@ -1895,12 +1742,11 @@ async fn a_capability_too_new_for_this_tmux_is_refused_rather_than_ignored() {
     if let Some(executable) = std::env::var_os("LIBTMUX_TEST_TMUX") {
         builder = builder.tmux_executable(executable);
     }
-    let guard = builder.start().await.expect("tmux starts");
+    let guard = builder.start().expect("tmux starts");
     let server = guard.server();
 
     let version = server
         .capabilities()
-        .await
         .expect("capabilities")
         .tmux_version()
         .clone();
@@ -1908,7 +1754,7 @@ async fn a_capability_too_new_for_this_tmux_is_refused_rather_than_ignored() {
         *release >= libtmux::ReleaseVersion::new(3, 3, libtmux::ReleaseSuffix::FINAL)
     });
 
-    let answer = server.prompt_history(libtmux::PromptKind::Command).await;
+    let answer = server.prompt_history(libtmux::PromptKind::Command);
     if supported {
         // Nothing has answered a prompt on a fresh server, so the history is
         // empty rather than absent.
@@ -1925,21 +1771,20 @@ async fn a_capability_too_new_for_this_tmux_is_refused_rather_than_ignored() {
         );
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
+#[test]
+fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
     let mut builder = TestServer::builder();
     if let Some(executable) = std::env::var_os("LIBTMUX_TEST_TMUX") {
         builder = builder.tmux_executable(executable);
     }
-    let guard = builder.start().await.expect("tmux starts");
+    let guard = builder.start().expect("tmux starts");
     let server = guard.server();
 
     let supported = server
         .capabilities()
-        .await
         .expect("capabilities")
         .tmux_version()
         .release()
@@ -1950,17 +1795,16 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
         assert_eq!(
             server
                 .access_rules()
-                .await
                 .expect_err("an older tmux has no access list")
                 .kind(),
             libtmux::ErrorKind::UnsupportedVersion,
         );
-        guard.shutdown().await.expect("tmux fixture shuts down");
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     }
 
     // Whoever started the server owns it, and an owner may always act.
-    let rules = server.access_rules().await.expect("access list");
+    let rules = server.access_rules().expect("access list");
     let owner = rules.first().expect("the owner is listed");
     assert_eq!(rules.len(), 1);
     assert_eq!(owner.mode(), libtmux::AccessMode::Write);
@@ -1971,10 +1815,8 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
     // itself out of the server it just started.
     let user = owner.name().to_owned();
     for attempt in [
-        server
-            .grant_access(&user, libtmux::AccessMode::ReadOnly)
-            .await,
-        server.revoke_access(&user).await,
+        server.grant_access(&user, libtmux::AccessMode::ReadOnly),
+        server.revoke_access(&user),
     ] {
         let error = attempt.expect_err("tmux refuses to change the owner");
         assert!(
@@ -1984,33 +1826,32 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
     }
 
     // And the list is unchanged by the refusals.
-    assert_eq!(server.access_rules().await.expect("access list"), rules);
+    assert_eq!(server.access_rules().expect("access list"), rules);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Prompt marks come from the shell, so a shell that emits none is the case
 /// most callers meet: bash and zsh do not without shell integration, fish
 /// does. An unmarked capture is an answer about the shell, not a failure.
-#[tokio::test]
-async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_them() {
+#[test]
+fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_them() {
     use libtmux::{CaptureOptions, since};
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("prompts").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("prompts").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     let supported = server
         .capabilities()
-        .await
         .expect("capabilities")
         .tmux_version()
         .has_behavior(&since::CAPTURE_LINE_FLAGS);
 
     if !supported {
         // Below 3.7 tmux accepts no `-F`, and saying so beats an empty answer.
-        let refused = pane.capture_lines(CaptureOptions::visible()).await;
+        let refused = pane.capture_lines(CaptureOptions::visible());
         assert!(
             matches!(
                 refused.as_ref().map_err(libtmux::Error::kind),
@@ -2018,7 +1859,7 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
             ),
             "an older tmux reports the version rather than returning nothing: {refused:?}",
         );
-        guard.shutdown().await.expect("tmux fixture shuts down");
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     }
 
@@ -2027,14 +1868,12 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
     pane.send_keys(
         r"printf '\033]133;A\007'; echo THE-PROMPT; printf '\033]133;C\007'; echo the-output",
     )
-    .await
     .expect("keys are sent");
-    pane.send_key_names(["Enter"]).await.expect("Enter is sent");
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    pane.send_key_names(["Enter"]).expect("Enter is sent");
+    std::thread::sleep(Duration::from_millis(600));
 
     let lines = pane
         .capture_lines(CaptureOptions::history())
-        .await
         .expect("the capture succeeds");
 
     let prompt = lines
@@ -2062,7 +1901,7 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
         "no line keeps tmux's flag column in its text",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A client stopped in place is not a client that went away.
@@ -2077,8 +1916,8 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
 /// suspending a client stops its process and a crate-held connection would
 /// then be one this test cannot take down. A child it owns can be killed
 /// outright, stopped or not.
-#[tokio::test]
-async fn a_suspended_client_is_not_reported_gone() {
+#[test]
+fn a_suspended_client_is_not_reported_gone() {
     use libtmux::since;
     use std::process;
 
@@ -2092,13 +1931,12 @@ async fn a_suspended_client_is_not_reported_gone() {
         }
     }
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("suspendable").await.expect("session");
+    let session = server.new_session("suspendable").expect("session");
 
     let hides_stopped = server
         .capabilities()
-        .await
         .expect("capabilities")
         .tmux_version()
         .has_behavior(&since::CLIENTS_HIDE_STOPPED);
@@ -2117,48 +1955,37 @@ async fn a_suspended_client_is_not_reported_gone() {
         .expect("a control-mode client attaches");
     let _client_process = KillOnDrop(child);
 
-    retry_until(Duration::from_secs(10), async || {
-        server
-            .clients()
-            .await
-            .is_ok_and(|clients| !clients.is_empty())
+    retry_until(Duration::from_secs(10), || {
+        server.clients().is_ok_and(|clients| !clients.is_empty())
     })
-    .await
     .expect("the attached client is listed");
 
-    let client = server.clients().await.expect("clients").remove(0);
-    client.suspend().await.expect("the client suspends");
+    let client = server.clients().expect("clients").remove(0);
+    client.suspend().expect("the client suspends");
 
     if !hides_stopped {
         // Before 3.7 the listing screens on the session alone, and suspending
         // never clears that, so the client stays listed and reads back with
         // no miss path to take. Asserted rather than skipped: the fix must
         // not have invented an error on a release that has no problem.
-        let same = client
-            .refreshed()
-            .await
-            .expect("the client is still listed");
+        let same = client.refreshed().expect("the client is still listed");
         assert_eq!(same.name(), client.name());
         assert!(
-            !server.clients().await.expect("clients").is_empty(),
+            !server.clients().expect("clients").is_empty(),
             "an older tmux lists a suspended client",
         );
-        guard.shutdown().await.expect("tmux fixture shuts down");
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     }
 
     // Leaving the listing is the condition that used to read as gone, so the
     // test asserts it happened rather than assuming the command took effect.
-    retry_until(Duration::from_secs(10), async || {
-        server
-            .clients()
-            .await
-            .is_ok_and(|clients| clients.is_empty())
+    retry_until(Duration::from_secs(10), || {
+        server.clients().is_ok_and(|clients| clients.is_empty())
     })
-    .await
     .expect("the suspended client leaves the listing");
 
-    let Err(error) = client.refreshed().await else {
+    let Err(error) = client.refreshed() else {
         panic!("the suspended client is not in the listing to be found")
     };
     assert!(
@@ -2179,7 +2006,7 @@ async fn a_suspended_client_is_not_reported_gone() {
     // flag, but the session stops reporting it, so nothing in the listing
     // surface distinguishes this from a client that left.
     assert!(
-        !session.refreshed().await.expect("session").is_attached(),
+        !session.refreshed().expect("session").is_attached(),
         "a suspended client stops counting toward its session",
     );
 }
@@ -2190,8 +2017,8 @@ async fn a_suspended_client_is_not_reported_gone() {
 /// passed it, so every capture normalised away whatever a program printed at
 /// a line's end. A caller asserting on exact pane content had to drop to the
 /// untyped API and read bytes.
-#[tokio::test]
-async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
+#[test]
+fn a_capture_can_keep_the_spaces_tmux_would_trim() {
     use libtmux::CaptureOptions;
 
     fn printed(lines: Vec<libtmux::TmuxText>) -> String {
@@ -2202,7 +2029,7 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
             .expect("the printed line is captured")
     }
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     // Printing is the pane's initial command; prompt readiness is not part of
     // this capture assertion.
@@ -2210,22 +2037,18 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
         .new_session(
             libtmux::NewSessionOptions::new("trailing").command("printf 'AB   \\n'; exec /bin/sh"),
         )
-        .await
         .expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let pane = session.panes().expect("panes").remove(0);
 
-    retry_until(Duration::from_secs(10), async || {
+    retry_until(Duration::from_secs(10), || {
         pane.capture()
-            .await
             .is_ok_and(|lines| lines.iter().any(|l| l.to_string_lossy().starts_with("AB")))
     })
-    .await
     .expect("the pane prints");
 
-    let trimmed = printed(pane.capture().await.expect("default capture"));
+    let trimmed = printed(pane.capture().expect("default capture"));
     let exact = printed(
         pane.capture_with(CaptureOptions::visible().trailing_spaces())
-            .await
             .expect("capture keeping trailing spaces"),
     );
 
@@ -2239,7 +2062,7 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
         "the exact capture is longer: {exact:?} vs {trimmed:?}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// `capture-pane -T` arrived in 3.4, and the crate refuses it below that.
@@ -2247,25 +2070,22 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
 /// Asserted on both sides rather than skipped: a capability check that is
 /// never exercised on the releases producing the refusal is a branch nothing
 /// runs. `just compat` puts 3.2a below the boundary and four releases above.
-#[tokio::test]
-async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
+#[test]
+fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
     use libtmux::{CaptureOptions, since};
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("blankcells").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("blankcells").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     let supported = server
         .capabilities()
-        .await
         .expect("capabilities")
         .tmux_version()
         .has_behavior(&since::CAPTURE_TRIM_BLANK_CELLS);
 
-    let asked = pane
-        .capture_with(CaptureOptions::visible().trim_blank_cells())
-        .await;
+    let asked = pane.capture_with(CaptureOptions::visible().trim_blank_cells());
 
     if supported {
         asked.expect("3.4 and later accept -T");
@@ -2283,13 +2103,11 @@ async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
     // `-N` and `-P` are present at the supported floor, so neither is gated
     // and both must work on every release the lanes build.
     pane.capture_with(CaptureOptions::visible().trailing_spaces())
-        .await
         .expect("-N works on every supported release");
     pane.capture_with(CaptureOptions::visible().pending_escape())
-        .await
         .expect("-P works on every supported release");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Waiting answers without a feature, and survives the two shapes that made a
@@ -2299,26 +2117,24 @@ async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
 /// line wider than the pane into several. Both report success with the wrong
 /// content, which is the direction that costs a caller most, so both are
 /// asserted rather than assumed.
-#[tokio::test]
-async fn waiting_survives_scrollback_and_a_line_wider_than_the_pane() {
+#[test]
+fn waiting_survives_scrollback_and_a_line_wider_than_the_pane() {
     use libtmux::PaneWait;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("waits").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("waits").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     // Wider than any sane pane, so tmux wraps it. A screen read would see
     // several lines and never match a needle spanning the wrap.
     let wide = "W".repeat(400);
     pane.send_keys(format!("printf '{wide}\\n'"))
-        .await
         .expect("keys are sent");
-    pane.send_key_names(["Enter"]).await.expect("it runs");
+    pane.send_key_names(["Enter"]).expect("it runs");
 
     assert_eq!(
         pane.wait_for_text(&wide, Duration::from_secs(10))
-            .await
             .expect("waiting is not an error"),
         PaneWait::Arrived,
         "a line wider than the pane is matched across its wrap",
@@ -2327,12 +2143,11 @@ async fn waiting_survives_scrollback_and_a_line_wider_than_the_pane() {
     // Push the wide line off the visible screen. A screen read would now
     // report it absent; the scrollback still holds it.
     for _ in 0..60 {
-        pane.send_keys("printf 'filler\\n'").await.expect("keys");
-        pane.send_key_names(["Enter"]).await.expect("it runs");
+        pane.send_keys("printf 'filler\\n'").expect("keys");
+        pane.send_key_names(["Enter"]).expect("it runs");
     }
     assert_eq!(
         pane.wait_for_text(&wide, Duration::from_secs(10))
-            .await
             .expect("waiting is not an error"),
         PaneWait::Arrived,
         "text that scrolled off the screen is still found",
@@ -2341,22 +2156,21 @@ async fn waiting_survives_scrollback_and_a_line_wider_than_the_pane() {
     // Running out of time is an outcome, not an error.
     assert_eq!(
         pane.wait_for_text("nothing prints this", Duration::from_millis(400))
-            .await
             .expect("a deadline is not an error"),
         PaneWait::TimedOut,
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A pane whose process ended stops the wait instead of holding the deadline.
-#[tokio::test]
-async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
+#[test]
+fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
     use libtmux::{NewWindowOptions, PaneWait};
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("dying").await.expect("session");
+    let session = server.new_session("dying").expect("session");
 
     // `remain-on-exit` keeps the pane after its command ends, so the wait has
     // a dead pane to observe rather than a missing one.
@@ -2367,18 +2181,15 @@ async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
                 .arg("remain-on-exit")
                 .arg("on"),
         )
-        .await
         .expect("panes remain after exit");
     let window = session
         .new_window(NewWindowOptions::new("shortlived").command("true"))
-        .await
         .expect("window");
-    let pane = window.panes().await.expect("panes").remove(0);
+    let pane = window.panes().expect("panes").remove(0);
 
     let started = std::time::Instant::now();
     let outcome = pane
         .wait_for_text("never printed", Duration::from_secs(20))
-        .await
         .expect("waiting is not an error");
     let waited = started.elapsed();
 
@@ -2388,41 +2199,42 @@ async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
         "a dead pane ends the wait early rather than at the deadline: {waited:?}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A predicate wait sees whole lines, answers when they satisfy it, and holds
 /// an unmet one to the deadline rather than past or short of it.
-#[tokio::test]
-async fn a_predicate_wait_arrives_or_runs_to_its_deadline() {
+#[test]
+fn a_predicate_wait_arrives_or_runs_to_its_deadline() {
     use libtmux::PaneWait;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("predicate").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("predicate").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     // Wider than the pane, so equality holds only if the wrap is joined; and
     // the echoed command contains the text without being equal to it.
     let wide = "P".repeat(300);
     pane.send_line(format!("printf '%s\\n' {wide} {wide}"))
-        .await
         .expect("keys are sent");
     let outcome = pane
         .wait_until(Duration::from_secs(10), |lines| {
             lines.iter().filter(|line| **line == *wide).count() == 2
         })
-        .await
         .expect("waiting is not an error");
     assert_eq!(outcome, PaneWait::Arrived, "both printed lines were seen");
 
     let within = Duration::from_millis(400);
     let started = std::time::Instant::now();
-    let outcome = tokio::time::timeout(
-        within * 10,
-        pane.wait_until(within, |lines| lines.iter().any(|line| *line == "absent")),
-    )
-    .await
+    let (bounded, token) = common::cancellable(server);
+    let observed = bounded
+        .pane_by_id(pane.id())
+        .expect("pane lookup")
+        .expect("pane exists");
+    let outcome = common::with_deadline(token, within * 10, || {
+        observed.wait_until(within, |lines| lines.iter().any(|line| *line == "absent"))
+    })
     .expect("an unmet wait ends near its deadline, not long after it")
     .expect("a deadline is not an error");
     let waited = started.elapsed();
@@ -2433,17 +2245,17 @@ async fn a_predicate_wait_arrives_or_runs_to_its_deadline() {
         "an unmet wait answers at its deadline, not before: {waited:?}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A predicate wait on a dead pane ends early, as `wait_for_text` does.
-#[tokio::test]
-async fn a_predicate_wait_ends_when_the_pane_dies() {
+#[test]
+fn a_predicate_wait_ends_when_the_pane_dies() {
     use libtmux::PaneWait;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("dying").await.expect("session");
+    let session = server.new_session("dying").expect("session");
     server
         .cmd(
             Command::new("set-option")
@@ -2451,18 +2263,15 @@ async fn a_predicate_wait_ends_when_the_pane_dies() {
                 .arg("remain-on-exit")
                 .arg("on"),
         )
-        .await
         .expect("panes remain after exit");
     let window = session
         .new_window(NewWindowOptions::new("shortlived").command("true"))
-        .await
         .expect("window");
-    let pane = window.panes().await.expect("panes").remove(0);
+    let pane = window.panes().expect("panes").remove(0);
 
     let started = std::time::Instant::now();
     let outcome = pane
         .wait_until(Duration::from_secs(20), |_| false)
-        .await
         .expect("waiting is not an error");
     let waited = started.elapsed();
 
@@ -2472,7 +2281,7 @@ async fn a_predicate_wait_ends_when_the_pane_dies() {
         "a dead pane ends the wait early rather than at the deadline: {waited:?}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A pane reached over a control connection waits over that connection.
@@ -2480,37 +2289,33 @@ async fn a_predicate_wait_ends_when_the_pane_dies() {
 /// A look is a two-command chain, so this is the path where it has to travel
 /// as one control-mode line and come back as one block.
 #[cfg(feature = "control-mode")]
-#[tokio::test]
-async fn a_predicate_wait_runs_over_a_control_connection() {
+#[test]
+fn a_predicate_wait_runs_over_a_control_connection() {
     use libtmux::PaneWait;
     use libtmux::control::ControlMode;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard.server().new_session("routed").await.expect("session");
+    let guard = TestServer::builder().start().expect("tmux starts");
+    let session = guard.server().new_session("routed").expect("session");
     let (sender, events) = ControlMode::attach(guard.server(), session.id())
-        .await
         .expect("a control connection")
         .split();
     let routed = guard
         .server()
         .over_control_mode(&sender)
-        .await
         .expect("a routed handle");
-    let pane = routed.panes().await.expect("panes").remove(0);
+    let pane = routed.panes().expect("panes").remove(0);
 
     pane.send_line("printf 'ROUTED-%s\\n' 1")
-        .await
         .expect("keys are sent");
     let outcome = pane
         .wait_until(Duration::from_secs(10), |lines| {
             lines.iter().any(|line| *line == "ROUTED-1")
         })
-        .await
         .expect("waiting is not an error");
     assert_eq!(outcome, PaneWait::Arrived);
 
-    events.shutdown().await.expect("the connection closes");
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    events.shutdown().expect("the connection closes");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A quiet shorter than the polling interval costs one interval anyway.
@@ -2519,21 +2324,20 @@ async fn a_predicate_wait_runs_over_a_control_connection() {
 /// it can observe is the gap between two of them. Both waits document that
 /// gap as 120ms, and a number in prose is only as good as what fails when it
 /// moves: shortening `POLL_INTERVAL` without saying so fails here.
-#[tokio::test]
-async fn a_quiet_below_the_polling_interval_still_costs_one() {
+#[test]
+fn a_quiet_below_the_polling_interval_still_costs_one() {
     use libtmux::PaneWait;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("settling").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
+    let session = server.new_session("settling").expect("session");
+    let pane = session.panes().expect("panes").remove(0);
 
     // Nothing is dispatched, so what this times is the floor the interval puts
     // under a shorter request rather than any work the pane is doing.
     let started = std::time::Instant::now();
     let settled = pane
         .wait_for_quiet(Duration::from_millis(5), Duration::from_secs(20))
-        .await
         .expect("waiting is not an error");
     let waited = started.elapsed();
 
@@ -2543,7 +2347,7 @@ async fn a_quiet_below_the_polling_interval_still_costs_one() {
         "a 5ms quiet cannot be seen sooner than the 120ms interval: {waited:?}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Breaking out the only pane relinks its window instead of doing nothing.
@@ -2551,28 +2355,26 @@ async fn a_quiet_below_the_polling_interval_still_costs_one() {
 /// tmux takes the command, and `cmd-break-pane.c` links the window at a free
 /// index rather than refusing. The documentation said it did nothing, which
 /// left a caller holding a window whose index had silently moved.
-#[tokio::test]
-async fn breaking_out_the_only_pane_moves_its_window() {
+#[test]
+fn breaking_out_the_only_pane_moves_its_window() {
     use libtmux::NewWindowOptions;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("lonely").await.expect("session");
+    let session = server.new_session("lonely").expect("session");
     let window = session
         .new_window(NewWindowOptions::new("lone"))
-        .await
         .expect("window");
-    let pane = window.panes().await.expect("panes").remove(0);
+    let pane = window.panes().expect("panes").remove(0);
 
-    assert_eq!(window.panes().await.expect("panes").len(), 1, "one pane");
+    assert_eq!(window.panes().expect("panes").len(), 1, "one pane");
     let before = window.index();
     let window_id = window.id().clone();
 
-    pane.break_out().await.expect("tmux accepts the command");
+    pane.break_out().expect("tmux accepts the command");
 
     let after = window
         .refreshed()
-        .await
         .expect("the window is still there, by id");
     assert_eq!(after.id(), &window_id, "the window keeps its identity");
     assert_ne!(
@@ -2581,7 +2383,7 @@ async fn breaking_out_the_only_pane_moves_its_window() {
         "the window moved to a free index rather than nothing happening",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A handle whose index moved must not act on whatever took the slot.
@@ -2591,26 +2393,25 @@ async fn breaking_out_the_only_pane_moves_its_window() {
 /// index that now belongs to a different live window. tmux answers such a
 /// target without complaint, so an index-scoped command reports success on the
 /// wrong object.
-#[tokio::test]
-async fn a_window_acts_on_itself_after_its_index_moved() {
+#[test]
+fn a_window_acts_on_itself_after_its_index_moved() {
     use libtmux::NewWindowOptions;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("renumber").await.expect("session");
+    let session = server.new_session("renumber").expect("session");
 
     let mut moved = session
         .new_window(NewWindowOptions::new("moved"))
-        .await
         .expect("window");
     let moved_id = moved.id().clone();
     let cached = moved.index();
 
     // Breaking out its only pane relinks the window at a free index.
-    let pane = moved.panes().await.expect("panes").remove(0);
-    pane.break_out().await.expect("tmux accepts the command");
+    let pane = moved.panes().expect("panes").remove(0);
+    pane.break_out().expect("tmux accepts the command");
 
-    let after = moved.refreshed().await.expect("the window still exists");
+    let after = moved.refreshed().expect("the window still exists");
     assert_ne!(after.index(), cached, "the window moved");
 
     // Put a window in the slot the handle still remembers. This is what
@@ -2618,17 +2419,15 @@ async fn a_window_acts_on_itself_after_its_index_moved() {
     // occupied one answers about somebody else.
     let intruder = session
         .new_window(NewWindowOptions::new("intruder").index(cached))
-        .await
         .expect("a window takes the vacated slot");
     let intruder_id = intruder.id().clone();
     assert_eq!(intruder.index(), cached, "the slot is occupied again");
     assert_ne!(intruder_id, moved_id, "by a different window");
 
     // Selecting through the stale handle must reach the handle's own window.
-    moved.select().await.expect("select succeeds");
+    moved.select().expect("select succeeds");
     let active = session
         .active_window()
-        .await
         .expect("active window")
         .expect("a session always has one");
     assert_eq!(
@@ -2642,24 +2441,24 @@ async fn a_window_acts_on_itself_after_its_index_moved() {
         "and not on the window occupying its old index",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_name_outside_ascii_survives_the_listing() {
+#[test]
+fn a_name_outside_ascii_survives_the_listing() {
     // tmux replaces every byte outside `0x20..=0x7e` with `_` unless it
     // believes its client speaks UTF-8, and it decides that from the client
     // process's own `TMUX` and locale variables. This crate unsets `TMUX` and
     // inherits whatever locale its caller had, so without saying so directly
     // this name comes back as six underscores and no error.
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    let session = server.new_session("日本語").await.expect("session");
+    let session = server.new_session("日本語").expect("session");
     assert_eq!(session.name().as_bytes(), "日本語".as_bytes());
 
-    let listed = server.sessions().await.expect("sessions");
+    let listed = server.sessions().expect("sessions");
     assert_eq!(listed[0].name().as_bytes(), "日本語".as_bytes());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }

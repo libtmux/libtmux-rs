@@ -10,12 +10,12 @@ use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::test::TestServer;
 use libtmux::{Command, Server, TmuxText};
 
-async fn run(server: &Server, command: Command) {
-    let result = server.cmd(command).await.expect("setup command executes");
+fn run(server: &Server, command: Command) {
+    let result = server.cmd(command).expect("setup command executes");
     assert!(result.success(), "setup command succeeds");
 }
 
-async fn new_session(server: &Server, name: &str) {
+fn new_session(server: &Server, name: &str) {
     run(
         server,
         Command::new("new-session")
@@ -28,20 +28,19 @@ async fn new_session(server: &Server, name: &str) {
             // and bash exec, dash forks and reports `sh`. The assertion below
             // reads the running command, so it says which it wants.
             .arg("exec sleep 300"),
-    )
-    .await;
+    );
 }
 
-#[tokio::test]
-async fn a_typed_expression_filters_the_handles_a_listing_returned() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_typed_expression_filters_the_handles_a_listing_returned() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     for name in ["build", "build-docs", "test"] {
-        new_session(server, name).await;
+        new_session(server, name);
     }
 
-    let sessions = server.sessions().await.expect("sessions list");
+    let sessions = server.sessions().expect("sessions list");
     let fields = libtmux::Session::filter_fields();
 
     // Native iteration remains the floor: a closure needs no expression.
@@ -95,15 +94,15 @@ async fn a_typed_expression_filters_the_handles_a_listing_returned() {
         1
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn every_hierarchy_handle_is_filterable() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn every_hierarchy_handle_is_filterable() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "work").await;
+    new_session(server, "work");
     run(
         server,
         Command::new("split-window")
@@ -116,10 +115,9 @@ async fn every_hierarchy_handle_is_filterable() {
             // and bash exec, dash forks and reports `sh`. The assertion below
             // reads the running command, so it says which it wants.
             .arg("exec sleep 300"),
-    )
-    .await;
+    );
 
-    let windows = server.windows().await.expect("windows list");
+    let windows = server.windows().expect("windows list");
     let window_fields = libtmux::Window::filter_fields();
     assert_eq!(
         windows
@@ -135,8 +133,7 @@ async fn every_hierarchy_handle_is_filterable() {
     let running_sleep = pane_fields.pane_current_command.contains("sleep");
     let panes = poll_until(server, |panes| {
         panes.iter().matching(&running_sleep).count() == 2
-    })
-    .await;
+    });
     let active = panes
         .iter()
         .matching(&pane_fields.pane_active.eq(true))
@@ -148,17 +145,14 @@ async fn every_hierarchy_handle_is_filterable() {
     // expressible predicates are the ones the field type allows.
     assert_eq!(panes.iter().matching(&running_sleep).count(), 2);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Re-list panes until a predicate holds, or fail at the deadline.
-async fn poll_until(
-    server: &Server,
-    ready: impl Fn(&[libtmux::Pane]) -> bool,
-) -> Vec<libtmux::Pane> {
+fn poll_until(server: &Server, ready: impl Fn(&[libtmux::Pane]) -> bool) -> Vec<libtmux::Pane> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let panes = server.panes().await.expect("panes list");
+        let panes = server.panes().expect("panes list");
         if ready(&panes) {
             return panes;
         }
@@ -166,22 +160,22 @@ async fn poll_until(
             std::time::Instant::now() < deadline,
             "panes did not reach the expected state before the deadline",
         );
-        tokio::task::yield_now().await;
+        std::thread::yield_now();
     }
 }
 
-#[tokio::test]
-async fn a_filter_expression_is_inert_and_reusable() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_filter_expression_is_inert_and_reusable() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "alpha").await;
+    new_session(server, "alpha");
     let fields = libtmux::Session::filter_fields();
     let expression = fields.session_name.eq("alpha");
 
     // The expression holds no connection and no snapshot, so it applies before
     // and after the state it describes changes.
-    let before = server.sessions().await.expect("sessions list");
+    let before = server.sessions().expect("sessions list");
     assert_eq!(before.iter().matching(&expression).count(), 1);
 
     run(
@@ -190,26 +184,24 @@ async fn a_filter_expression_is_inert_and_reusable() {
             .arg("-t")
             .arg("alpha")
             .arg("renamed"),
-    )
-    .await;
+    );
 
-    let after = server.sessions().await.expect("sessions list");
+    let after = server.sessions().expect("sessions list");
     assert_eq!(after.iter().matching(&expression).count(), 0);
     // The original snapshot is unchanged, so the same expression still matches.
     assert_eq!(before.iter().matching(&expression).count(), 1);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("searched").await.expect("session");
+    let session = server.new_session("searched").expect("session");
     for name in ["build", "build-docs", "test"] {
         session
             .new_window(libtmux::NewWindowOptions::new(name))
-            .await
             .expect("window");
     }
 
@@ -218,15 +210,13 @@ async fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
     // The expression decides, and it is the same one a listing takes: the
     // search is the listing plus the filter, not a second query language.
     let building = session
-        .search_windows(&fields.window_name.starts_with("build"))
-        .await
+        .search_windows(fields.window_name.starts_with("build"))
         .expect("search");
     assert_eq!(building.len(), 2);
 
     // A matcher nothing satisfies is an empty answer, not a failure.
     let none = session
-        .search_windows(&fields.window_name.eq("absent"))
-        .await
+        .search_windows(fields.window_name.eq("absent"))
         .expect("search");
     assert!(none.is_empty());
 
@@ -234,12 +224,11 @@ async fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
     // the listing itself fails, which is what the pair exists to distinguish.
     assert_eq!(
         session
-            .search_windows(&fields.window_name.starts_with("build"))
-            .await
+            .search_windows(fields.window_name.starts_with("build"))
             .unwrap_or_default()
             .len(),
         building.len(),
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }

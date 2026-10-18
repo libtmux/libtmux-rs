@@ -1,12 +1,12 @@
 //! One workload, every execution mode, side by side.
 //!
-//! The same plan runs six ways. What changes is the price and what the run
+//! The same plan runs five ways. What changes is the price and what the run
 //! can prove; what does not change is the tmux state it leaves or the query
 //! that reads it back. Run it with:
 //!
 //! ```console
-//! $ cargo run --example matrix \
-//!     --features plan,control-mode,blocking,test-support,query
+//! $ cargo run -p libtmux --example matrix \
+//!     --features plan,control-mode,test-support,query
 //! ```
 //!
 //! The `processes` column is counted, not asserted: every tmux the example
@@ -19,12 +19,12 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use libtmux::Server;
 use libtmux::plan::{
     Attribution, NewSession, NewWindow, Outcome, Plan, Planner, SelectPane, SendKeys, SetOption,
 };
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::test::{TestServer, TestServerBuilder};
-use libtmux::{Server, blocking};
 
 /// One row of the comparison.
 struct Row {
@@ -122,19 +122,18 @@ fn workload(name: &str) -> Plan {
 ///
 /// This is the "query output" column: if a mode changed what was built, this
 /// is where it would show.
-async fn query(server: &Server, session: &str) -> String {
+fn query(server: &Server, session: &str) -> String {
     // Scoped to the session the workload built: the control-mode rows need a
     // session of their own to attach to, and counting the whole server would
     // compare that fixture rather than the work.
     let session = server
         .session(session)
-        .await
         .expect("the session is readable")
         .expect("the workload built its session");
-    let windows = session.windows().await.expect("windows list");
+    let windows = session.windows().expect("windows list");
     let mut panes = Vec::new();
     for window in &windows {
-        panes.extend(window.panes().await.expect("panes list"));
+        panes.extend(window.panes().expect("panes list"));
     }
 
     let fields = libtmux::Pane::filter_fields();
@@ -160,15 +159,15 @@ fn fidelity(outcomes: impl IntoIterator<Item = Outcome>, attribution: Attributio
     }
 }
 
-async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row {
+fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row {
     let witness = Witness::new();
-    let guard = witness.server().start().await.expect("tmux starts");
+    let guard = witness.server().start().expect("tmux starts");
     let server = guard.server();
 
     let plan = workload(name);
     let before = witness.started();
     let started = Instant::now();
-    let result = plan.run(server, planner).await.expect("the plan runs");
+    let result = plan.run(server, planner).expect("the plan runs");
     let elapsed = started.elapsed();
     let processes = witness.started() - before;
 
@@ -196,10 +195,10 @@ async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row
                 .map(libtmux::plan::OperationReport::outcome),
             attribution,
         ),
-        query: query(server, name).await,
+        query: query(server, name),
     };
 
-    guard.shutdown().await.expect("tmux shuts down");
+    guard.shutdown().expect("tmux shuts down");
     row
 }
 
@@ -213,24 +212,20 @@ enum Connection {
     Routed,
 }
 
-async fn run_control_mode(connection: Connection, name: &str) -> Row {
+fn run_control_mode(connection: Connection, name: &str) -> Row {
     let witness = Witness::new();
-    let guard = witness.server().start().await.expect("tmux starts");
+    let guard = witness.server().start().expect("tmux starts");
     let server = guard.server();
 
     // Control mode attaches to a session, so the plan cannot be the thing that
     // creates its own connection. One session is made first; the workload then
     // builds its own beside it.
-    let host = server
-        .new_session("control-host")
-        .await
-        .expect("host session");
+    let host = server.new_session("control-host").expect("host session");
 
     // Counted from here, so the connection's own process is in the row.
     let before = witness.started();
-    let control = libtmux::control::ControlMode::attach(server, host.id())
-        .await
-        .expect("control mode attaches");
+    let control =
+        libtmux::control::ControlMode::attach(server, host.id()).expect("control mode attaches");
     let (sender, events) = control.split();
 
     let plan = workload(name);
@@ -238,16 +233,15 @@ async fn run_control_mode(connection: Connection, name: &str) -> Row {
     let (mode, result) = match connection {
         Connection::Streaming => (
             "control-mode/streaming",
-            plan.run_over_control_mode(&sender).await,
+            plan.run_over_control_mode(&sender),
         ),
         Connection::Routed => {
             let routed = server
                 .over_control_mode(&sender)
-                .await
                 .expect("the connection reaches this server");
             (
                 "control-mode/routed",
-                plan.run(&routed, Planner::Sequential).await,
+                plan.run(&routed, Planner::Sequential),
             )
         }
     };
@@ -268,39 +262,22 @@ async fn run_control_mode(connection: Connection, name: &str) -> Row {
                 .map(libtmux::plan::OperationReport::outcome),
             Attribution::PerCommand,
         ),
-        query: query(server, name).await,
+        query: query(server, name),
     };
 
-    events.shutdown().await.expect("control mode shuts down");
-    guard.shutdown().await.expect("tmux shuts down");
+    events.shutdown().expect("control mode shuts down");
+    guard.shutdown().expect("tmux shuts down");
     row
 }
 
-fn run_blocking(name: &str) -> Row {
-    let runtime = blocking::Runtime::new().expect("a runtime");
-    runtime.run(run_subprocess(
-        "blocking/sequential",
-        Planner::Sequential,
-        name,
-    ))
-}
-
-#[tokio::main]
-async fn main() {
-    let mut rows = vec![
-        run_subprocess("async/sequential", Planner::Sequential, "async-seq").await,
-        run_subprocess("async/folded", Planner::Folding, "async-fold").await,
-        run_subprocess("async/marked-fold", Planner::Marked, "async-marked").await,
-        run_control_mode(Connection::Streaming, "control").await,
-        run_control_mode(Connection::Routed, "routed").await,
+fn main() {
+    let rows = vec![
+        run_subprocess("blocking/sequential", Planner::Sequential, "blocking-seq"),
+        run_subprocess("blocking/folded", Planner::Folding, "blocking-fold"),
+        run_subprocess("blocking/marked-fold", Planner::Marked, "blocking-marked"),
+        run_control_mode(Connection::Streaming, "control"),
+        run_control_mode(Connection::Routed, "routed"),
     ];
-    // The blocking runtime owns a reactor, so it cannot be built inside one.
-    rows.insert(
-        0,
-        tokio::task::spawn_blocking(|| run_blocking("blocking-seq"))
-            .await
-            .expect("blocking run"),
-    );
 
     println!(
         "{:<24} {:<18} {:>10} {:>9} {:>9}  {:<12} query output",
@@ -335,7 +312,7 @@ async fn main() {
     );
 
     println!();
-    what_a_fold_costs_when_something_fails().await;
+    what_a_fold_costs_when_something_fails();
 }
 
 /// The price of sharing an invocation, paid only when something goes wrong.
@@ -343,8 +320,8 @@ async fn main() {
 /// Above, every mode succeeded and the folded rows read `merged` -- a shared
 /// verdict that happened to be good news. This runs the same two operations
 /// with a target tmux will refuse, so the difference is visible.
-async fn what_a_fold_costs_when_something_fails() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+fn what_a_fold_costs_when_something_fails() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     let absent: libtmux::PaneId = "%999".parse().expect("a pane id");
 
@@ -354,7 +331,7 @@ async fn what_a_fold_costs_when_something_fails() {
         plan.add(libtmux::plan::KillPane::new(absent.clone()));
         plan.add(SendKeys::new(absent.clone()).text("never runs").enter());
 
-        let result = plan.run(server, planner).await.expect("the plan runs");
+        let result = plan.run(server, planner).expect("the plan runs");
         println!(
             "  {:<12} {} dispatch(es) -> {:?}",
             format!("{planner:?}"),
@@ -369,5 +346,5 @@ async fn what_a_fold_costs_when_something_fails() {
     println!("  Sequential names the failing operation; Folding cannot, because tmux");
     println!("  reports one status for the group whichever member failed.");
 
-    guard.shutdown().await.expect("tmux shuts down");
+    guard.shutdown().expect("tmux shuts down");
 }

@@ -74,17 +74,13 @@ impl Scope<'_> {
 ///
 /// An option deliberately set to the empty string cannot be told apart from an
 /// unset one, because tmux prints nothing for either.
-pub(crate) async fn get(
-    core: &Core,
-    scope: Scope<'_>,
-    name: &str,
-) -> Result<Option<TmuxText>, Error> {
+pub(crate) fn get(core: &Core, scope: Scope<'_>, name: &str) -> Result<Option<TmuxText>, Error> {
     let command = scope
         .apply(Command::new("show-options"))
         .arg("-v")
         .arg("--")
         .arg(escape_format(name));
-    let result = core.execute(command).await?;
+    let result = core.execute(command)?;
 
     if !result.success() {
         let failure = Error::from_refused_result("show-options", &result, None);
@@ -122,24 +118,20 @@ pub(crate) async fn get(
 }
 
 /// Read one option, decoded by its declared kind.
-pub(crate) async fn get_typed(
+pub(crate) fn get_typed(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
 ) -> Result<Option<OptionValue>, Error> {
-    Ok(get(core, scope, name)
-        .await?
-        .map(|value| OptionValue::decode(name, value)))
+    Ok(get(core, scope, name)?.map(|value| OptionValue::decode(name, value)))
 }
 
 /// List the option names present at one scope.
 ///
 /// Array options repeat once per index, so a name may carry an `[n]` suffix
 /// exactly as tmux writes it.
-pub(crate) async fn names(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, Error> {
-    let result = core
-        .execute(scope.apply(Command::new("show-options")))
-        .await?;
+pub(crate) fn names(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, Error> {
+    let result = core.execute(scope.apply(Command::new("show-options")))?;
     if !result.success() {
         return Err(Error::from_refused_result("show-options", &result, None));
     }
@@ -155,7 +147,7 @@ pub(crate) async fn names(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, 
 }
 
 /// Set one option to an exact value.
-pub(crate) async fn set(
+pub(crate) fn set(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
@@ -167,7 +159,7 @@ pub(crate) async fn set(
         command = command.arg("-a");
     }
 
-    ensure_scope(core, scope, name).await?;
+    ensure_scope(core, scope, name)?;
 
     run(
         core,
@@ -178,14 +170,13 @@ pub(crate) async fn set(
             .arg(escape_format(name))
             .sensitive_arg(value.into()),
     )
-    .await
 }
 
 /// Check a typed value against tmux's option table, then set it.
 ///
 /// Checked before `set` runs `ensure_scope`, which may ask tmux for its
 /// version, so a refused value costs no tmux command.
-pub(crate) async fn set_typed(
+pub(crate) fn set_typed(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
@@ -210,12 +201,11 @@ pub(crate) async fn set_typed(
         OsString::from_vec(text.as_bytes().to_vec()),
         false,
     )
-    .await
 }
 
 /// Remove one option, restoring whatever it inherits.
-pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
-    ensure_scope(core, scope, name).await?;
+pub(crate) fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    ensure_scope(core, scope, name)?;
 
     run(
         core,
@@ -227,7 +217,6 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
             .arg("--")
             .arg(escape_format(name)),
     )
-    .await
 }
 
 /// Set one hook to a tmux command.
@@ -242,13 +231,13 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
 /// A name that already claims index syntax is forwarded whole. Parsing it here
 /// to check would have to decide what `alert-bell[x]` means, and tmux is the
 /// one that gets to answer that.
-pub(crate) async fn set_hook(
+pub(crate) fn set_hook(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
     command_text: impl Into<OsString>,
 ) -> Result<(), Error> {
-    ensure_scope(core, scope, name).await?;
+    ensure_scope(core, scope, name)?;
 
     // Every valid hook name is `[a-z-]+`, so escaping is a no-op on one and
     // protection if tmux ever expands here as it does for an option name.
@@ -268,12 +257,11 @@ pub(crate) async fn set_hook(
             .arg(slot)
             .sensitive_arg(command_text.into()),
     )
-    .await
 }
 
 /// Remove one hook.
-pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
-    ensure_scope(core, scope, name).await?;
+pub(crate) fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    ensure_scope(core, scope, name)?;
 
     run(
         core,
@@ -285,7 +273,6 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
             .arg("--")
             .arg(escape_format(name)),
     )
-    .await
 }
 
 /// Options tmux started keeping at a second scope after the supported floor.
@@ -317,7 +304,7 @@ const LATE_SCOPES: &[(&str, OptionScope, crate::version::ReleaseVersion)] = &[
 /// carried, so a mismatch is not refused: `mouse` sent with `-p` becomes the
 /// session's `mouse`, tmux exits 0, and reading it back through the same
 /// handle resolves the same way and agrees. Nothing downstream can tell.
-async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
     // A user option has no entry in tmux's table, and tmux honours the flags
     // literally for one. Nothing to check, and nothing to get wrong.
     if name.starts_with('@') {
@@ -345,7 +332,7 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
     // floor, the running server decides.
     for (option, late, needs) in LATE_SCOPES {
         if *option == schema.name() && *late == requested {
-            let found = core.capabilities().await?.tmux_version();
+            let found = core.capabilities()?.tmux_version();
             if !found.has_behavior(needs) {
                 return Err(Error::UnsupportedCapability {
                     capability: option,
@@ -360,13 +347,13 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
 }
 
 /// Run an option mutation, requiring tmux to accept it.
-async fn run(
+fn run(
     core: &Core,
     command_name: &'static str,
     option_name: Option<&str>,
     command: Command,
 ) -> Result<(), Error> {
-    let result = core.execute(command).await?;
+    let result = core.execute(command)?;
     if result.success() {
         return Ok(());
     }
@@ -409,10 +396,8 @@ fn mutation_failure(
 /// hold nothing. A slot that holds something is the one carrying an index, so
 /// that is the whole test: no value is read here, for the reason this module
 /// gives above.
-pub(crate) async fn hook_slots(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, Error> {
-    let result = core
-        .execute(scope.apply(Command::new("show-hooks")))
-        .await?;
+pub(crate) fn hook_slots(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, Error> {
+    let result = core.execute(scope.apply(Command::new("show-hooks")))?;
     if !result.success() {
         return Err(Error::from_refused_result("show-hooks", &result, None));
     }
@@ -438,16 +423,16 @@ pub(crate) fn split_slot(slot: &str) -> Option<(&str, u32)> {
 /// Names come from the listing and values from `show-options -v`, one slot at
 /// a time, for the reason this module gives above: the listing renders a value
 /// through `args_escape` and re-parsing that would be guesswork.
-pub(crate) async fn hooks(
+pub(crate) fn hooks(
     core: &Core,
     scope: Scope<'_>,
 ) -> Result<BTreeMap<String, IndexedHooks>, Error> {
     let mut collected: BTreeMap<String, BTreeMap<u32, TmuxText>> = BTreeMap::new();
-    for slot in hook_slots(core, scope).await? {
+    for slot in hook_slots(core, scope)? {
         let Some((name, index)) = split_slot(&slot) else {
             continue;
         };
-        if let Some(value) = get(core, scope, &slot).await? {
+        if let Some(value) = get(core, scope, &slot)? {
             collected
                 .entry(name.to_owned())
                 .or_default()
@@ -466,17 +451,17 @@ pub(crate) async fn hooks(
 /// Values come back one slot at a time rather than from the listing, for the
 /// reason this module gives above: the listing renders a value through
 /// `args_escape`, and re-parsing that would be guesswork.
-pub(crate) async fn indexed(
+pub(crate) fn indexed(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
 ) -> Result<BTreeMap<u32, TmuxText>, Error> {
     let mut entries = BTreeMap::new();
-    for slot in slots_of(core, scope, name).await? {
+    for slot in slots_of(core, scope, name)? {
         let Some((_, index)) = split_slot(&slot) else {
             continue;
         };
-        if let Some(value) = get(core, scope, &slot).await? {
+        if let Some(value) = get(core, scope, &slot)? {
             entries.insert(index, value);
         }
     }
@@ -490,15 +475,13 @@ pub(crate) async fn indexed(
 /// answers the two differently: it will not enumerate the hooks set on a
 /// window or a pane, but it will list the slots of a hook it is asked about
 /// by name at any scope.
-async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<String>, Error> {
-    let result = core
-        .execute(
-            scope
-                .apply(Command::new("show-options"))
-                .arg("--")
-                .arg(escape_format(name)),
-        )
-        .await?;
+fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<String>, Error> {
+    let result = core.execute(
+        scope
+            .apply(Command::new("show-options"))
+            .arg("--")
+            .arg(escape_format(name)),
+    )?;
     if !result.success() {
         return Err(Error::from_refused_result("show-options", &result, None));
     }
@@ -513,17 +496,17 @@ async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<Strin
 }
 
 /// Read one hook's commands, or `None` when it holds nothing.
-pub(crate) async fn hook(
+pub(crate) fn hook(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
 ) -> Result<Option<IndexedHooks>, Error> {
     let mut entries = BTreeMap::new();
-    for slot in slots_of(core, scope, name).await? {
+    for slot in slots_of(core, scope, name)? {
         let Some((_, index)) = split_slot(&slot) else {
             continue;
         };
-        if let Some(value) = get(core, scope, &slot).await? {
+        if let Some(value) = get(core, scope, &slot)? {
             entries.insert(index, value);
         }
     }
@@ -545,13 +528,13 @@ pub(crate) async fn hook(
 /// An array option keeps the indexed name tmux lists it under, so
 /// `command-alias[0]` and `command-alias[1]` are separate entries. Its kind is
 /// looked up from the name without the index.
-pub(crate) async fn typed_all(
+pub(crate) fn typed_all(
     core: &Core,
     scope: Scope<'_>,
 ) -> Result<BTreeMap<String, OptionValue>, Error> {
     let mut decoded = BTreeMap::new();
-    for name in names(core, scope).await? {
-        if let Some(value) = get(core, scope, &name).await? {
+    for name in names(core, scope)? {
+        if let Some(value) = get(core, scope, &name)? {
             let kind_name = split_slot(&name).map_or(name.as_str(), |(base, _)| base);
             decoded.insert(name.clone(), OptionValue::decode(kind_name, value));
         }
@@ -564,14 +547,14 @@ pub(crate) async fn typed_all(
 ///
 /// The first mutation is sent alone. A later failure follows an accepted
 /// effect; a first-command failure remains its leaf error.
-pub(crate) async fn set_hooks(
+pub(crate) fn set_hooks(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
     hooks: &IndexedHooks,
     replace: ReplaceMode,
 ) -> Result<(), Error> {
-    ensure_scope(core, scope, name).await?;
+    ensure_scope(core, scope, name)?;
 
     let mut commands = Vec::with_capacity(hooks.len() + 1);
     if replace == ReplaceMode::Replace {
@@ -604,19 +587,19 @@ pub(crate) async fn set_hooks(
         return Ok(());
     };
     let Some(second) = commands.next() else {
-        return run(core, "set-hook", None, first).await;
+        return run(core, "set-hook", None, first);
     };
 
     // Under `Replace` the clear travels with the entries rather than ahead of
-    // them: sent on its own, a caller who dropped this future between the two
-    // left the hook cleared and unwritten, the one state nobody asked for.
+    // them: cancellation between the two could otherwise leave the hook
+    // cleared and unwritten.
     // The cost is attribution, so `Merge`, whose first command is an entry
     // rather than a clear, still sends it alone and can name it when tmux
     // refuses it.
     let mut chain = if replace == ReplaceMode::Replace {
         CommandChain::new(first).then(second)
     } else {
-        run(core, "set-hook", None, first).await?;
+        run(core, "set-hook", None, first)?;
         CommandChain::new(second)
     };
     for command in commands {
@@ -624,7 +607,6 @@ pub(crate) async fn set_hooks(
     }
     let result = core
         .execute_chain(chain)
-        .await
         .map_err(|error| error.after_effect("set-hooks"))?;
     if result.success() {
         return Ok(());

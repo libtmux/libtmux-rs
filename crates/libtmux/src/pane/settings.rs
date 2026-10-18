@@ -24,9 +24,9 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the listing.
-    pub async fn option_names(&self) -> Result<Vec<String>, Error> {
+    pub fn option_names(&self) -> Result<Vec<String>, Error> {
         let target = self.id().to_string();
-        options::names(&self.core, options::Scope::Pane(&target)).await
+        options::names(&self.core, options::Scope::Pane(&target))
     }
 
     /// Read every option set on this pane, decoded by its declared kind.
@@ -49,25 +49,21 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("opts").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
-    /// let pane = window.active_pane().await?.expect("a window has a pane");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("opts")?;
+    /// let window = session.active_window()?.expect("a session has a window");
+    /// let pane = window.active_pane()?.expect("a window has a pane");
     ///
-    /// pane.set_option("@marker", "set").await?;
-    /// assert!(pane.options().await?.contains_key("@marker"));
+    /// pane.set_option("@marker", "set")?;
+    /// assert!(pane.options()?.contains_key("@marker"));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
+    pub fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
         let target = self.id().to_string();
-        options::typed_all(&self.core, options::Scope::Pane(&target)).await
+        options::typed_all(&self.core, options::Scope::Pane(&target))
     }
 
     /// Set one option to text, unchecked.
@@ -82,7 +78,7 @@ impl Pane {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+    pub fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
             &self.core,
@@ -91,7 +87,6 @@ impl Pane {
             value,
             false,
         )
-        .await
     }
 
     /// Set one option to a typed value, checked before it is sent.
@@ -113,17 +108,13 @@ impl Pane {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+    /// #  fn example(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
     /// // A choice takes the word it reads back as, not a flag.
-    /// pane.set_typed_option("remain-on-exit", "failed").await?;
+    /// pane.set_typed_option("remain-on-exit", "failed")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_typed_option(
-        &self,
-        name: &str,
-        value: impl Into<OptionValue>,
-    ) -> Result<(), Error> {
+    pub fn set_typed_option(&self, name: &str, value: impl Into<OptionValue>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set_typed(
             &self.core,
@@ -131,7 +122,6 @@ impl Pane {
             name,
             value.into(),
         )
-        .await
     }
 
     /// Append to one option rather than replacing it.
@@ -142,9 +132,9 @@ impl Pane {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+    pub fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::set(&self.core, options::Scope::Pane(&target), name, value, true).await
+        options::set(&self.core, options::Scope::Pane(&target), name, value, true)
     }
 
     /// Remove one option, restoring whatever it inherits.
@@ -155,9 +145,9 @@ impl Pane {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
+    pub fn unset_option(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::unset(&self.core, options::Scope::Pane(&target), name).await
+        options::unset(&self.core, options::Scope::Pane(&target), name)
     }
 
     /// Set one hook to a tmux command.
@@ -172,9 +162,9 @@ impl Pane {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
+    pub fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::set_hook(&self.core, options::Scope::Pane(&target), name, command).await
+        options::set_hook(&self.core, options::Scope::Pane(&target), name, command)
     }
 
     /// Remove one hook.
@@ -185,9 +175,9 @@ impl Pane {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
+    pub fn unset_hook(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::unset_hook(&self.core, options::Scope::Pane(&target), name).await
+        options::unset_hook(&self.core, options::Scope::Pane(&target), name)
     }
 
     /// Read one hook's commands, or `None` when it holds nothing.
@@ -208,26 +198,22 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
-    /// let pane = window.active_pane().await?.expect("a window has a pane");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("hooked")?;
+    /// let window = session.active_window()?.expect("a session has a window");
+    /// let pane = window.active_pane()?.expect("a window has a pane");
     ///
-    /// assert!(pane.hook("pane-died").await?.is_none());
-    /// pane.set_hook("pane-died", "display-message rang").await?;
-    /// assert!(pane.hook("pane-died").await?.is_some());
+    /// assert!(pane.hook("pane-died")?.is_none());
+    /// pane.set_hook("pane-died", "display-message rang")?;
+    /// assert!(pane.hook("pane-died")?.is_some());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
+    pub fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
         let target = self.id().to_string();
-        options::hook(&self.core, options::Scope::Pane(&target), name).await
+        options::hook(&self.core, options::Scope::Pane(&target), name)
     }
 
     /// Read one option, decoded according to what tmux declares about it.
@@ -245,8 +231,8 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
+    pub fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
         let target = self.id().to_string();
-        options::get_typed(&self.core, options::Scope::Pane(&target), name).await
+        options::get_typed(&self.core, options::Scope::Pane(&target), name)
     }
 }

@@ -5,12 +5,12 @@
 /// rejected value two ways, "bad value" for a flag and "value is invalid"
 /// for a number, which is why the kind exists rather than the text.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_tmux_compat_error_option_refusal_wording_is_recognized() {
+#[test]
+fn real_tmux_compat_error_option_refusal_wording_is_recognized() {
     use crate::test::TestServer;
     use crate::{Error, ErrorKind, OptionErrorKind};
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     for (name, value, expected) in [
@@ -29,7 +29,6 @@ async fn real_tmux_compat_error_option_refusal_wording_is_recognized() {
     ] {
         let error = server
             .set_global_option(name, value)
-            .await
             .expect_err("tmux refuses it");
         assert!(
             matches!(&error, Error::OptionRejected { kind, .. } if *kind == expected),
@@ -39,7 +38,7 @@ async fn real_tmux_compat_error_option_refusal_wording_is_recognized() {
         assert!(!error.is_object_gone(), "a refusal is not a missing object");
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Pin the tmux wording that separates a missing target from a refusal.
@@ -50,14 +49,14 @@ async fn real_tmux_compat_error_option_refusal_wording_is_recognized() {
 /// a release that rewords these is a failure here rather than a silently
 /// wrong `is_object_gone` in the field.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
+#[test]
+fn real_tmux_compat_error_missing_target_wording_is_recognized() {
     use crate::ErrorKind;
     use crate::test::TestServer;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("compat-missing").await.expect("session");
+    let session = server.new_session("compat-missing").expect("session");
 
     // One live session, so tmux can resolve a current target and reports
     // the specific object it could not find.
@@ -66,7 +65,6 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
             "window",
             server
                 .window_by_id(&"@4242".parse().expect("a window id"))
-                .await
                 .map(|found| assert!(found.is_none(), "the window does not exist"))
                 .err(),
         ),
@@ -74,7 +72,6 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
             "pane",
             server
                 .pane_by_id(&"%4242".parse().expect("a pane id"))
-                .await
                 .map(|found| assert!(found.is_none(), "the pane does not exist"))
                 .err(),
         ),
@@ -84,15 +81,14 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
 
     // A mutation against a target tmux does not have is where the wording
     // matters: it is the only signal separating this from a bad argument.
-    let mut window = session.windows().await.expect("windows").remove(0);
+    let mut window = session.windows().expect("windows").remove(0);
     let doomed = session
         .new_window(crate::NewWindowOptions::new("doomed").command("sleep 300"))
-        .await
         .expect("window");
     let mut stale = doomed.clone();
-    doomed.kill().await.expect("the window is killed");
+    doomed.kill().expect("the window is killed");
 
-    let error = stale.rename("gone").await.expect_err("the window is gone");
+    let error = stale.rename("gone").expect_err("the window is gone");
     assert_eq!(
         error.kind(),
         ErrorKind::ObjectGone,
@@ -103,29 +99,22 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
     // classification is not simply calling everything gone.
     let refused = server
         .delete_buffer("never-existed")
-        .await
         .expect_err("tmux has no such buffer");
     assert_eq!(refused.kind(), ErrorKind::Refused, "{refused}");
 
     // With no session left, tmux cannot resolve a current target and says
     // so instead, for the same request. Both wordings mean gone.
-    window
-        .rename("last")
-        .await
-        .expect("the window still exists");
-    session.kill().await.expect("the session is killed");
+    window.rename("last").expect("the window still exists");
+    session.kill().expect("the session is killed");
 
-    let error = stale
-        .rename("still gone")
-        .await
-        .expect_err("the window is gone");
+    let error = stale.rename("still gone").expect_err("the window is gone");
     assert_eq!(
         error.kind(),
         ErrorKind::ObjectGone,
         "tmux 'no current target' is recognized: {error}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Pin the tmux wording that says the server, not the request, is the
@@ -135,35 +124,32 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
 /// server, and separates them only in stderr. Reading the second as the
 /// first tells a caller to fix arguments that were never the trouble.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
+#[test]
+fn real_tmux_compat_error_absent_server_wording_is_recognized() {
     use std::time::Duration;
 
     use crate::test::{TestServer, retry_until};
     use crate::{Command, ErrorKind, ServerGoneKind};
 
-    let mut guard = TestServer::builder().start().await.expect("tmux starts");
-    guard.session("compat-gone").await.expect("session");
+    let mut guard = TestServer::builder().start().expect("tmux starts");
+    guard.session("compat-gone").expect("session");
 
     guard
         .server()
         .cmd(Command::new("kill-server"))
-        .await
         .expect("the server is killed");
 
     // tmux stops answering on the socket before the kernel has a status
     // for the process behind it, so this waits for the daemon rather than
     // for a duration.
-    retry_until(Duration::from_secs(5), async || {
+    retry_until(Duration::from_secs(5), || {
         !guard.daemon_state().is_running()
     })
-    .await
     .expect("the daemon exits");
 
     let error = guard
         .server()
         .sessions()
-        .await
         .expect_err("there is no server to list");
     assert_eq!(
         error.kind(),
@@ -179,7 +165,7 @@ async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
         "an absent server is not a missing object: {error}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 /// Pin the half of tmux's answer that says how much a miss proves.
 ///
@@ -191,13 +177,13 @@ async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
 /// caller consults before discarding a handle. Asserted against whichever
 /// tmux the lane is running.
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_tmux_compat_a_coordinate_miss_is_not_an_object_miss() {
+#[test]
+fn real_tmux_compat_a_coordinate_miss_is_not_an_object_miss() {
     use crate::test::TestServer;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("compat-echo").await.expect("session");
+    let session = server.new_session("compat-echo").expect("session");
 
     for (target, gone) in [
         // A place in a session that holds nothing there.
@@ -211,7 +197,6 @@ async fn real_tmux_compat_a_coordinate_miss_is_not_an_object_miss() {
                     .arg("-t")
                     .arg(target.clone()),
             )
-            .await
             .expect("the command runs");
         assert!(!result.success(), "{target} resolves to nothing");
 
@@ -229,5 +214,5 @@ async fn real_tmux_compat_a_coordinate_miss_is_not_an_object_miss() {
         );
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }

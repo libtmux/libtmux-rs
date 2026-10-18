@@ -15,42 +15,32 @@ fn check(condition: bool, message: &str) -> Result<(), ExampleError> {
     }
 }
 
-async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
-    let session = server
-        .new_session(
-            NewSessionOptions::new("work")
-                .window_name("editor")
-                .command("cat"),
-        )
-        .await?;
-    session
-        .new_window(NewWindowOptions::new("logs").command("cat"))
-        .await?;
-    let sessions = server.sessions().await?;
-    let windows = server.windows().await?;
-    let panes = server.panes().await?;
+fn demonstrate(server: &Server) -> Result<(), ExampleError> {
+    let session = server.new_session(
+        NewSessionOptions::new("work")
+            .window_name("editor")
+            .command("cat"),
+    )?;
+    session.new_window(NewWindowOptions::new("logs").command("cat"))?;
+    let sessions = server.sessions()?;
+    let windows = server.windows()?;
+    let panes = server.panes()?;
     check(sessions.len() == 1, "expected one session")?;
     check(windows.len() == 2, "expected two windows")?;
     check(panes.len() == 2, "expected two panes")?;
     check(
-        session.windows().await?.len() == 2,
+        session.windows()?.len() == 2,
         "expected two session windows",
     )?;
-    check(
-        session.panes().await?.len() == 2,
-        "expected two session panes",
-    )?;
+    check(session.panes()?.len() == 2, "expected two session panes")?;
     for window in &windows {
         check(
             window.session_id() == session.id(),
             "window belongs to another session",
         )?;
-        check(
-            window.panes().await?.len() == 1,
-            "expected one pane per window",
-        )?;
+        check(window.panes()?.len() == 1, "expected one pane per window")?;
     }
-    let hierarchy = server.hierarchy().await?;
+    let hierarchy = server.hierarchy()?;
     let branch = hierarchy.first().ok_or("hierarchy has no session")?;
     check(
         branch.session.id() == session.id(),
@@ -65,8 +55,7 @@ async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), ExampleError> {
+fn main() -> Result<(), ExampleError> {
     let root = std::path::Path::new("/tmp/libtmux-rs-dev");
     std::fs::create_dir_all(root)?;
     let directory = tempfile::Builder::new()
@@ -76,16 +65,25 @@ async fn main() -> Result<(), ExampleError> {
         directory.path().join("owner"),
         std::process::id().to_string(),
     )?;
+    let cancellation = libtmux::CancellationToken::new();
     let server = Server::builder()
         .socket_path(directory.path().join("tmux.sock"))
         .config_file("/dev/null")
         .default_timeout(Duration::from_secs(5))
+        .cancellation_token(cancellation.clone())
         .build()?;
-    let outcome = tokio::time::timeout(Duration::from_secs(10), demonstrate(&server)).await;
+    let cleanup = Server::builder()
+        .socket_path(directory.path().join("tmux.sock"))
+        .config_file("/dev/null")
+        .default_timeout(Duration::from_secs(5))
+        .build()?;
+    let outcome = with_deadline(cancellation, Duration::from_secs(10), || {
+        demonstrate(&server)
+    });
 
     // Stop the owned daemon before closing the client executor.
-    let killed = server.kill().await;
-    let closed = server.shutdown().await;
+    let killed = cleanup.kill();
+    let closed = server.shutdown().and_then(|()| cleanup.shutdown());
     let cleanup_failed = killed.is_err() || closed.is_err();
     let mut failures = Vec::new();
     match outcome {
@@ -110,4 +108,36 @@ async fn main() -> Result<(), ExampleError> {
     } else {
         Err(failures.join("; ").into())
     }
+}
+
+fn with_deadline<T>(
+    token: libtmux::CancellationToken,
+    within: Duration,
+    operation: impl FnOnce() -> T,
+) -> Result<T, &'static str> {
+    std::thread::scope(|threads| {
+        let (finished, completion) = std::sync::mpsc::channel::<()>();
+        let timer = threads.spawn(move || {
+            if matches!(
+                completion.recv_timeout(within),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ) {
+                token.cancel();
+                true
+            } else {
+                false
+            }
+        });
+        let result = operation();
+        drop(finished);
+        let elapsed = match timer.join() {
+            Ok(elapsed) => elapsed,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        if elapsed {
+            Err("example deadline elapsed")
+        } else {
+            Ok(result)
+        }
+    })
 }

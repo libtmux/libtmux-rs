@@ -4,8 +4,7 @@ Notable changes to the workspace. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the crates follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Crates are versioned together except `tmux-mcp`, which moves at its own pace
-because its dependencies need a newer compiler than the libraries do.
+Library crates share a version; `tmux-mcp` moves at its own pace.
 
 While the version is `0.1.0-alpha.*`, any release may break the API, and
 breaking changes are not called out as such: nothing here is stable yet. The
@@ -15,6 +14,24 @@ requirement selects nothing, so a caller opts in by writing the version out in
 full.
 
 ## Unreleased
+
+### Changed
+
+- Make `libtmux` a blocking client with no default crate dependencies. Move
+  native async operations to `libtmux-tokio`. Both packages expose the handle,
+  query, plan, scoped-operation, control-mode, and test-server APIs.
+  `tmux-mcp` and `tmux-workspace` use the Tokio package.
+- Generate blocking object operations from the canonical async operations and
+  check the manual runtime implementations separately. Generated source ships
+  in the crate; downstream builds do not run the generator.
+- Require Rust 1.97.1 and Linux or WSL. The blocking client uses procfs and
+  `/usr/bin/kill` for process supervision. Release binaries target Linux
+  x86_64 and aarch64.
+- Bound long-lived wait clients separately from ordinary dispatch. Blocking
+  waits sleep until output, cancellation, or shutdown and use three threads
+  per active client. `DispatchLimits::max_wait_clients` sets their budget.
+- Correlate control-mode replies by command boundaries and retain cleanup
+  failures for repeated shutdown calls.
 
 ## 0.1.0-alpha.15 - 2026-09-27
 

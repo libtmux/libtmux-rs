@@ -1,0 +1,590 @@
+//! Pane output streaming, capture, and bounded polling waits.
+
+use std::ffi::OsStr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::formats::TmuxText;
+use crate::{Command, CommandChain, Error};
+
+use super::{CaptureOptions, CapturedLine, POLL_INTERVAL, Pane, PaneWait, contains};
+
+impl Pane {
+    /// Watch what this pane writes, as it writes it.
+    ///
+    /// [`Pane::capture`] reads what is on screen now; this reports every byte
+    /// the pane produces from here on, including what scrolls away. It opens a
+    /// control-mode connection to the session holding the pane and keeps it,
+    /// so there is no polling and no sampling interval to get wrong. Where the
+    /// pane lives is resolved here rather than taken from this handle.
+    ///
+    /// The bytes are the pane's own, terminal escapes included. tmux reports
+    /// them in whatever sized chunks it has, so a caller wanting lines has to
+    /// buffer.
+    ///
+    /// Keep reading, or the pane stops. Events are handed over with
+    /// backpressure rather than dropped, so a stream left unread stops the
+    /// connection reading from tmux, and tmux stops the pane that is filling
+    /// it. A caller who wants to stop watching calls
+    /// [`PaneOutput::shutdown`](crate::control::PaneOutput::shutdown) rather
+    /// than leaving the handle idle.
+    ///
+    /// tmux discards what a pane has buffered when the pane exits, so a
+    /// command that writes and returns immediately may be reported as nothing
+    /// at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ObjectGone`] when the pane no longer exists, a listing
+    /// error when tmux could not be read, or an error when the control-mode
+    /// connection cannot be opened.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held: a dropped call closes the connection it opened,
+    /// and the mutes it set end with that connection.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn watch(pane: &libtmux_tokio::Pane) -> Result<(), libtmux_tokio::Error> {
+    /// let mut output = pane.stream_output().await?;
+    ///
+    /// while let Some(chunk) = output.next_chunk().await {
+    ///     println!("{} bytes", chunk.len());
+    /// }
+    ///
+    /// output.shutdown().await
+    /// # }
+    /// ```
+    #[cfg(feature = "control-mode")]
+    pub async fn stream_output(&self) -> Result<crate::control::PaneOutput, Error> {
+        self.stream_output_with_limits(crate::ControlLimits::default())
+            .await
+    }
+
+    /// Like [`Self::stream_output`], with explicit frame budgets.
+    ///
+    /// The connection this opens is a whole `%begin`/`%end`-framed
+    /// control-mode session, not only this one pane's bytes, so a budget set
+    /// here bounds every frame that connection reads -- the same tradeoff
+    /// [`crate::control::ControlMode::attach_with_limits`] documents.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::stream_output`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held, as for [`Self::stream_output`].
+    #[cfg(feature = "control-mode")]
+    pub async fn stream_output_with_limits(
+        &self,
+        limits: crate::ControlLimits,
+    ) -> Result<crate::control::PaneOutput, Error> {
+        // tmux reports a pane only to a client attached to a session that
+        // links its window, so attaching through this handle's cached session
+        // would deliver silence after the pane was joined elsewhere.
+        let window = self.window().await?.ok_or_else(|| Error::ObjectGone {
+            kind: crate::ObjectKind::Pane,
+            id: self.id().to_string(),
+        })?;
+        let server = crate::Server::from_core(Arc::clone(&self.core));
+        let (sender, events) =
+            crate::control::ControlMode::attach_with_limits(&server, window.session_id(), limits)
+                .await?
+                .split();
+
+        // One session can hold many panes, and the connection carries all of
+        // them, so narrowing happens before the caller reads.
+        if let Err(error) = sender.watch_only(std::slice::from_ref(self.id())).await {
+            drop(sender);
+            return Err(events.shutdown_after_error(error).await);
+        }
+
+        Ok(crate::control::PaneOutput::new(
+            self.id().clone(),
+            events,
+            sender,
+        ))
+    }
+
+    /// Capture the pane's visible contents, one entry per line.
+    ///
+    /// Lines are [`TmuxText`] because a terminal's contents are arbitrary
+    /// bytes, not guaranteed UTF-8.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn capture(&self) -> Result<Vec<TmuxText>, Error> {
+        self.capture_with(CaptureOptions::visible()).await
+    }
+
+    /// Read the pane's contents, choosing how much and in what form.
+    ///
+    /// [`Pane::capture`] reads the visible screen. This reaches into
+    /// scrollback, which is where the output a caller is looking for has
+    /// usually gone by the time anyone asks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the capture, which includes a pane
+    /// that has been closed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux_tokio::test::TestServer::new().await?;
+    /// # let server = guard.server();
+    /// use libtmux_tokio::CaptureOptions;
+    ///
+    /// let session = server.new_session("captured").await?;
+    /// let pane = session.panes().await?.remove(0);
+    ///
+    /// let visible = pane.capture_with(CaptureOptions::visible()).await?;
+    /// let everything = pane.capture_with(CaptureOptions::history()).await?;
+    /// assert!(everything.len() >= visible.len());
+    ///
+    /// let last_ten = pane.capture_with(CaptureOptions::visible().start(-10)).await?;
+    /// assert!(last_ten.len() >= visible.len());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn capture_with(&self, options: CaptureOptions) -> Result<Vec<TmuxText>, Error> {
+        // Refusing beats dispatching a flag tmux will reject with a usage
+        // error that names the whole command.
+        let version = crate::Server::from_core(Arc::clone(&self.core))
+            .capabilities()
+            .await?
+            .tmux_version()
+            .clone();
+        let needs_wrap_trim = options.needs_wrap_trim();
+        let command = options.lower(self.id().as_ref(), &version)?;
+        let target = command.target().map(OsStr::to_os_string);
+        let result = self.core.execute(command).await?;
+        if !result.success() {
+            return Err(Error::from_refused_result(
+                "capture-pane",
+                &result,
+                target.as_deref(),
+            ));
+        }
+
+        let lines = split_lines(result.stdout());
+        Ok(if needs_wrap_trim {
+            lines.into_iter().map(trim_wrap_padding).collect()
+        } else {
+            lines
+        })
+    }
+
+    /// Capture with the per-line flags tmux records, marking shell prompts.
+    ///
+    /// tmux records where a prompt and its output begin from the OSC 133
+    /// sequences a shell emits, and keeps those marks as lines scroll into
+    /// history. That is what answers "show me the last command's output"
+    /// exactly, rather than by guessing at a prompt's shape.
+    ///
+    /// Every [`CapturedLine::starts_prompt`] is `false` when the pane's shell
+    /// does not emit OSC 133, which is the common case: fish does, bash and
+    /// zsh do not without shell integration installed. An empty result is a
+    /// real answer about the shell, not a failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedCapability`] below tmux 3.7, which is where
+    /// `capture-pane -F` arrived, and an error when tmux refuses the capture.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux_tokio::CaptureOptions;
+    ///
+    /// let guard = libtmux_tokio::test::TestServer::new().await?;
+    /// let server = guard.server();
+    /// let session = server.new_session("prompts").await?;
+    /// let pane = session.panes().await?.remove(0);
+    ///
+    /// if server.capabilities().await?.tmux_version().has_behavior(&libtmux_tokio::since::CAPTURE_LINE_FLAGS) {
+    ///     let lines = pane.capture_lines(CaptureOptions::history()).await?;
+    ///     // Without shell integration nothing is marked, which is an answer.
+    ///     let prompts = lines.iter().filter(|line| line.starts_prompt).count();
+    ///     assert!(prompts <= lines.len());
+    /// }
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn capture_lines(&self, options: CaptureOptions) -> Result<Vec<CapturedLine>, Error> {
+        crate::Server::from_core(Arc::clone(&self.core))
+            .require("capture-pane -F", crate::version::since::CAPTURE_LINE_FLAGS)
+            .await?;
+
+        Ok(self
+            .capture_with(options.line_flags())
+            .await?
+            .into_iter()
+            .map(|row| CapturedLine::parse(&row))
+            .collect())
+    }
+
+    /// Wait until this pane's output contains `needle`.
+    ///
+    /// [`Pane::wait_until`] takes a predicate over the lines instead.
+    ///
+    /// Polls rather than streams, so it needs no feature: a caller who
+    /// dispatches a command needs to know when it finished, and
+    /// [`Pane::send_keys`] without that is half an operation. A control-mode
+    /// subscription would answer sooner and is not available in a default
+    /// build.
+    ///
+    /// A look costs one `capture-pane` and looks are 120ms apart, which keeps
+    /// a wait under ten dispatches a second and answers within an interval of
+    /// the text appearing. The first look comes before the first sleep, so
+    /// text already there when the wait begins is answered at once, and a
+    /// `within` shorter than one interval buys exactly one look.
+    ///
+    /// Each look reads the scrollback rather than the visible screen, and
+    /// joins lines tmux wrapped. Both matter for correctness rather than
+    /// completeness: text that scrolled off before the look would otherwise
+    /// be missed and reported as absent, and a line wider than the pane
+    /// arrives split, so a needle spanning the wrap point would never match.
+    ///
+    /// A pane whose process ends answers [`PaneWait::Dead`] rather than
+    /// running to the deadline, because waiting longer cannot change it.
+    ///
+    /// A [`Pane::capture`] called immediately after this returns can
+    /// occasionally miss the very output that satisfied the wait: tmux's own
+    /// redraw of the screen a fast, multi-byte-heavy write produced can still
+    /// be in flight when the next `capture-pane` reads it, independent of
+    /// this crate. Raw tmux shows the same gap running the equivalent
+    /// `send-keys`/`capture-pane` sequence directly. A caller sensitive to
+    /// this should retry the capture rather than trust it on the first look.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses a capture.
+    /// Running out of time is [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened. A look only reads, so output a dropped wait missed
+    /// stays in the scrollback, up to `history-limit`, for the next wait.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux_tokio::PaneWait;
+    /// use std::time::Duration;
+    ///
+    /// # let guard = libtmux_tokio::test::TestServer::builder().start().await?;
+    /// # let session = guard.server().new_session("waiting").await?;
+    /// # let pane = session.panes().await?.remove(0);
+    /// pane.send_line("printf 'ready\\n'").await?;
+    ///
+    /// let seen = pane.wait_for_text("ready", Duration::from_secs(10)).await?;
+    /// assert_eq!(seen, PaneWait::Arrived);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_for_text(
+        &self,
+        needle: impl AsRef<[u8]>,
+        within: Duration,
+    ) -> Result<PaneWait, Error> {
+        let needle = needle.as_ref();
+        self.look_until(within, |text, _| contains(text, needle))
+            .await
+    }
+
+    /// Wait until this pane stops producing output for `quiet_for`.
+    ///
+    /// For work that prints nothing recognisable at its end. Quiet is measured
+    /// from the last change this saw, so it cannot be shorter than the 120ms
+    /// interval [`Pane::wait_for_text`] describes: a smaller `quiet_for` is
+    /// rounded up to it rather than refused. A caller wanting a specific
+    /// string should say so with [`Pane::wait_for_text`], which answers as
+    /// soon as it appears rather than after a silence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses a capture.
+    /// Running out of time is [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a look only reads. A retry measures quiet afresh,
+    /// from its own first look.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux_tokio::PaneWait;
+    /// use std::time::Duration;
+    ///
+    /// # let guard = libtmux_tokio::test::TestServer::builder().start().await?;
+    /// # let session = guard.server().new_session("settling").await?;
+    /// # let pane = session.panes().await?.remove(0);
+    /// let settled = pane
+    ///     .wait_for_quiet(Duration::from_millis(300), Duration::from_secs(10))
+    ///     .await?;
+    /// assert_eq!(settled, PaneWait::Arrived);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_for_quiet(
+        &self,
+        quiet_for: Duration,
+        within: Duration,
+    ) -> Result<PaneWait, Error> {
+        let mut last_change = tokio::time::Instant::now();
+        let mut previous: Option<Vec<u8>> = None;
+        self.look_until(within, move |text, now| {
+            if previous.as_deref() == Some(text) {
+                return now.duration_since(last_change) >= quiet_for;
+            }
+            previous = Some(text.to_vec());
+            last_change = now;
+            false
+        })
+        .await
+    }
+
+    /// Wait until `settled` holds for this pane's captured lines.
+    ///
+    /// For what a literal [`Pane::wait_for_text`] cannot say: a line equal to
+    /// something rather than containing it, a count, a pattern, the shape of
+    /// the last line. `settled` sees what [`Pane::capture_with`] returns for
+    /// `CaptureOptions::history().join_wrapped()`: scrollback and screen, one
+    /// entry per line, a line tmux wrapped joined back into one, and the
+    /// screen's unused rows as empty lines at the end.
+    ///
+    /// Looks are the ones [`Pane::wait_for_text`] describes: 120ms apart,
+    /// the first before any sleep, so lines already there answer at once. A
+    /// pane whose process ends answers [`PaneWait::Dead`] rather than running
+    /// to the deadline. It polls even on a handle routed through
+    /// `Server::over_control_mode`, because that connection's `%output`
+    /// belongs to whoever reads its events, so waking on it would attach a
+    /// second client per wait to save under three milliseconds on a marker
+    /// (`benches/waits.rs`).
+    ///
+    /// A `query::Matcher` over one line fits as
+    /// `|lines| lines.iter().any(|line| matcher.matches(line))`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses a look, which
+    /// includes a pane that has been closed. Running out of time is
+    /// [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened. A look only reads, so a future dropped mid-look
+    /// leaves tmux as it was, and output produced in the meantime stays in the
+    /// scrollback, up to `history-limit`, for the next wait to find.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux_tokio::PaneWait;
+    /// use std::time::Duration;
+    ///
+    /// # let guard = libtmux_tokio::test::TestServer::builder().start().await?;
+    /// # let session = guard.server().new_session("counting").await?;
+    /// # let pane = session.panes().await?.remove(0);
+    /// pane.send_line("for n in 1 2 3; do echo tick; done").await?;
+    ///
+    /// // The echoed command contains `tick`; only the output is a line equal to it.
+    /// let ticked = pane
+    ///     .wait_until(Duration::from_secs(10), |lines| {
+    ///         lines.iter().filter(|line| **line == "tick").count() == 3
+    ///     })
+    ///     .await?;
+    /// assert_eq!(ticked, PaneWait::Arrived);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_until(
+        &self,
+        within: Duration,
+        mut settled: impl FnMut(&[TmuxText]) -> bool,
+    ) -> Result<PaneWait, Error> {
+        // The loop's own capture is `history().join_wrapped()` with no
+        // `trailing_spaces`, so a joined line always needs this trim -- see
+        // `trim_wrap_padding`.
+        self.look_until(within, |text, _| {
+            let lines: Vec<TmuxText> = split_lines(text)
+                .into_iter()
+                .map(trim_wrap_padding)
+                .collect();
+            settled(&lines)
+        })
+        .await
+    }
+
+    /// The shared loop: look, decide, sleep, repeat until the deadline.
+    async fn look_until(
+        &self,
+        within: Duration,
+        mut settled: impl FnMut(&[u8], tokio::time::Instant) -> bool,
+    ) -> Result<PaneWait, Error> {
+        // Scrollback rather than the visible screen, and wrapped lines joined:
+        // output that scrolled away would read as absent, and a needle
+        // spanning a wrap point would never match.
+        let options = CaptureOptions::history().join_wrapped();
+        let target = self.id().to_string();
+        let version = crate::Server::from_core(Arc::clone(&self.core))
+            .capabilities()
+            .await?
+            .tmux_version()
+            .clone();
+
+        // Capture the dead flag and pane contents in one tmux process. The flag
+        // comes first so the first newline is an unambiguous boundary.
+        let look = CommandChain::new(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("-t")
+                .arg(&target)
+                .arg("-F")
+                .arg("#{pane_dead}"),
+        )
+        .then(options.lower(&target, &version)?);
+
+        let deadline = tokio::time::Instant::now().checked_add(within);
+
+        loop {
+            let result = self.core.execute_chain(look.clone()).await?;
+            if !result.success() {
+                return Err(Error::from_refused_result(
+                    "capture-pane",
+                    &result,
+                    Some(OsStr::new(&target)),
+                ));
+            }
+            let (dead, text) = split_look(result.stdout());
+
+            let now = tokio::time::Instant::now();
+            // Asked before the deadline is checked, so output already there
+            // when the wait began is an answer rather than a timeout.
+            if settled(text, now) {
+                return Ok(PaneWait::Arrived);
+            }
+
+            // A pane whose process ended will not produce more, so holding it
+            // to the deadline reports the wrong thing slowly.
+            if dead {
+                return Ok(PaneWait::Dead);
+            }
+
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                return Ok(PaneWait::TimedOut);
+            }
+            tokio::time::sleep(POLL_INTERVAL.min(within)).await;
+        }
+    }
+}
+
+/// Split `capture-pane` output into lines.
+///
+/// tmux terminates every line, including the last, so a trailing empty element
+/// after the final newline is framing rather than content.
+fn split_lines(stdout: &[u8]) -> Vec<TmuxText> {
+    let stdout = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+    if stdout.is_empty() {
+        return Vec::new();
+    }
+
+    stdout
+        .split(|byte| *byte == b'\n')
+        .map(|line| TmuxText::from(line.to_vec()))
+        .collect()
+}
+
+/// Drop the blank-cell padding `-J` leaves on a wrapped line's last row.
+///
+/// `-J` joins a wrapped line back into one and is documented to preserve
+/// trailing spaces, which is right for what a program printed -- tmux
+/// already trims a row's genuinely unwritten cells everywhere else. tmux
+/// 3.2a's join carries those unwritten cells past the printed text too:
+/// printing 300 bytes into an 80-column pane and joining the wrap back
+/// returns 320 bytes there, the last 20 of them cells nothing wrote. Every
+/// later release already drops them unasked -- confirmed by building 3.3,
+/// 3.3a, 3.4, 3.5, and 3.5a and running this same join against each, well
+/// before `capture-pane -T` gives 3.4 and newer a flag for it. Trimming here
+/// matches what every one of those already returns, instead of adding a
+/// version gate for one release, so a caller comparing a joined line for
+/// equality is not reading a pane's width instead of what ran in it.
+fn trim_wrap_padding(line: TmuxText) -> TmuxText {
+    let bytes = line.as_bytes();
+    let content_len = bytes.len() - bytes.iter().rev().take_while(|&&byte| byte == b' ').count();
+    if content_len == bytes.len() {
+        line
+    } else {
+        TmuxText::from(bytes[..content_len].to_vec())
+    }
+}
+
+/// Split one look's output into the pane's dead flag and its capture.
+///
+/// `display-message -p` writes one line, so the flag is everything before the
+/// first newline and the capture is everything after it. tmux terminates every
+/// captured line, so the remainder is what a caller matching against the
+/// scrollback already expects.
+fn split_look(stdout: &[u8]) -> (bool, &[u8]) {
+    match stdout.iter().position(|byte| *byte == b'\n') {
+        Some(end) => (&stdout[..end] == b"1", &stdout[end + 1..]),
+        None => (stdout == b"1", &[]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_look;
+
+    #[test]
+    fn a_look_separates_the_flag_from_the_capture() {
+        assert_eq!(
+            split_look(b"0\nfirst\nsecond\n"),
+            (false, &b"first\nsecond\n"[..])
+        );
+        assert_eq!(split_look(b"1\nfirst\n"), (true, &b"first\n"[..]));
+        // A pane with nothing on screen still answers the flag.
+        assert_eq!(split_look(b"0\n"), (false, &b""[..]));
+        // `display-message` prints nothing for a pane tmux cannot resolve, and
+        // the capture that follows fails, so this shape is only ever read on a
+        // path that already returned an error.
+        assert_eq!(split_look(b""), (false, &b""[..]));
+    }
+}

@@ -8,10 +8,20 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import tomllib
 
 
 MANIFEST = Path("crates/libtmux/examples/api/manifest.json")
 INVENTORY = "crates/libtmux/docs/public-api.txt"
+PACKAGES = ("libtmux", "libtmux-tokio")
+
+
+def package_paths(package: str) -> tuple[Path, str]:
+    """Return the recorded manifest and compiler inventory for a client."""
+    if package not in PACKAGES:
+        raise ValueError(f"unsupported client package: {package}")
+    return (Path(f"crates/{package}/examples/api/manifest.json"),
+            f"crates/{package}/docs/public-api.txt")
 
 
 def source_file(root: Path, path: str) -> dict[str, str]:
@@ -29,17 +39,18 @@ def source_file(root: Path, path: str) -> dict[str, str]:
             "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def validate(root: Path, manifest: dict) -> dict:
+def validate(root: Path, manifest: dict, package: str = "libtmux") -> dict:
     """Check explicit native targets and return the exact displayed file hashes."""
+    _, inventory_path = package_paths(package)
     keys = {"schemaVersion", "language", "nativeInventory", "setupFiles",
             "programFileName", "runCommand", "examples"}
     if set(manifest) != keys or manifest["schemaVersion"] != 1:
         raise ValueError("unsupported API example manifest schema")
-    if (manifest["language"] != "rust" or manifest["nativeInventory"] != INVENTORY
+    if (manifest["language"] != "rust" or manifest["nativeInventory"] != inventory_path
             or manifest["programFileName"] != "src/main.rs"
             or manifest["runCommand"] != "cargo run --quiet"):
         raise ValueError("unexpected Rust example setup")
-    inventory = source_file(root, INVENTORY)
+    inventory = source_file(root, inventory_path)
     native = set(re.findall(r"^\w+ (\S+?)(?=: |$)", inventory["code"], re.MULTILINE))
     if not native:
         raise ValueError("native public inventory has no declarations")
@@ -54,6 +65,13 @@ def validate(root: Path, manifest: dict) -> dict:
         setup.append({**source_file(root, item["sourceFile"]), "name": item["name"]})
     if names != {"Cargo.toml", "rust-toolchain.toml"}:
         raise ValueError("both Cargo and toolchain setup files are required")
+    cargo = tomllib.loads(next(item["code"] for item in setup if item["name"] == "Cargo.toml"))
+    dependency = cargo.get("dependencies", {}).get(package)
+    if (not isinstance(dependency, dict)
+            or dependency.get("path") != f"libtmux-source/crates/{package}"
+            or dependency.get("package", package) != package
+            or "query" not in dependency.get("features", [])):
+        raise ValueError(f"consumer must declare {package} with its path and query feature")
     examples = []
     identifiers = set()
     targets = set()
@@ -70,7 +88,7 @@ def validate(root: Path, manifest: dict) -> dict:
             raise ValueError(f"example prose or expected output is empty: {item['id']}")
         name = item["id"].removeprefix("rust-")
         if (item["cargoExample"] != f"api_{name}"
-                or item["sourceFile"] != f"crates/libtmux/examples/api_{name}.rs"
+                or item["sourceFile"] != f"crates/{package}/examples/api_{name}.rs"
                 or item["sourceFile"] in files):
             raise ValueError(f"unexpected or duplicate program file: {item['id']}")
         files.add(item["sourceFile"])
@@ -84,14 +102,14 @@ def validate(root: Path, manifest: dict) -> dict:
             targets.add(target)
         program = source_file(root, item["sourceFile"])
         code = program["code"]
-        if "#[tokio::main" not in code or "async fn main()" not in code:
+        if not re.search(r"^(?:async )?fn main\(\)", code, re.MULTILINE):
             raise ValueError(f"program has no displayed entrypoint: {item['id']}")
         if re.search(r"\binclude(?:_str|_bytes)?!|^\s*mod\s+\w+\s*;|use\s+(?:crate|super)::",
                      code, re.MULTILINE):
             raise ValueError(f"program depends on a hidden source helper: {item['id']}")
         examples.append({**item, "files": [*setup, {**program, "name": "src/main.rs"}]})
     shipped = {path.relative_to(root).as_posix()
-               for path in (root / "crates/libtmux/examples").glob("api_*.rs")}
+               for path in (root / f"crates/{package}/examples").glob("api_*.rs")}
     if files != shipped:
         raise ValueError("manifest and complete API program files disagree")
     if not examples:
@@ -102,14 +120,17 @@ def validate(root: Path, manifest: dict) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="write exact source payload and hashes")
+    parser.add_argument("--crate", choices=PACKAGES, default="libtmux",
+                        help="client package whose complete programs are checked")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    manifest = json.loads((root / MANIFEST).read_text())
-    result = validate(root, manifest)
+    manifest_path, _ = package_paths(args.crate)
+    manifest = json.loads((root / manifest_path).read_text())
+    result = validate(root, manifest, args.crate)
     if args.output:
         args.output.write_text(json.dumps(result, indent=2) + "\n")
     count = sum(len(item["targets"]) for item in result["examples"])
-    print(f"validated {len(result['examples'])} complete Rust programs on {count} native targets")
+    print(f"validated {len(result['examples'])} complete {args.crate} programs on {count} native targets")
 
 
 if __name__ == "__main__":

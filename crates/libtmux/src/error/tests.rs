@@ -129,7 +129,7 @@ fn an_effect_boundary_preserves_a_redacted_source_without_growing() {
     let source = StdError::source(&error).expect("the boundary exposes its source");
     let source = source
         .downcast_ref::<Box<Error>>()
-        .expect("the source owns a libtmux::Error")
+        .expect("the source owns a libtmux_tokio::Error")
         .as_ref();
     assert_eq!(source.kind(), ErrorKind::Refused);
     assert!(source.source().is_none(), "the source chain has one edge");

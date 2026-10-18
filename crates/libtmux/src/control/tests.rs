@@ -1,15 +1,21 @@
-use std::time::Duration;
-use std::{
-    sync::Arc,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::too_many_lines
+)]
 
-use tokio::sync::{mpsc, oneshot, watch};
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use super::actor::admit_request;
+use super::channel::{self, ReplyReceiver, Request, Shared, TryRecvError, lock, reply_channel};
 use super::{
     BlockResult, ControlEvents, ControlSender, Delivery, Event, HELD_WHILE_AWAITING, Line,
-    PaneOutput, ReplySlot, ReplySlots, Request, admit_request, decode_watched_pane_id,
-    unescape_output,
+    PaneOutput, ReplySlot, ReplySlots, decode_watched_pane_id, unescape_output,
 };
 use crate::{
     Command, ControlModeErrorKind, Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId,
@@ -21,166 +27,24 @@ fn reply(number: u64) -> BlockResult {
         succeeded: true,
         output: Vec::new(),
         sensitive_input: false,
-        chained: 0,
+        failed_lines: Vec::new(),
     }
 }
 
-#[tokio::test]
-async fn bootstrap_cleanup_drains_events_and_preserves_error_priority() {
-    let mut failed = reply(2);
-    failed.succeeded = false;
-    let refusal = || {
-        failed
-            .refusal_for("refresh-client")
-            .expect("command refused")
-    };
-    for (primary, recover_terminal) in [
-        (Error::control_mode_closed(), true),
-        (
-            Error::control_mode_closed().after_effect("watch-only"),
-            true,
-        ),
-        (refusal(), false),
-        (refusal().after_effect("watch-only"), false),
-    ] {
-        let original = format!("{primary:?}");
-        let after_effect = matches!(primary, Error::AfterEffect { .. });
-        let (deliveries, received) = mpsc::channel(1);
-        deliveries
-            .send(Delivery::Boundary(super::Boundary(1)))
-            .await
-            .expect("queue has room");
-        let (stop, _stopped) = watch::channel(());
-        let connection = tokio::spawn(async move {
-            deliveries.closed().await;
-            Err(Error::control_mode_frame_too_large("line", 64))
-        });
-        let events = ControlEvents {
-            events: received,
-            stop,
-            connection: Some(connection),
-        };
-        let error =
-            tokio::time::timeout(Duration::from_secs(1), events.shutdown_after_error(primary))
-                .await
-                .expect("cleanup closes the unread event queue before joining");
-        if !recover_terminal {
-            assert_eq!(format!("{error:?}"), original);
-            continue;
-        }
-        let cause = match error {
-            Error::AfterEffect { operation, source } => {
-                assert!(after_effect);
-                assert_eq!(operation, "watch-only");
-                *source
-            }
-            error => {
-                assert!(!after_effect);
-                error
-            }
-        };
-        assert!(matches!(
-            cause,
-            Error::ControlModeFrameTooLarge {
-                frame: "line",
-                limit: 64
-            }
-        ));
-    }
-}
-
-#[tokio::test]
-async fn cancelling_bootstrap_cleanup_still_stops_the_connection() {
-    let (deliveries, received) = mpsc::channel(1);
-    let (stop, mut stopped) = watch::channel(());
-    let (release, released) = oneshot::channel();
-    let (finished, complete) = oneshot::channel();
-    let connection = tokio::spawn(async move {
-        stopped.changed().await.expect("cleanup requested closure");
-        drop(deliveries);
-        released.await.expect("cleanup is released");
-        finished.send(()).expect("completion is observed");
-        Ok(())
-    });
-    let events = ControlEvents {
-        events: received,
-        stop,
-        connection: Some(connection),
-    };
-    {
-        let cleanup = events.shutdown_after_error(Error::control_mode_closed());
-        tokio::select! {
-            biased;
-            _ = cleanup => panic!("the connection has not finished cleanup"),
-            () = std::future::ready(()) => {}
-        }
-    }
-    release.send(()).expect("the connection still owns cleanup");
-    tokio::time::timeout(Duration::from_secs(1), complete)
-        .await
-        .expect("cancelled cleanup still stops the connection")
-        .expect("connection finished");
-}
-
-#[tokio::test]
-async fn cancelling_a_pending_next_preserves_the_terminal_error() {
-    let (deliveries, received) = mpsc::channel(1);
-    let (stop, _stopped) = watch::channel(());
-    let (release, released) = oneshot::channel();
-    let connection = tokio::spawn(async move {
-        released.await.expect("cleanup is released");
-        Err(Error::control_mode_timeout())
-    });
-    let mut events = ControlEvents {
-        events: received,
-        stop,
-        connection: Some(connection),
-    };
-    drop(deliveries);
-    tokio::select! {
-        biased;
-        _ = events.next_event() => panic!("EOF must wait for connection cleanup"),
-        () = std::future::ready(()) => {}
-    }
-    release.send(()).expect("cleanup is waiting");
-    let error = events
-        .next_event()
-        .await
-        .expect("terminal diagnostic")
-        .expect_err("timeout");
-    assert_eq!(error.kind(), ErrorKind::Timeout);
-    assert!(events.next_event().await.is_none());
-    events.shutdown().await.expect("error already delivered");
-}
-
-fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
-    let (result, answer) = oneshot::channel();
-    let (commit, _commitment) = oneshot::channel();
+fn request() -> (Request, ReplyReceiver) {
+    let (result, answer) = reply_channel();
     (
         Request {
             line: String::new(),
             deadline: None,
-            commit,
             result,
             boundary: None,
-            blocks: 1,
         },
         answer,
     )
 }
 
-fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
-    ControlSender {
-        commands,
-        timeout,
-        pane_off_is_safe: true,
-        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
-            "/tmp/libtmux-rs-test/control-sender",
-        )),
-    }
-}
-
-fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> Error {
+fn refused(mut answer: ReplyReceiver) -> Error {
     answer
         .try_recv()
         .expect("the request is answered")
@@ -197,7 +61,7 @@ fn block_refusal_classification_withholds_sensitive_output() {
         succeeded: false,
         output: vec![TmuxText::from(secret)],
         sensitive_input: true,
-        chained: 0,
+        failed_lines: Vec::new(),
     };
     let error = block
         .refusal_for("display-message")
@@ -218,384 +82,6 @@ fn watch_only_rejects_unreadable_pane_ids_without_echoing_them() {
         assert_eq!(error.kind(), ErrorKind::Decode);
         assert!(!diagnostic.contains("sentinel"), "{diagnostic}");
     }
-}
-
-#[tokio::test]
-async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
-    let (commands, mut requests) = mpsc::channel(4);
-    let sender = ControlSender {
-        commands,
-        timeout: Duration::from_secs(1),
-        pane_off_is_safe: true,
-        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
-            "/tmp/libtmux-rs-test/control-sender",
-        )),
-    };
-    let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
-
-    let listing = requests.recv().await.expect("list-panes request");
-    assert!(listing.line.starts_with("list-panes "));
-    listing
-        .result
-        .send(Ok(BlockResult {
-            number: 1,
-            succeeded: true,
-            output: vec![TmuxText::from_bytes(*b"%1"), TmuxText::from_bytes(*b"%2")],
-            sensitive_input: false,
-            chained: 0,
-        }))
-        .expect("watch is waiting for the listing");
-
-    let first_mute = requests.recv().await.expect("first mute request");
-    assert!(first_mute.line.contains("%1:off"));
-    first_mute
-        .result
-        .send(Ok(reply(2)))
-        .expect("watch is waiting for the first mute");
-
-    let second_mute = requests.recv().await.expect("second mute request");
-    assert!(second_mute.line.contains("%2:off"));
-    second_mute
-        .result
-        .send(Err(Error::Overloaded {
-            request_id: 11,
-            command: Command::new("refresh-client").summary(),
-            in_flight: 1,
-        }))
-        .expect("watch is waiting for the second mute");
-
-    let error = watch
-        .await
-        .expect("watch task does not panic")
-        .expect_err("the second mute fails");
-    assert!(matches!(
-        error,
-        Error::AfterEffect { operation: "watch-only", source }
-            if source.kind() == ErrorKind::Refused && source.is_transient()
-    ));
-}
-
-#[tokio::test]
-async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
-    let (commands, mut requests) = mpsc::channel(2);
-    let sender = ControlSender {
-        commands,
-        timeout: Duration::from_secs(1),
-        pane_off_is_safe: true,
-        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
-            "/tmp/libtmux-rs-test/control-sender",
-        )),
-    };
-    let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
-
-    let listing = requests.recv().await.expect("list-panes request");
-    listing
-        .result
-        .send(Ok(BlockResult {
-            number: 1,
-            succeeded: false,
-            output: vec![TmuxText::from_bytes(*b"listing refused")],
-            sensitive_input: false,
-            chained: 0,
-        }))
-        .expect("watch is waiting for the listing");
-
-    let error = watch
-        .await
-        .expect("watch task does not panic")
-        .expect_err("a failed listing is not pane data");
-    assert_eq!(error.kind(), ErrorKind::Refused);
-    assert!(!matches!(error, Error::AfterEffect { .. }));
-    assert!(requests.try_recv().is_err(), "no mute was dispatched");
-}
-
-#[tokio::test]
-async fn pane_output_shutdown_reports_the_specific_terminal_error() {
-    // PaneOutput's own Stream and next_chunk stay infallible by design (see
-    // its doc comment): whatever ends the connection collapses into `None`.
-    // shutdown() is where a caller who needs to tell "frame too large" from
-    // "pane finished" looks -- it never touches ControlEvents::poll_next, so
-    // the connection's own JoinHandle is still there to consult when asked.
-    let (commands, _requests) = mpsc::channel(1);
-    let sender = sender(commands, Duration::from_secs(5));
-    let (deliveries, received) = mpsc::channel(1);
-    let (stop, _stopped) = watch::channel(());
-    let connection =
-        tokio::spawn(async { Err(Error::control_mode_frame_too_large("test-frame", 42)) });
-    let mut output = PaneOutput::new(
-        "%1".parse().expect("a pane id"),
-        ControlEvents {
-            events: received,
-            stop,
-            connection: Some(connection),
-        },
-        sender,
-    );
-    drop(deliveries);
-
-    assert!(
-        output.next_chunk().await.is_none(),
-        "the stream ends quietly"
-    );
-    let error = output
-        .shutdown()
-        .await
-        .expect_err("the frame-too-large diagnostic survives to shutdown");
-    assert!(matches!(error, Error::ControlModeFrameTooLarge { .. }));
-}
-
-#[tokio::test]
-async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
-    let (commands, mut requests) = mpsc::channel(4);
-    let sender = sender(commands, Duration::from_secs(5));
-    let (_events, received) = mpsc::channel(1);
-    let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
-    let mut output = PaneOutput::new(
-        "%1".parse().expect("a pane id"),
-        ControlEvents {
-            events: received,
-            stop,
-            connection: Some(connection),
-        },
-        sender,
-    );
-
-    output.narrow();
-    let first = requests.recv().await.expect("the first list-panes request");
-    assert!(first.line.starts_with("list-panes "));
-    output.narrow();
-    first
-        .result
-        .send(Err(Error::control_mode_closed()))
-        .expect("the first pass is still waiting");
-
-    let second = tokio::time::timeout(Duration::from_secs(1), requests.recv())
-        .await
-        .expect("the dirty state starts another pass")
-        .expect("the sender remains open");
-    assert!(second.line.starts_with("list-panes "));
-    second
-        .result
-        .send(Ok(reply(2)))
-        .expect("the second pass is still waiting");
-}
-
-#[tokio::test]
-async fn cancelling_a_snapshot_leaves_consumed_output_in_the_callers_sink() {
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = sender(commands, Duration::from_secs(5));
-    let (deliveries, received) = mpsc::channel(1);
-    let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
-    let mut output = PaneOutput::new(
-        "%1".parse().expect("a pane id"),
-        ControlEvents {
-            events: received,
-            stop,
-            connection: Some(connection),
-        },
-        sender,
-    );
-    let (staged, staged_answer) = oneshot::channel();
-    let (release, release_answer) = oneshot::channel();
-    let driver = tokio::spawn(async move {
-        let request = requests.recv().await.expect("the capture request");
-        let boundary = request.boundary.expect("the capture boundary");
-        deliveries
-            .send(Delivery::Event(Event::Output {
-                pane: "%1".parse().expect("a pane id"),
-                bytes: b"before".to_vec(),
-            }))
-            .await
-            .expect("the output receiver remains open");
-        // With a one-item channel, completing this send proves the snapshot
-        // consumed and staged the output above.
-        deliveries
-            .send(Delivery::Event(Event::SessionsChanged))
-            .await
-            .expect("the output receiver remains open");
-        staged.send(()).expect("the test still waits for staging");
-        release_answer.await.expect("the test releases the reply");
-        deliveries
-            .send(Delivery::Boundary(boundary))
-            .await
-            .expect("the output receiver remains open");
-        let _ = request.result.send(Ok(reply(1)));
-        deliveries
-            .send(Delivery::Event(Event::Output {
-                pane: "%1".parse().expect("a pane id"),
-                bytes: b"after".to_vec(),
-            }))
-            .await
-            .expect("the output receiver remains open");
-    });
-
-    let mut consumed = Vec::new();
-    {
-        let snapshot = output.snapshot(|bytes| consumed.extend_from_slice(bytes));
-        tokio::pin!(snapshot);
-        tokio::select! {
-            outcome = snapshot.as_mut() => panic!("the unreplied capture finished: {outcome:?}"),
-            result = staged_answer => result.expect("the driver reports staged output"),
-        }
-    }
-
-    assert_eq!(consumed, b"before");
-    release
-        .send(())
-        .expect("the driver still waits for release");
-    assert_eq!(
-        output.next_chunk().await.as_deref(),
-        Some(b"after".as_slice()),
-        "the stale boundary is ignored and retained output is not repeated",
-    );
-    driver.await.expect("the driver task joins");
-    output.shutdown().await.expect("connection shuts down");
-}
-
-#[tokio::test]
-async fn a_snapshot_streams_a_flood_into_caller_owned_storage() {
-    const CHUNKS: usize = 128;
-    const CHUNK_BYTES: usize = 4096;
-
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = sender(commands, Duration::from_secs(5));
-    let (deliveries, received) = mpsc::channel(1);
-    let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
-    let mut output = PaneOutput::new(
-        "%1".parse().expect("a pane id"),
-        ControlEvents {
-            events: received,
-            stop,
-            connection: Some(connection),
-        },
-        sender,
-    );
-    let (staged, staged_answer) = oneshot::channel();
-    let (release, release_answer) = oneshot::channel();
-    let driver = tokio::spawn(async move {
-        let request = requests.recv().await.expect("the capture request");
-        let boundary = request.boundary.expect("the capture boundary");
-        for _ in 0..CHUNKS {
-            deliveries
-                .send(Delivery::Event(Event::Output {
-                    pane: "%1".parse().expect("a pane id"),
-                    bytes: vec![b'x'; CHUNK_BYTES],
-                }))
-                .await
-                .expect("the output receiver remains open");
-        }
-        deliveries
-            .send(Delivery::Event(Event::SessionsChanged))
-            .await
-            .expect("the output receiver remains open");
-        staged.send(()).expect("the test still waits for staging");
-        release_answer.await.expect("the test releases the reply");
-        deliveries
-            .send(Delivery::Boundary(boundary))
-            .await
-            .expect("the output receiver remains open");
-        request
-            .result
-            .send(Ok(reply(1)))
-            .expect("the snapshot still waits for its result");
-    });
-
-    let observed = Arc::new(AtomicUsize::new(0));
-    let sink = Arc::clone(&observed);
-    let visible = {
-        let snapshot = output.snapshot(move |bytes| {
-            sink.fetch_add(bytes.len(), Ordering::Relaxed);
-        });
-        tokio::pin!(snapshot);
-        tokio::select! {
-            outcome = snapshot.as_mut() => panic!("the unreplied capture finished: {outcome:?}"),
-            result = staged_answer => result.expect("the driver reports streamed output"),
-        }
-        assert_eq!(observed.load(Ordering::Relaxed), CHUNKS * CHUNK_BYTES);
-
-        release
-            .send(())
-            .expect("the driver still waits for release");
-        snapshot.await.expect("the pane is captured")
-    };
-    assert!(visible.is_empty());
-    driver.await.expect("the driver task joins");
-    assert!(
-        output.next_chunk().await.is_none(),
-        "output handed to the sink is not retained again"
-    );
-    output.shutdown().await.expect("connection shuts down");
-}
-
-#[tokio::test]
-async fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = sender(commands, Duration::from_secs(5));
-    let (deliveries, received) = mpsc::channel(1);
-    let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
-    let mut output = PaneOutput::new(
-        "%1".parse().expect("a pane id"),
-        ControlEvents {
-            events: received,
-            stop,
-            connection: Some(connection),
-        },
-        sender,
-    );
-    let driver = tokio::spawn(async move {
-        let request = requests.recv().await.expect("the capture request");
-        request
-            .result
-            .send(Err(Error::control_mode_closed()))
-            .expect("the snapshot still waits for its result");
-    });
-
-    let error = tokio::time::timeout(Duration::from_secs(1), output.snapshot(|_| {}))
-        .await
-        .expect("a rejected request needs no stream boundary")
-        .expect_err("the rejected capture fails");
-
-    assert_eq!(error.kind(), ErrorKind::Transport);
-    driver.await.expect("the driver task joins");
-    drop(deliveries);
-    output.shutdown().await.expect("connection shuts down");
-}
-
-#[tokio::test]
-async fn mute_pane_reports_a_control_error_block() {
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = ControlSender {
-        commands,
-        timeout: Duration::from_secs(1),
-        pane_off_is_safe: true,
-        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
-            "/tmp/libtmux-rs-test/control-sender",
-        )),
-    };
-    let pane: PaneId = "%1".parse().expect("a pane id");
-    let mute = tokio::spawn(async move { sender.mute_pane(&pane).await });
-
-    let request = requests.recv().await.expect("mute request");
-    request
-        .result
-        .send(Ok(BlockResult {
-            number: 1,
-            succeeded: false,
-            output: vec![TmuxText::from_bytes(*b"mute refused")],
-            sensitive_input: false,
-            chained: 0,
-        }))
-        .expect("mute is waiting for its block");
-
-    let error = mute
-        .await
-        .expect("mute task does not panic")
-        .expect_err("an error block is not success");
-    assert_eq!(error.kind(), ErrorKind::Refused);
 }
 
 #[test]
@@ -624,7 +110,7 @@ fn a_refused_reply_keeps_the_next_reply_aligned() {
     assert!(replies.has_live(), "C keeps reply reading unpaused");
     replies.complete(reply(2));
     assert!(
-        matches!(c_reply.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+        matches!(c_reply.try_recv(), Err(TryRecvError::Empty)),
         "B's block is discarded rather than answering C",
     );
 
@@ -639,36 +125,44 @@ fn a_refused_reply_keeps_the_next_reply_aligned() {
     );
 }
 
-/// tmux answers each command of a chain with its own block and runs nothing
-/// after the first that fails. Either way the chain gets every block it is
-/// owed, and the next caller gets none of them.
 #[test]
-fn a_chain_takes_one_block_per_command_and_stops_at_a_failure() {
+fn a_chain_keeps_its_blocks_until_the_completion_fence() {
     fn block(number: u64, succeeded: bool, text: &str) -> BlockResult {
         BlockResult {
             output: vec![TmuxText::from(text)],
+            failed_lines: vec![!succeeded],
             succeeded,
             ..reply(number)
         }
     }
-    let pending = |answer: &mut oneshot::Receiver<Result<BlockResult, Error>>| {
-        matches!(answer.try_recv(), Err(oneshot::error::TryRecvError::Empty))
-    };
+    let pending =
+        |answer: &mut ReplyReceiver| matches!(answer.try_recv(), Err(TryRecvError::Empty));
 
     let mut replies = ReplySlots::default();
-    let (chain, mut chain_answer) = oneshot::channel();
-    let (next, mut next_answer) = oneshot::channel();
-    let (failing, mut failing_answer) = oneshot::channel();
-    replies.push_chain(chain, 2);
+    let (chain, mut chain_answer) = reply_channel();
+    let (next, mut next_answer) = reply_channel();
+    let (failing, mut failing_answer) = reply_channel();
+    let chain_fence = replies.push(chain, None);
     replies.push(next, None);
-    replies.push_chain(failing, 3);
+    let failing_fence = replies.push(failing, None);
 
-    replies.complete(block(1, true, "first"));
+    replies
+        .consume(block(1, true, "first"), usize::MAX)
+        .expect("first block fits");
     assert!(
         pending(&mut chain_answer),
         "one block of two is not the answer"
     );
-    replies.complete(block(2, true, "second"));
+    replies
+        .consume(block(2, true, "second"), usize::MAX)
+        .expect("second block fits");
+    assert!(
+        pending(&mut chain_answer),
+        "blocks wait for their completion fence"
+    );
+    replies
+        .consume(chain_fence.block(), usize::MAX)
+        .expect("chain completes");
     let chained = chain_answer
         .try_recv()
         .expect("the chain is answered")
@@ -689,18 +183,35 @@ fn a_chain_takes_one_block_per_command_and_stops_at_a_failure() {
         3,
     );
 
-    replies.complete(block(4, true, "printed"));
-    replies.complete(block(5, false, "refused"));
+    replies
+        .consume(block(4, true, "printed"), usize::MAX)
+        .expect("success fits");
+    replies
+        .consume(block(5, false, "refused"), usize::MAX)
+        .expect("error fits");
+    assert!(
+        pending(&mut failing_answer),
+        "failure still waits for its fence"
+    );
+    replies
+        .consume(failing_fence.block(), usize::MAX)
+        .expect("failed chain completes");
     let failed = failing_answer
         .try_recv()
         .expect("a failure ends the chain early")
         .expect("a refusal is a result");
     assert!(!failed.succeeded());
     assert_eq!(
-        failed.split_by_outcome(),
+        {
+            let (stdout, stderr) = failed.split_by_outcome();
+            (
+                stdout.cloned().collect::<Vec<_>>(),
+                stderr.cloned().collect::<Vec<_>>(),
+            )
+        },
         (
-            &[TmuxText::from("printed")][..],
-            &[TmuxText::from("refused")][..]
+            vec![TmuxText::from("printed")],
+            vec![TmuxText::from("refused")]
         ),
         "what ran before the failure is kept apart from the refusal",
     );
@@ -710,150 +221,14 @@ fn a_chain_takes_one_block_per_command_and_stops_at_a_failure() {
     );
 }
 
-#[tokio::test]
-async fn queue_wait_counts_toward_the_command_deadline() {
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = sender(commands.clone(), Duration::from_millis(20));
-    let (occupant, _answer) = request();
-    commands
-        .try_send(occupant)
-        .expect("the command queue has its one slot filled");
-
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(1),
-        sender.send(Command::new("list-sessions")),
-    )
-    .await
-    .expect("the sender applies its own deadline");
-    let error = outcome.expect_err("the full queue exceeds the deadline");
-    assert_eq!(error.kind(), ErrorKind::Timeout);
-    assert!(
-        matches!(
-            &error,
-            Error::ControlMode {
-                kind: ControlModeErrorKind::DispatchTimedOut,
-                ..
-            }
-        ),
-        "the command did not reach the write boundary",
-    );
-    assert!(
-        error.is_transient(),
-        "the unwritten command is safe to retry"
-    );
-
-    let _occupant = requests.recv().await.expect("the first request remains");
-    assert!(
-        requests.try_recv().is_err(),
-        "the expired request never enters the queue",
-    );
-}
-
-#[tokio::test]
-async fn cancellation_before_actor_commit_refuses_the_request() {
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = sender(commands, Duration::from_secs(1));
-    let sending = tokio::spawn(async move { sender.send(Command::new("list-sessions")).await });
-
-    let request = requests.recv().await.expect("the request is queued");
-    sending.abort();
-    assert!(
-        sending
-            .await
-            .expect_err("the caller was cancelled")
-            .is_cancelled(),
-    );
-    assert!(
-        request.commit().is_none(),
-        "the actor cannot commit a cancelled request",
-    );
-}
-
-#[tokio::test]
-async fn deadline_before_actor_commit_refuses_the_request() {
-    let timeout = Duration::from_millis(20);
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = sender(commands, timeout);
-    let sending = tokio::spawn(async move { sender.send(Command::new("list-sessions")).await });
-
-    let request = requests.recv().await.expect("the request is queued");
-    let error = sending
-        .await
-        .expect("the caller task joins")
-        .expect_err("the held request reaches its deadline");
-    assert_eq!(error.kind(), ErrorKind::Timeout);
-    assert!(
-        matches!(
-            &error,
-            Error::ControlMode {
-                kind: ControlModeErrorKind::DispatchTimedOut,
-                ..
-            }
-        ),
-        "the held command did not reach the write boundary",
-    );
-    assert!(
-        error.is_transient(),
-        "the unwritten command is safe to retry"
-    );
-    assert!(
-        request.commit().is_none(),
-        "the actor cannot commit the expired request",
-    );
-}
-
-#[tokio::test]
-async fn cancellation_after_commit_keeps_reply_alignment() {
-    let (commands, mut requests) = mpsc::channel(1);
-    let sender = sender(commands, Duration::from_secs(1));
-    let sending = tokio::spawn(async move { sender.send(Command::new("list-sessions")).await });
-
-    let request = requests.recv().await.expect("the request is queued");
-    let request = request.commit().expect("the actor commits the request");
-    sending.abort();
-    assert!(
-        sending
-            .await
-            .expect_err("the caller was cancelled")
-            .is_cancelled(),
-    );
-
-    let mut replies = ReplySlots::default();
-    replies.push(request.result, request.deadline);
-    assert!(
-        matches!(replies.slots.front(), Some(ReplySlot::Tombstone { .. })),
-        "the committed command keeps its reply slot",
-    );
-
-    let (next, mut next_answer) = oneshot::channel();
-    replies.push(next, None);
-    replies.complete(reply(1));
-    assert!(
-        matches!(
-            next_answer.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ),
-        "the cancelled command consumes its own block",
-    );
-    replies.complete(reply(2));
-    assert_eq!(
-        next_answer
-            .try_recv()
-            .expect("the next caller is answered")
-            .expect("the next command succeeds")
-            .number(),
-        2,
-    );
-}
-
 #[test]
 fn reply_deadline_is_the_earliest_pending_deadline() {
-    let now = tokio::time::Instant::now();
+    let now = Instant::now();
     let earlier = now + Duration::from_secs(1);
     let later = now + Duration::from_secs(2);
     let mut replies = ReplySlots::default();
-    let (first, _first_answer) = oneshot::channel();
-    let (second, _second_answer) = oneshot::channel();
+    let (first, _first_answer) = reply_channel();
+    let (second, _second_answer) = reply_channel();
 
     replies.push(first, later.into());
     replies.push(second, earlier.into());
@@ -863,8 +238,8 @@ fn reply_deadline_is_the_earliest_pending_deadline() {
     replies.complete(reply(2));
     assert_eq!(replies.earliest_deadline(), None);
 
-    let (first, _first_answer) = oneshot::channel();
-    let (second, _second_answer) = oneshot::channel();
+    let (first, _first_answer) = reply_channel();
+    let (second, _second_answer) = reply_channel();
     replies.push(first, earlier.into());
     replies.push(second, later.into());
     replies.complete(reply(3));
@@ -908,7 +283,10 @@ fn retries_at_the_unread_limit_do_not_grow_reply_slots() {
 fn block_headers_correlate_by_the_number_tmux_assigns() {
     assert_eq!(
         Line::parse(b"%begin 1786582374 347 0"),
-        Line::BlockStart(347)
+        Line::BlockStart {
+            number: 347,
+            flags: 0
+        }
     );
     assert_eq!(
         Line::parse(b"%end 1786582374 347 0"),
@@ -930,9 +308,6 @@ fn block_headers_correlate_by_the_number_tmux_assigns() {
     assert!(matches!(Line::parse(b"%begin bad"), Line::Text(_)));
 }
 
-/// Shared by the notification tests, which between them name every
-/// notification tmux writes. The strings are tmux's own format strings
-/// from `control-notify.c` and `control.c` with the placeholders filled.
 fn event(line: &[u8]) -> Event {
     match Line::parse(line) {
         Line::Event(event) => event,
@@ -1018,8 +393,6 @@ fn window_notifications_are_parsed() {
     );
 }
 
-/// The one notification tmux builds from a format template, so its
-/// trailing field is whatever `#{window_raw_flags}` expanded to.
 #[test]
 fn a_layout_change_is_parsed() {
     assert_eq!(
@@ -1107,8 +480,6 @@ fn client_buffer_and_server_notifications_are_parsed() {
     );
 }
 
-/// tmux writes `-` for a field the subscription does not name, so an
-/// absent one is a real answer rather than a parse failure.
 #[test]
 fn a_subscription_change_is_parsed_with_and_without_its_optional_fields() {
     assert_eq!(
@@ -1135,8 +506,6 @@ fn a_subscription_change_is_parsed_with_and_without_its_optional_fields() {
     );
 }
 
-/// tmux adds notifications between releases, so an unrecognized one is
-/// kept rather than dropped.
 #[test]
 fn an_unmodelled_notification_is_kept() {
     assert_eq!(
@@ -1148,9 +517,6 @@ fn an_unmodelled_notification_is_kept() {
     );
 }
 
-/// tmux queues a notification raised while a block is open, so a line
-/// inside one is command output even when it reads as a notification.
-/// `list-panes -F '#{pane_id}'` writes `%0` for every row.
 #[test]
 fn a_block_line_that_looks_like_a_notification_is_output() {
     assert_eq!(
@@ -1177,9 +543,6 @@ fn a_block_line_that_looks_like_a_notification_is_output() {
     );
 }
 
-/// Parsing these leniently would report a pane that does not exist, which
-/// is worse than reporting a line nobody claimed. The text keeps the whole
-/// line, notification name included, so nothing is lost by not knowing it.
 #[test]
 fn a_malformed_notification_is_text_rather_than_a_guess() {
     let cases: [&[u8]; 5] = [
@@ -1259,19 +622,553 @@ fn output_escaping_round_trips_the_bytes_tmux_sends() {
     assert_eq!(unescape_output(br"a\zb"), b"a\\zb");
 }
 
-#[tokio::test]
-async fn a_line_that_never_ends_stops_at_its_budget() {
-    // An endless stream carrying no newline is what a line budget is for, and
-    // what a budget checked after the read never gets to see: `read_until`
-    // does not return, so the check does not run.
-    let mut stream = tokio::io::BufReader::new(tokio::io::repeat(b'a'));
-    let mut pending = Vec::new();
-    let error = super::protocol::read_line(&mut stream, &mut pending, 4096)
-        .await
-        .expect_err("an endless line is refused");
-    assert!(
-        matches!(&error, Error::ControlModeFrameTooLarge { frame, limit, .. }
-            if *frame == "line" && *limit == 4096),
-        "got {error:?}",
+#[derive(Clone)]
+struct Driver {
+    shared: Arc<Shared>,
+    terminal: Arc<Mutex<Option<Result<(), Error>>>>,
+}
+
+impl Driver {
+    fn request(&self) -> Request {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let revision = self.shared.revision();
+            let request = {
+                let mut state = lock(&self.shared.state);
+                let request = state.commands.pop_front();
+                if request.is_some() {
+                    self.shared.notify(&mut state);
+                }
+                request
+            };
+            if let Some(request) = request {
+                return request;
+            }
+            assert!(Instant::now() < deadline, "a command arrives");
+            self.shared.wait(revision, Some(deadline));
+        }
+    }
+    fn deliver(&self, delivery: Delivery) {
+        let mut state = lock(&self.shared.state);
+        while state.events.len() >= channel::EVENT_QUEUE && state.receiver_open {
+            state = self.shared.changed.wait(state).expect("test queue lock");
+        }
+        if state.receiver_open {
+            state.events.push_back(delivery);
+            self.shared.notify(&mut state);
+        }
+    }
+    fn terminal(&self, outcome: Result<(), Error>) {
+        *lock(&self.terminal) = Some(outcome);
+    }
+    fn finish(&self, outcome: Result<(), Error>) {
+        self.terminal(outcome);
+        let mut state = lock(&self.shared.state);
+        state.finished = true;
+        self.shared.notify(&mut state);
+    }
+}
+
+fn control_pair(timeout: Duration) -> (ControlSender, ControlEvents, Driver) {
+    let (left, right) = UnixStream::pair().expect("test socket pair");
+    let shared = Shared::new(left, right);
+    let terminal = Arc::new(Mutex::new(None));
+    let worker = Arc::clone(&shared);
+    let outcome = Arc::clone(&terminal);
+    let connection = thread::spawn(move || {
+        let mut state = lock(&worker.state);
+        while !state.stop && !state.finished {
+            state = worker.changed.wait(state).expect("test queue lock");
+        }
+        state.accepting = false;
+        state.finished = true;
+        worker.notify(&mut state);
+        drop(state);
+        lock(&outcome).take().unwrap_or(Ok(()))
+    });
+    let sender = ControlSender {
+        commands: channel::Sender {
+            shared: Arc::clone(&shared),
+        },
+        timeout,
+        pane_off_is_safe: true,
+        identity: crate::ServerIdentity::from_socket_path(
+            "/tmp/libtmux-rs-test/control-sender".into(),
+        ),
+        cancellation: crate::CancellationToken::new(),
+        next_request_id: Arc::new(AtomicU64::new(1)),
+    };
+    let events = ControlEvents {
+        events: channel::Receiver {
+            shared: Arc::clone(&shared),
+            connection: Some(connection),
+        },
+    };
+    (sender, events, Driver { shared, terminal })
+}
+
+fn output(number: u64, succeeded: bool, lines: &[&str]) -> BlockResult {
+    BlockResult {
+        number,
+        succeeded,
+        output: lines.iter().map(|line| TmuxText::from(*line)).collect(),
+        sensitive_input: false,
+        failed_lines: vec![!succeeded; lines.len()],
+    }
+}
+
+#[test]
+fn bootstrap_cleanup_drains_events_and_preserves_error_priority() {
+    for after_effect in [false, true] {
+        for recover_terminal in [false, true] {
+            let primary = if recover_terminal {
+                Error::control_mode_closed()
+            } else {
+                output(1, false, &["refused"])
+                    .refusal_for("refresh-client")
+                    .expect("refusal")
+            };
+            let primary = if after_effect {
+                primary.after_effect("watch-only")
+            } else {
+                primary
+            };
+            let original = format!("{primary:?}");
+            let (_sender, events, driver) = control_pair(Duration::from_secs(1));
+            driver.deliver(Delivery::Boundary(super::Boundary(1)));
+            driver.terminal(Err(Error::control_mode_frame_too_large("line", 64)));
+            let error = events.shutdown_after_error(primary);
+            if !recover_terminal {
+                assert_eq!(format!("{error:?}"), original);
+                continue;
+            }
+            let cause = match error {
+                Error::AfterEffect { source, .. } => *source,
+                error => error,
+            };
+            assert!(matches!(
+                cause,
+                Error::ControlModeFrameTooLarge {
+                    frame: "line",
+                    limit: 64
+                }
+            ));
+        }
+    }
+}
+
+#[test]
+fn cancelling_bootstrap_cleanup_still_stops_the_connection() {
+    let (sender, events, _driver) = control_pair(Duration::from_secs(1));
+    sender.cancellation.cancel();
+    let worker = thread::spawn(move || events.shutdown_after_error(Error::control_mode_closed()));
+    let error = worker
+        .join()
+        .expect("cleanup ignores the cancelled operation token");
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
+    assert!(sender.is_closed());
+}
+
+#[test]
+fn cancelling_a_pending_next_preserves_the_terminal_error() {
+    let (_sender, mut events, driver) = control_pair(Duration::from_secs(1));
+    let stop = driver.shared.stop.clone();
+    // Blocking iteration has no partially polled future. A pending call waits
+    // for cleanup and owns the one terminal diagnostic.
+    let receiver = thread::spawn(move || {
+        let error = events
+            .next_event()
+            .expect("terminal diagnostic")
+            .expect_err("timeout");
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert!(events.next_event().is_none());
+        events.shutdown().expect("error already delivered");
+    });
+    driver.terminal(Err(Error::control_mode_timeout()));
+    stop.cancel();
+    receiver
+        .join()
+        .expect("the pending iterator finishes after cleanup");
+}
+
+#[test]
+fn watch_only_marks_a_transport_failure_after_its_first_mute() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let watch = thread::spawn(move || sender.watch_only(&[]));
+    driver
+        .request()
+        .result
+        .send(Ok(output(1, true, &["%1", "%2"])));
+    driver.request().result.send(Ok(reply(2)));
+    driver
+        .request()
+        .result
+        .send(Err(Error::control_mode_timeout()));
+    let error = watch
+        .join()
+        .expect("watch joins")
+        .expect_err("second mute failed");
+    assert!(matches!(
+        error,
+        Error::AfterEffect {
+            operation: "watch-only",
+            ..
+        }
+    ));
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let watch = thread::spawn(move || sender.watch_only(&[]));
+    driver
+        .request()
+        .result
+        .send(Ok(output(1, false, &["failed listing"])));
+    let error = watch
+        .join()
+        .expect("watch joins")
+        .expect_err("listing refused");
+    assert!(!matches!(error, Error::AfterEffect { .. }));
+    assert!(lock(&driver.shared.state).commands.is_empty());
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn pane_output_shutdown_reports_the_specific_terminal_error() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let mut pane = PaneOutput::new(a_pane(), events, sender);
+    driver.finish(Err(Error::control_mode_frame_too_large("test-frame", 42)));
+    assert!(pane.next_chunk().is_none());
+    assert!(matches!(
+        pane.shutdown(),
+        Err(Error::ControlModeFrameTooLarge {
+            frame: "test-frame",
+            limit: 42
+        })
+    ));
+}
+
+#[test]
+fn dirty_narrowing_reruns_after_an_in_flight_failure() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let mut pane = PaneOutput::new(a_pane(), events, sender);
+    pane.narrow();
+    let first = driver.request();
+    pane.narrow();
+    first.result.send(Err(Error::control_mode_timeout()));
+    let second = driver.request();
+    assert_eq!(second.line, "list-panes -s -F \"#{pane_id}\"");
+    second.result.send(Ok(output(2, true, &["%3"])));
+    driver.request().result.send(Ok(output(3, true, &["%3"])));
+    pane.shutdown().expect("cleanup");
+}
+
+#[test]
+fn cancelling_a_snapshot_leaves_consumed_output_in_the_callers_sink() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let cancellation = sender.cancellation.clone();
+    let mut pane = PaneOutput::new(a_pane(), events, sender);
+    let worker = thread::spawn(move || {
+        let request = driver.request();
+        driver.deliver(Delivery::Event(Event::Output {
+            pane: a_pane(),
+            bytes: b"before".to_vec(),
+        }));
+        driver.deliver(Delivery::Boundary(
+            request.boundary.expect("snapshot boundary"),
+        ));
+        driver.deliver(Delivery::Event(Event::Output {
+            pane: a_pane(),
+            bytes: b"after".to_vec(),
+        }));
+        // Cancellation must win before the reply is made available.
+        while !request.result.is_closed() {
+            thread::yield_now();
+        }
+        request.result.send(Ok(output(1, true, &["visible"])));
+    });
+    let mut kept = Vec::new();
+    let error = pane
+        .snapshot(|chunk| {
+            kept.extend_from_slice(chunk);
+            cancellation.cancel();
+        })
+        .expect_err("snapshot cancelled");
+    assert_eq!(error.kind(), ErrorKind::Cancelled);
+    assert_eq!(kept, b"before");
+    assert_eq!(pane.next_chunk().as_deref(), Some(b"after".as_slice()));
+    worker.join().expect("driver joins");
+    pane.shutdown().expect("cleanup");
+}
+
+#[test]
+fn a_snapshot_streams_a_flood_into_caller_owned_storage() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(5));
+    let mut pane = PaneOutput::new(a_pane(), events, sender);
+    let count = HELD_WHILE_AWAITING * 2;
+    let worker = thread::spawn(move || {
+        let request = driver.request();
+        for _ in 0..count {
+            driver.deliver(Delivery::Event(Event::Output {
+                pane: a_pane(),
+                bytes: b"chunk".to_vec(),
+            }));
+        }
+        driver.deliver(Delivery::Boundary(
+            request.boundary.expect("snapshot boundary"),
+        ));
+        request.result.send(Ok(output(1, true, &["visible"])));
+        driver.finish(Ok(()));
+    });
+    let mut bytes = 0;
+    assert_eq!(
+        pane.snapshot(|chunk| bytes += chunk.len())
+            .expect("capture"),
+        [TmuxText::from("visible")]
     );
+    assert_eq!(bytes, count * 5);
+    worker.join().expect("driver joins");
+    assert!(pane.next_chunk().is_none());
+    pane.shutdown().expect("cleanup");
+}
+
+#[test]
+fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let mut pane = PaneOutput::new(a_pane(), events, sender);
+    let worker = thread::spawn(move || {
+        driver
+            .request()
+            .result
+            .send(Err(Error::control_mode_unread()));
+    });
+    assert_eq!(
+        pane.snapshot(|_| {}).expect_err("snapshot refused").kind(),
+        ErrorKind::Refused
+    );
+    worker.join().expect("driver joins");
+    pane.shutdown().expect("cleanup");
+}
+
+#[test]
+fn mute_pane_reports_a_control_error_block() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let worker = thread::spawn(move || sender.mute_pane(&a_pane()));
+    driver
+        .request()
+        .result
+        .send(Ok(output(1, false, &["refused"])));
+    assert_eq!(
+        worker
+            .join()
+            .expect("mute joins")
+            .expect_err("mute refused")
+            .kind(),
+        ErrorKind::Refused
+    );
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn queue_wait_counts_toward_the_command_deadline() {
+    let (sender, events, driver) = control_pair(Duration::from_millis(20));
+    let mut kept = Vec::new();
+    for _ in 0..channel::COMMAND_QUEUE {
+        let (request, answer) = request();
+        lock(&driver.shared.state).commands.push_back(request);
+        kept.push(answer);
+    }
+    let error = sender
+        .send(Command::new("list-sessions"))
+        .expect_err("queue full");
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::DispatchTimedOut,
+            ..
+        }
+    ));
+    assert!(error.is_transient());
+    assert_eq!(
+        lock(&driver.shared.state).commands.len(),
+        channel::COMMAND_QUEUE
+    );
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn cancellation_before_actor_commit_refuses_the_request() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let cancellation = sender.cancellation.clone();
+    let sending = thread::spawn(move || sender.send(Command::new("list-sessions")));
+    let request = driver.request();
+    cancellation.cancel();
+    assert_eq!(
+        sending
+            .join()
+            .expect("sender joins")
+            .expect_err("cancelled")
+            .kind(),
+        ErrorKind::Cancelled
+    );
+    assert!(request.commit().is_none());
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn deadline_before_actor_commit_refuses_the_request() {
+    let (sender, events, driver) = control_pair(Duration::from_millis(20));
+    let sending = thread::spawn(move || sender.send(Command::new("list-sessions")));
+    let request = driver.request();
+    let error = sending
+        .join()
+        .expect("sender joins")
+        .expect_err("deadline elapsed");
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::DispatchTimedOut,
+            ..
+        }
+    ));
+    assert!(error.is_transient());
+    assert!(request.commit().is_none());
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn cancellation_remains_visible_after_the_actor_drops_the_request() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let (mut submission, _) = sender
+        .begin_ordered(Command::new("list-sessions"), None)
+        .expect("command is representable");
+    assert!(submission.poll().is_none());
+    sender.cancellation.cancel();
+    assert!(driver.request().commit().is_none());
+    assert_eq!(
+        submission
+            .poll()
+            .expect("cancelled result")
+            .expect_err("cancelled")
+            .kind(),
+        ErrorKind::Cancelled
+    );
+    assert!(!sender.is_closed());
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn cancellation_after_commit_keeps_reply_alignment() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let cancellation = sender.cancellation.clone();
+    let sending = thread::spawn(move || sender.send(Command::new("list-sessions")));
+    let request = driver.request().commit().expect("committed");
+    cancellation.cancel();
+    assert_eq!(
+        sending
+            .join()
+            .expect("sender joins")
+            .expect_err("cancelled")
+            .kind(),
+        ErrorKind::Cancelled
+    );
+    let mut slots = ReplySlots::default();
+    let cancelled_fence = slots.push(request.result, None);
+    assert!(matches!(
+        slots.slots.front(),
+        Some(ReplySlot::Tombstone { .. })
+    ));
+    let (result, mut next) = reply_channel();
+    slots.push(result, None);
+    slots.consume(reply(1), usize::MAX).expect("parent block");
+    slots.consume(reply(2), usize::MAX).expect("nested block");
+    assert!(matches!(next.try_recv(), Err(TryRecvError::Empty)));
+    slots
+        .consume(cancelled_fence.block(), usize::MAX)
+        .expect("cancelled fence");
+    assert!(matches!(next.try_recv(), Err(TryRecvError::Empty)));
+    slots.complete(reply(3));
+    assert_eq!(
+        next.try_recv()
+            .expect("next reply")
+            .expect("success")
+            .number(),
+        3
+    );
+    events.shutdown().expect("cleanup");
+}
+
+#[test]
+fn a_line_that_never_ends_stops_at_its_budget() {
+    let mut stream = std::io::BufReader::new(std::io::repeat(b'a'));
+    let error = super::protocol::read_raw(&mut stream, 4096).expect_err("endless line refused");
+    assert!(matches!(
+        error,
+        Error::ControlModeFrameTooLarge {
+            frame: "line",
+            limit: 4096
+        }
+    ));
+}
+
+#[test]
+fn event_timeout_keeps_the_next_event_and_connection_error() {
+    let (_sender, mut events, driver) = control_pair(Duration::from_secs(1));
+    let error = events
+        .next_event_timeout(Duration::from_millis(10))
+        .expect_err("quiet stream times out");
+    assert!(error.is_transient());
+    assert_eq!(error.kind(), ErrorKind::Timeout);
+    driver.deliver(Delivery::Event(Event::SessionsChanged));
+    assert_eq!(
+        events
+            .next_event_timeout(Duration::ZERO)
+            .expect("queued event is immediate"),
+        Some(Event::SessionsChanged)
+    );
+    driver.finish(Err(Error::control_mode_frame_too_large("line", 42)));
+    assert!(matches!(
+        events.next_event_timeout(Duration::from_secs(1)),
+        Err(Error::ControlModeFrameTooLarge {
+            frame: "line",
+            limit: 42
+        })
+    ));
+    assert!(
+        events
+            .next_event_timeout(Duration::ZERO)
+            .expect("error delivered once")
+            .is_none()
+    );
+    events.shutdown().expect("cleanup delivered");
+}
+
+#[test]
+fn output_timeout_preserves_the_next_chunk() {
+    let (sender, events, driver) = control_pair(Duration::from_secs(1));
+    let mut output = PaneOutput::new(a_pane(), events, sender);
+    let error = output
+        .next_chunk_timeout(Duration::from_millis(10))
+        .expect_err("quiet output times out");
+    assert!(error.is_transient());
+    driver.deliver(Delivery::Event(Event::Output {
+        pane: a_pane(),
+        bytes: b"kept".to_vec(),
+    }));
+    assert_eq!(
+        output
+            .next_chunk_timeout(Duration::ZERO)
+            .expect("queued output is immediate")
+            .as_deref(),
+        Some(b"kept".as_slice())
+    );
+    output.shutdown().expect("cleanup");
 }

@@ -1,0 +1,516 @@
+//! Tmux release parsing and capability checks.
+
+use std::cmp::Ordering;
+use std::fmt;
+use std::str;
+
+use crate::Error;
+
+pub use libtmux::{ReleaseSuffix, ReleaseVersion};
+
+/// A parsed raw tmux version.
+///
+/// Numbered releases expose an ordered [`ReleaseVersion`]. Development
+/// identifiers preserve their token and remain unordered relative to numbered
+/// releases.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux_tokio::test::TestServer::new().await?;
+/// let version = guard.server().capabilities().await?.tmux_version().clone();
+///
+/// // A development build carries no numbered release, so a caller asks
+/// // `meets` rather than comparing the text tmux printed.
+/// assert!(version.release().is_some() || version.is_development());
+/// assert!(!version.raw().is_empty());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+pub struct TmuxVersion {
+    raw: Box<str>,
+    release: Option<ReleaseVersion>,
+}
+
+impl TmuxVersion {
+    /// The minimum supported tmux release, 3.2a.
+    pub const MIN_SUPPORTED: ReleaseVersion = ReleaseVersion::new(3, 2, ReleaseSuffix::PATCH_A);
+
+    /// Parse the exact output from `tmux -V`.
+    ///
+    /// The output must contain one nonempty program-name token, one version
+    /// token, and one trailing newline. Invalid process output is never stored
+    /// in the returned error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidVersionOutput`] for malformed framing or version
+    /// syntax, unsupported characters, extra lines, or invalid UTF-8.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::TmuxVersion;
+    ///
+    /// let version = TmuxVersion::parse_output(b"tmux 3.7b\n")?;
+    /// assert_eq!(version.raw(), "3.7b");
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    pub fn parse_output(output: &[u8]) -> Result<Self, Error> {
+        let raw = parse_output_frame(output)
+            .ok_or_else(|| Error::from_invalid_version_output(output.len()))?;
+
+        let release = match raw.as_bytes().first() {
+            Some(first) if first.is_ascii_digit() => Some(
+                parse_release(raw)
+                    .ok_or_else(|| Error::from_invalid_version_output(output.len()))?,
+            ),
+            Some(_) if is_development_identifier(raw) => None,
+            _ => return Err(Error::from_invalid_version_output(output.len())),
+        };
+
+        Ok(Self {
+            raw: raw.into(),
+            release,
+        })
+    }
+
+    /// Return the exact version token without the program-name prefix or newline.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::TmuxVersion;
+    ///
+    /// let version = TmuxVersion::parse_output(b"tmux next-3.8\n")?;
+    /// assert_eq!(version.raw(), "next-3.8");
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    /// Return the numbered release, or `None` for a development identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::TmuxVersion;
+    ///
+    /// let release = TmuxVersion::parse_output(b"tmux 3.7\n")?;
+    /// let development = TmuxVersion::parse_output(b"tmux master\n")?;
+    /// assert_eq!(release.release().map(|value| value.major()), Some(3));
+    /// assert_eq!(development.release(), None);
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn release(&self) -> Option<&ReleaseVersion> {
+        self.release.as_ref()
+    }
+
+    /// Return whether this is a development identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::TmuxVersion;
+    ///
+    /// let version = TmuxVersion::parse_output(b"tmux master\n")?;
+    /// assert!(version.is_development());
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn is_development(&self) -> bool {
+        self.release.is_none()
+    }
+
+    /// Return the release whose in-tree behavior this version carries.
+    ///
+    /// A numbered release returns itself. A `next-X.Y` identifier returns
+    /// `X.Y`, because its tree already contains the changes being developed
+    /// for that release. `master` returns `None` because it names no release.
+    ///
+    /// Unlike [`TmuxVersion::meets`], this does not clamp development
+    /// identifiers to the crate's minimum supported release. It answers "which
+    /// tmux source is running", not "may this version be relied on", so it
+    /// suits behavior windows that both open and close at known releases.
+    pub(crate) fn behavior_release(&self) -> Option<ReleaseVersion> {
+        self.release.or_else(|| parse_next_release(&self.raw))
+    }
+
+    /// Return whether this version supports a required numbered release.
+    ///
+    /// Development identifiers meet only requirements at or below the crate's
+    /// minimum supported release; they are not promoted to an invented release.
+    /// A `next-X.Y` identifier's own release number is not read here even
+    /// when `required` is that same `X.Y` or earlier -- this is a floor
+    /// check, not a capability check. Asking "does this tree already contain
+    /// a capability that shipped at version V" is [`Self::has_behavior`]'s
+    /// question, not this one; a call site gating a specific capability
+    /// behind a release above [`Self::MIN_SUPPORTED`] almost always wants
+    /// that instead, or it refuses a development build that already has the
+    /// capability it is checking for.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::TmuxVersion;
+    ///
+    /// let version = TmuxVersion::parse_output(b"tmux 3.2a\n")?;
+    /// assert!(version.meets(&TmuxVersion::MIN_SUPPORTED));
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    ///
+    /// The English verb suggests this answers "is a capability available",
+    /// but on a development build it can refuse one that is already there:
+    ///
+    /// ```
+    /// use libtmux_tokio::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+    ///
+    /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
+    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    ///
+    /// // `next-3.9`'s tree already has 3.7's behavior, but this clamps every
+    /// // development identifier to the crate's floor, so it says no anyway.
+    /// // `TmuxVersion::has_behavior` is the question that says yes.
+    /// assert!(!next.meets(&capture_line_flags));
+    /// assert!(next.has_behavior(&capture_line_flags));
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    #[must_use]
+    pub fn meets(&self, required: &ReleaseVersion) -> bool {
+        match self.release {
+            Some(release) => release >= *required,
+            None if *required > Self::MIN_SUPPORTED => false,
+            None if self.raw.as_ref() == "master" => true,
+            None => parse_next_release(&self.raw).is_some_and(|release| release >= *required),
+        }
+    }
+
+    /// Report whether this version's tree carries a capability's behavior.
+    ///
+    /// The shared rule behind `Self::require`: a development identifier
+    /// asks its `behavior_release`, never clamped to the crate's minimum
+    /// supported release. Both this and `require` call it, so they cannot
+    /// drift apart the way two independently written rules could.
+    fn behavior_satisfies(&self, needs: ReleaseVersion) -> bool {
+        self.behavior_release()
+            .is_none_or(|release| release >= needs)
+    }
+
+    /// Report whether this version's tree carries a capability's behavior.
+    ///
+    /// This is `Self::require`'s refusal rule in boolean form, so a caller
+    /// gating a specific capability -- or a test predicting which branch
+    /// `require` takes -- uses the same rule `require` does, rather than an
+    /// independently derived one that can drift from it. [`Self::meets`] is
+    /// a different, deliberately non-identical rule: it clamps *every*
+    /// development identifier -- `next-X.Y` included, not only a bare
+    /// `master` -- to "no more than the crate's minimum supported release",
+    /// so it refuses any requirement above that floor regardless of what the
+    /// build's own next-release number is. This reads `next-X.Y` as the real
+    /// release `X.Y` instead, so the two disagree for any development build
+    /// checked against a requirement above the floor: [`crate::since`] holds
+    /// several, and this crate's own tmux-matrix probe self-reports
+    /// `next-3.9`. Checking a capability with `meets` instead of this
+    /// refuses that capability on a development build that already has it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+    ///
+    /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
+    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    ///
+    /// // `next-3.9` already contains 3.7's behavior, so this reports it --
+    /// // unlike `meets`, which clamps every development identifier to the
+    /// // floor and would refuse it.
+    /// assert!(next.has_behavior(&capture_line_flags));
+    /// assert!(!next.meets(&capture_line_flags));
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    #[must_use]
+    pub fn has_behavior(&self, needs: &ReleaseVersion) -> bool {
+        self.behavior_satisfies(*needs)
+    }
+
+    /// Refuse a capability this release is too old for.
+    ///
+    /// tmux usually accepts an unknown flag and ignores it, so without this
+    /// "your tmux is too old" arrives as "the command did nothing". A
+    /// development build carries no numbered release to compare and is taken
+    /// at its word rather than refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedCapability`] when this release is below
+    /// `needs`.
+    pub(crate) fn require(
+        &self,
+        capability: &'static str,
+        needs: ReleaseVersion,
+    ) -> Result<(), Error> {
+        if !self.behavior_satisfies(needs) {
+            return Err(Error::UnsupportedCapability {
+                capability,
+                needs,
+                found: self.clone(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Require this version to meet the crate's minimum supported release.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedTmuxVersion`] when the detected version does
+    /// not establish support for tmux 3.2a.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::TmuxVersion;
+    ///
+    /// let version = TmuxVersion::parse_output(b"tmux 3.2a\n")?;
+    /// version.ensure_supported()?;
+    /// # Ok::<(), libtmux_tokio::Error>(())
+    /// ```
+    pub fn ensure_supported(&self) -> Result<(), Error> {
+        if self.meets(&Self::MIN_SUPPORTED) {
+            return Ok(());
+        }
+
+        Err(Error::unsupported_tmux_version(
+            self.clone(),
+            Self::MIN_SUPPORTED,
+        ))
+    }
+}
+
+impl fmt::Display for TmuxVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.raw)
+    }
+}
+
+impl PartialEq for TmuxVersion {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.release, other.release) {
+            (Some(left), Some(right)) => left == right,
+            (None, None) => self.raw == other.raw,
+            (Some(_), None) | (None, Some(_)) => false,
+        }
+    }
+}
+
+impl Eq for TmuxVersion {}
+
+impl PartialOrd for TmuxVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self.release, other.release) {
+            (Some(left), Some(right)) => Some(left.cmp(&right)),
+            (None, None) if self.raw == other.raw => Some(Ordering::Equal),
+            _ => None,
+        }
+    }
+}
+
+fn parse_release(raw: &str) -> Option<ReleaseVersion> {
+    let (major, remainder) = raw.split_once('.')?;
+    let minor_end = remainder
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(remainder.len());
+    let (minor, suffix) = remainder.split_at(minor_end);
+    let major = parse_u16_component(major)?;
+    let minor = parse_u16_component(minor)?;
+    let suffix = parse_release_suffix(suffix)?;
+
+    Some(ReleaseVersion::new(major, minor, suffix))
+}
+
+fn is_development_identifier(raw: &str) -> bool {
+    raw == "master" || parse_next_release(raw).is_some()
+}
+
+fn parse_next_release(raw: &str) -> Option<ReleaseVersion> {
+    let (major, minor) = raw.strip_prefix("next-")?.split_once('.')?;
+    Some(ReleaseVersion::new(
+        parse_u16_component(major)?,
+        parse_u16_component(minor)?,
+        ReleaseSuffix::FINAL,
+    ))
+}
+
+fn parse_release_suffix(suffix: &str) -> Option<ReleaseSuffix> {
+    if suffix.is_empty() {
+        return Some(ReleaseSuffix::FINAL);
+    }
+    if suffix == "-rc" {
+        return Some(ReleaseSuffix::RELEASE_CANDIDATE);
+    }
+    if let Some(number) = suffix.strip_prefix("-rc") {
+        return ReleaseSuffix::release_candidate(parse_u16_component(number)?);
+    }
+    match suffix.as_bytes() {
+        [letter] if letter.is_ascii_lowercase() => ReleaseSuffix::patch(char::from(*letter)),
+        _ => None,
+    }
+}
+
+fn parse_u16_component(component: &str) -> Option<u16> {
+    if component.is_empty()
+        || (component.len() > 1 && component.starts_with('0'))
+        || !component.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    component.parse().ok()
+}
+
+fn parse_output_frame(output: &[u8]) -> Option<&str> {
+    let line = output.strip_suffix(b"\n")?;
+    let separator = line.iter().position(|byte| *byte == b' ')?;
+    let program = line.get(..separator)?;
+    let version = line.get(separator + 1..)?;
+    if program.is_empty()
+        || version.is_empty()
+        || program
+            .iter()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        || version
+            .iter()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return None;
+    }
+    str::from_utf8(version).ok()
+}
+
+/// The tmux release each version-gated capability arrived in.
+///
+/// Every method that can answer [`crate::Error::UnsupportedCapability`] names
+/// its floor here, so a caller can ask before it calls rather than learning
+/// from the failure. Compare with [`TmuxVersion::meets`].
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux_tokio::test::TestServer::new().await?;
+/// let version = guard.server().capabilities().await?.tmux_version().clone();
+///
+/// if version.meets(&libtmux_tokio::since::SERVER_ACCESS) {
+///     assert_eq!(guard.server().access_rules().await?.len(), 1);
+/// }
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+pub mod since {
+    /// `command-error` hooks became available in tmux 3.5.
+    pub const COMMAND_ERROR_HOOK: ReleaseVersion = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
+
+    use super::{ReleaseSuffix, ReleaseVersion};
+
+    /// `server-access`, and so [`crate::Server::access_rules`].
+    pub const SERVER_ACCESS: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    /// The prompt history, and so [`crate::Server::prompt_history`].
+    pub const PROMPT_HISTORY: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    /// `pane-border-format` becoming a pane option as well as a window one.
+    ///
+    /// Below this release tmux stores it only per window, and a write sent
+    /// with `-p` lands there instead -- reporting success for a change the
+    /// caller did not ask for. See [`crate::OptionSchema::accepts`].
+    pub const PANE_BORDER_FORMAT_PER_PANE: ReleaseVersion =
+        ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    /// `pane-border-style` and `pane-active-border-style` becoming pane
+    /// options as well as window ones, with the same consequence below it as
+    /// [`PANE_BORDER_FORMAT_PER_PANE`].
+    pub const PANE_BORDER_STYLE_PER_PANE: ReleaseVersion =
+        ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// `capture-pane -F`, and so [`crate::Pane::capture_lines`].
+    pub const CAPTURE_LINE_FLAGS: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// `list-keys -F`, and so [`crate::Server::typed_key_bindings`].
+    ///
+    /// Below this release `list-keys` prints only its own `bind-key` lines,
+    /// which quote a key and leave a table name bare, and carry no note.
+    pub const LIST_KEYS_FORMAT: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// Taking a pane out of a control client's stream without crashing the
+    /// server, and so [`crate::control::ControlSender::mute_pane`] using `off`.
+    ///
+    /// Before this release `refresh-client -A <pane>:off` leaves the output
+    /// blocks already queued for that pane in place, while the pane stops
+    /// holding the server's read buffer back. Writing those blocks later
+    /// reads past the end of a buffer the server has drained, and the server
+    /// segfaults. `mute_pane` pauses the pane below this release instead,
+    /// which discards the queue on every supported release.
+    pub const CONTROL_PANE_OFF: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// `capture-pane -T`, and so [`crate::CaptureOptions::trim_blank_cells`].
+    ///
+    /// Added in 3.4 to stop at the last used cell instead of the pane's full
+    /// width. The option string is `ab:CeE:JNpPqS:t:` on 3.2a and gains `T`
+    /// by 3.5a; tmux's own CHANGES puts it in the 3.3a-to-3.4 section.
+    ///
+    /// `-N` and `-P` need no such gate: both are present at 3.2a, which is
+    /// [`crate::TmuxVersion::MIN_SUPPORTED`].
+    pub const CAPTURE_TRIM_BLANK_CELLS: ReleaseVersion =
+        ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
+
+    /// `list-clients` leaving out a client that is stopped rather than gone,
+    /// and so [`crate::Error::ClientSuspended`] being reachable at all.
+    ///
+    /// From this release `sort_get_clients` screens the listing on
+    /// `CLIENT_UNATTACHEDFLAGS`, which covers the dead, the exiting and the
+    /// suspended together, so a suspended or locked client disappears from it.
+    /// Earlier releases screen on the session alone, and suspending a client
+    /// never clears that, so it stays listed and reads back normally.
+    ///
+    /// Measured on 3.2a, 3.4, 3.5a, 3.6b, 3.7 and 3.7c: the first four list a
+    /// suspended client, the last two do not.
+    pub const CLIENTS_HIDE_STOPPED: ReleaseVersion =
+        ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// The mirrored layouts, and so [`crate::Layout::MainHorizontalMirrored`]
+    /// and [`crate::Layout::MainVerticalMirrored`].
+    ///
+    /// Below this release `layout_set_lookup` does not carry those names, and
+    /// tmux refuses one as it would a typo.
+    pub const MIRRORED_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
+
+    /// `window_layout` and `select-layout` using a JSON subset instead of the
+    /// classic checksum-prefixed string, and so [`crate::LayoutSpec::Saved`]
+    /// accepting one.
+    ///
+    /// tmux's own `CHANGES FROM 3.7c TO 3.8` names the release: "Layout
+    /// strings now use a JSON subset format ... The old format is still
+    /// accepted; control mode clients receive old layouts unless they set the
+    /// new-layouts flag." Below this release a JSON string is refused as an
+    /// unrecognised layout, with no hint that the value is simply from a
+    /// newer tmux. The format is already present in 3.8-rc.
+    pub const JSON_LAYOUTS: ReleaseVersion =
+        ReleaseVersion::new(3, 8, ReleaseSuffix::RELEASE_CANDIDATE);
+}

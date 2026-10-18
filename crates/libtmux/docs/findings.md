@@ -643,7 +643,7 @@ such as a supervisor, a cleanup pass or a workspace builder, reads "no
 sessions" from an outage as an instruction to kill everything.
 
 The names swapped. `sessions()` returns `Result`, and a caller who wants the old
-behaviour writes `sessions().await.unwrap_or_default()`, which shows the discard
+behaviour writes `sessions().unwrap_or_default()`, which shows the discard
 at the call site. An `_or_empty` twin of each listing existed for a while;
 neither consumer crate called one, and the eleven of them were eleven ways to
 discard an error by accident, so they were removed. The swap broke callers,

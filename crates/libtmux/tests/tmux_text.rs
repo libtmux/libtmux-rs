@@ -87,18 +87,13 @@ fn byte_references_preserve_the_allocation_and_invalid_utf8() {
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn accessor_names_compose_with_byte_name_lookups() {
-    let guard = libtmux::test::TestServer::new().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("s\u{fffd}")
-        .await
-        .expect("session");
+#[test]
+fn accessor_names_compose_with_byte_name_lookups() {
+    let guard = libtmux::test::TestServer::new().expect("tmux starts");
+    let session = guard.server().new_session("s\u{fffd}").expect("session");
     let found = guard
         .server()
         .session(session.name())
-        .await
         .expect("session lookup")
         .expect("session exists");
     assert_eq!(found.id(), session.id());
@@ -107,16 +102,14 @@ async fn accessor_names_compose_with_byte_name_lookups() {
         guard
             .server()
             .session(TmuxText::from_bytes([b's', 0xff]))
-            .await
             .expect("byte name lookup")
             .is_none(),
         "invalid UTF-8 must not match a name containing the replacement character"
     );
 
-    let window = session.new_window("w\u{fffd}").await.expect("window");
+    let window = session.new_window("w\u{fffd}").expect("window");
     let found = session
         .window(window.name())
-        .await
         .expect("window lookup")
         .expect("window exists");
     assert_eq!(found.id(), window.id());
@@ -124,11 +117,10 @@ async fn accessor_names_compose_with_byte_name_lookups() {
     assert!(
         session
             .window(TmuxText::from_bytes([b'w', 0xfe]))
-            .await
             .expect("byte name lookup")
             .is_none()
     );
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[test]

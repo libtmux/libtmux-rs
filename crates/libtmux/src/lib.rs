@@ -1,43 +1,48 @@
 #![doc = include_str!("../README.md")]
 //!
-//! ## Query iterators
-//!
-//! Listings hand back an ordered `Vec<T>` that the caller owns. Borrow it with
-//! `.iter()`, use [`Iterator::filter`] for an inline closure, and
-//! [`query::QueryIteratorExt::matching`] for a portable expression or a named
-//! [`query::Matcher`]. Exact cardinality inspects at most two items.
-//!
-//! `matching` and `matching_owned` are this trait's own; `exactly_one` and
-//! `one_or_none` deliberately overlap with `itertools::Itertools`, which has
-//! `exactly_one` and `at_most_one`. The overlap is kept rather than renamed
-//! around: the names are the obvious ones, and the shapes differ where it
-//! matters. [`query::ExactlyOneError`] is a plain `NoItems`/`MultipleItems`
-//! enum that is `Eq` and cheap to match, where itertools' error owns the
-//! iterator so it can replay it. With both traits imported a call is
-//! ambiguous, which is a compile error naming both candidates rather than a
-//! silent choice; universal function call syntax picks one:
-//!
-//! ```
-//! use libtmux::query::QueryIteratorExt;
-//!
-//! let values = vec![1];
-//! let item = QueryIteratorExt::exactly_one(values.iter());
-//! assert_eq!(item, Ok(&1));
-//! ```
+#![cfg_attr(
+    feature = "query",
+    doc = r"
+## Query iterators
+
+Listings hand back an ordered `Vec<T>` that the caller owns. Borrow it with
+`.iter()`, use [`Iterator::filter`] for an inline closure, and
+[`query::QueryIteratorExt::matching`] for a portable expression or a named
+[`query::Matcher`]. Exact cardinality inspects at most two items.
+
+`matching` and `matching_owned` are this trait's own; `exactly_one` and
+`one_or_none` deliberately overlap with `itertools::Itertools`, which has
+`exactly_one` and `at_most_one`. The overlap is kept rather than renamed
+around: the names are the obvious ones, and the shapes differ where it
+matters. [`query::ExactlyOneError`] is a plain `NoItems`/`MultipleItems`
+enum that is `Eq` and cheap to match, where itertools' error owns the
+iterator so it can replay it. With both traits imported a call is
+ambiguous, which is a compile error naming both candidates rather than a
+silent choice; universal function call syntax picks one:
+
+```
+use libtmux::query::QueryIteratorExt;
+
+let values = vec![1];
+let item = QueryIteratorExt::exactly_one(values.iter());
+assert_eq!(item, Ok(&1));
+```
+"
+)]
 //!
 //! ## Finding what is already there
 //!
 //! Naming an object is cheaper than listing and scanning for it:
 //!
 //! ```no_run
-//! # async fn walk() -> Result<(), libtmux::Error> {
+//! # fn walk() -> Result<(), libtmux::Error> {
 //! let server = libtmux::Server::new()?;
 //!
 //! // Find one object rather than listing and scanning.
-//! if let Some(session) = server.session("work").await? {
-//!     if let Some(window) = session.window("editor").await? {
-//!         if let Some(pane) = window.active_pane().await? {
-//!             pane.send_line("cargo test").await?;
+//! if let Some(session) = server.session("work")? {
+//!     if let Some(window) = session.window("editor")? {
+//!         if let Some(pane) = window.active_pane()? {
+//!             pane.send_line("cargo test")?;
 //!         }
 //!     }
 //! }
@@ -50,9 +55,9 @@
 //! choice it is:
 //!
 //! ```no_run
-//! # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! let loud = server.sessions().await?;                     // Err on failure
-//! let quiet = server.sessions().await.unwrap_or_default(); // empty on failure
+//! # fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! let loud = server.sessions()?;                     // Err on failure
+//! let quiet = server.sessions().unwrap_or_default(); // empty on failure
 //! # let _ = (quiet, loud);
 //! # Ok(())
 //! # }
@@ -60,19 +65,20 @@
 //!
 //! ## Building something and cleaning up
 //!
-//! Once polled, a scoped operation owns creation and cleanup. Cancellation can
-//! let an in-flight creation finish, but an object whose creation yields a
-//! handle is killed while the Tokio runtime remains active. Ordinary handle
-//! `Drop` is deliberately non-destructive.
+//! A scoped operation creates its resource and removes it before returning.
+//! Cleanup also runs during panic unwinding. Cancellation during creation
+//! waits for the resource ID, then removes it; an already-running callback
+//! must cooperate with the token. Dropping an ordinary handle leaves tmux
+//! objects intact.
 //!
 //! ```no_run
-//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::ScopeError<String, libtmux::Error>> {
+//! # fn scoped(server: &libtmux::Server) -> Result<(), libtmux::ScopeError<String, libtmux::Error>> {
 //! let id = server
-//!     .with_session("throwaway", async |session| {
-//!         session.new_window("build").await?;
+//!     .with_session("throwaway", |session| {
+//!         session.new_window("build")?;
 //!         Ok::<_, libtmux::Error>(session.id().to_string())
 //!     })
-//!     .await?;
+//!     ?;
 //! # let _ = id;
 //! # Ok(())
 //! # }
@@ -92,16 +98,16 @@
 //! [`OptionValue`] says how reads and writes fit together.
 //!
 //! ```no_run
-//! # async fn options(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! # fn options(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 //! use libtmux::{OptionValue, option_names};
 //!
 //! // Names are constants, so a typo does not compile.
-//! let mouse = server.typed_global_option(option_names::MOUSE).await?;
+//! let mouse = server.typed_global_option(option_names::MOUSE)?;
 //! assert!(matches!(mouse, Some(OptionValue::Flag(_))));
 //!
 //! // A write takes the type a read returns, and a value outside what the
 //! // table declares is refused before tmux sees it.
-//! server.set_typed_global_option(option_names::HISTORY_LIMIT, 50_000).await?;
+//! server.set_typed_global_option(option_names::HISTORY_LIMIT, 50_000)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -122,11 +128,11 @@
 //! what a caller passes is what tmux stores.
 //!
 //! ```no_run
-//! # async fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! # fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 //! use libtmux::{NewSessionOptions, TmuxArg};
 //!
 //! // Text is text, whatever is in it.
-//! server.new_session("release#1").await?;
+//! server.new_session("release#1")?;
 //!
 //! // Expansion is opt-in, and reads as such. Only for a template the
 //! // program itself wrote.
@@ -134,7 +140,7 @@
 //!     .new_session(NewSessionOptions::new("build").start_directory(
 //!         TmuxArg::format("#{pane_current_path}"),
 //!     ))
-//!     .await?;
+//!     ?;
 //! # Ok(())
 //! # }
 //! ```
@@ -157,117 +163,121 @@
 //! sent, output waited for rather than slept on, and a scope that kills the
 //! session whether the body succeeded or not. `watch` reacts to what a server
 //! does over one control-mode connection while driving it down the same one.
-//! `matrix` runs one workload six ways, so the cost of each execution mode is
+//! `matrix` runs one workload through each transport and planner, so the cost is
 //! visible side by side. `sweep` reaps servers that abandoned fixtures left
 //! behind, which is maintenance rather than orchestration.
 //!
 //! `just examples` runs every one of them against a server it owns and fails
 //! if any leaves a socket behind.
 //!
-//! ## Filtering the hierarchy
-//!
-//! [`Session`], [`Window`], [`Pane`], and [`Client`] carry generated field
-//! handles, so an expression names the same type a listing returns:
-//!
-//! ```
-//! use libtmux::query::Filterable as _;
-//!
-//! let fields = libtmux::Session::filter_fields();
-//! let expression = fields.session_name.starts_with("build");
-//! let sessions: Vec<libtmux::Session> = Vec::new();
-//! assert_eq!(sessions.iter().count(), 0);
-//! # let _ = expression;
-//! ```
-//!
-//! Field types decide which operations exist, so a mismatched comparison is a
-//! compile error rather than a predicate that is always false:
-//!
-//! ```compile_fail
-//! use libtmux::query::Filterable as _;
-//!
-//! let fields = libtmux::Session::filter_fields();
-//! // `session_name` is text, so it has no integer comparison.
-//! let _ = fields.session_name.eq(3_u32);
-//! ```
-//!
-//! ```compile_fail
-//! use libtmux::query::Filterable as _;
-//!
-//! let fields = libtmux::Session::filter_fields();
-//! // `session_windows` is an integer, so it has no substring operation.
-//! let _ = fields.session_windows.contains("3");
-//! ```
-//!
-//! A question about what a session *contains* needs a value that holds its
-//! windows. [`Server::hierarchy`] returns one, and [`SessionTree`] and
-//! [`WindowTree`] carry relations for it:
-//!
-//! ```no_run
-//! # async fn contained(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-//! use libtmux::{SessionTree, WindowTree};
-//!
-//! let sessions = SessionTree::filter_fields();
-//! let windows = WindowTree::filter_fields();
-//!
-//! // The session's own fields sit beside the relation, not behind it.
-//! let building = sessions
-//!     .session
-//!     .session_name
-//!     .starts_with("build")
-//!     .and(sessions.windows.any(windows.window.window_name.eq("editor")));
-//!
-//! for branch in server.hierarchy().await?.iter().matching(&building) {
-//!     println!("{}", branch.session);
-//! }
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Use `matching_owned` to move selected items out of their collection:
-//!
-//! ```
-//! use libtmux::query::QueryIteratorExt;
-//!
-//! let values = vec![1, 2, 3];
-//! let selected = values
-//!     .into_iter()
-//!     .matching_owned(|candidate: &i32| *candidate > 1)
-//!     .collect::<Vec<_>>();
-//! assert_eq!(selected, [2, 3]);
-//! ```
-//!
-//! `matching` still needs a borrowed iterator; `into_iter()` does not satisfy
-//! it:
-//!
-//! ```compile_fail,E0271
-//! use libtmux::query::QueryIteratorExt;
-//!
-//! let values = vec![1, 2, 3];
-//! let _ = values.into_iter().matching(|candidate: &i32| *candidate > 1);
-//! ```
-//!
-//! Borrowed results cannot outlive their collection:
-//!
-//! ```compile_fail,E0597
-//! use libtmux::query::QueryIteratorExt;
-//!
-//! let selected = {
-//!     let values = vec![String::from("only")];
-//!     values.iter().exactly_one().unwrap()
-//! };
-//! println!("{selected}");
-//! ```
-//!
-//! Consuming a collection transfers ownership:
-//!
-//! ```compile_fail,E0382
-//! use libtmux::query::QueryIteratorExt;
-//!
-//! let values = vec![String::from("only")];
-//! let selected = values.into_iter().one_or_none().unwrap();
-//! println!("{values:?} {selected:?}");
-//! ```
+#![cfg_attr(
+    feature = "query",
+    doc = r#"
+## Filtering the hierarchy
+
+[`Session`], [`Window`], [`Pane`], and [`Client`] carry generated field
+handles, so an expression names the same type a listing returns:
+
+```
+use libtmux::query::Filterable as _;
+
+let fields = libtmux::Session::filter_fields();
+let expression = fields.session_name.starts_with("build");
+let sessions: Vec<libtmux::Session> = Vec::new();
+assert_eq!(sessions.iter().count(), 0);
+# let _ = expression;
+```
+
+Field types decide which operations exist, so a mismatched comparison is a
+compile error rather than a predicate that is always false:
+
+```compile_fail
+use libtmux::query::Filterable as _;
+
+let fields = libtmux::Session::filter_fields();
+// `session_name` is text, so it has no integer comparison.
+let _ = fields.session_name.eq(3_u32);
+```
+
+```compile_fail
+use libtmux::query::Filterable as _;
+
+let fields = libtmux::Session::filter_fields();
+// `session_windows` is an integer, so it has no substring operation.
+let _ = fields.session_windows.contains("3");
+```
+
+A question about what a session *contains* needs a value that holds its
+windows. [`Server::hierarchy`] returns one, and [`SessionTree`] and
+[`WindowTree`] carry relations for it:
+
+```no_run
+# fn contained(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+use libtmux::query::{Filterable as _, QueryIteratorExt as _};
+use libtmux::{SessionTree, WindowTree};
+
+let sessions = SessionTree::filter_fields();
+let windows = WindowTree::filter_fields();
+
+// The session's own fields sit beside the relation, not behind it.
+let building = sessions
+    .session
+    .session_name
+    .starts_with("build")
+    .and(sessions.windows.any(windows.window.window_name.eq("editor")));
+
+for branch in server.hierarchy()?.iter().matching(&building) {
+    println!("{}", branch.session);
+}
+# Ok(())
+# }
+```
+
+Use `matching_owned` to move selected items out of their collection:
+
+```
+use libtmux::query::QueryIteratorExt;
+
+let values = vec![1, 2, 3];
+let selected = values
+    .into_iter()
+    .matching_owned(|candidate: &i32| *candidate > 1)
+    .collect::<Vec<_>>();
+assert_eq!(selected, [2, 3]);
+```
+
+`matching` still needs a borrowed iterator; `into_iter()` does not satisfy
+it:
+
+```compile_fail,E0271
+use libtmux::query::QueryIteratorExt;
+
+let values = vec![1, 2, 3];
+let _ = values.into_iter().matching(|candidate: &i32| *candidate > 1);
+```
+
+Borrowed results cannot outlive their collection:
+
+```compile_fail,E0597
+use libtmux::query::QueryIteratorExt;
+
+let selected = {
+    let values = vec![String::from("only")];
+    values.iter().exactly_one().unwrap()
+};
+println!("{selected}");
+```
+
+Consuming a collection transfers ownership:
+
+```compile_fail,E0382
+use libtmux::query::QueryIteratorExt;
+
+let values = vec![String::from("only")];
+let selected = values.into_iter().one_or_none().unwrap();
+println!("{values:?} {selected:?}");
+```"#
+)]
 #![cfg_attr(
     feature = "control-mode",
     doc = r#"
@@ -281,42 +291,21 @@ happens -- no polling interval, and nothing missed between two polls.
 writes it, where [`Pane::capture`] gives only what is on screen now.
 
 ```no_run
-# async fn watch(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
-let mut output = pane.stream_output().await?;
+# fn watch(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+let mut output = pane.stream_output()?;
 
-while let Some(chunk) = output.next_chunk().await {
+while let Some(chunk) = output.next_chunk() {
     println!("{} bytes", chunk.len());
 }
 
-output.shutdown().await
+output.shutdown()
 # }
 ```
 
 [`control::ControlMode`] is the whole connection: every notification the server
 sends, plus commands that travel down the connection rather than spawning a
-process. Sending and watching are separate handles, so a task can act on what
+process. Sending and watching are separate handles, so a thread can act on what
 it sees. See the [`control`] module.
-"#
-)]
-#![cfg_attr(
-    feature = "blocking",
-    doc = r#"
-## Calling from code that is not async
-
-The `blocking` feature adds a [`blocking::Runtime`] that drives this crate's
-futures to completion. It is deliberately a runtime rather than a mirrored
-blocking API: one type to learn, and no second surface to keep in step.
-
-```no_run
-# fn run() -> Result<(), libtmux::Error> {
-let runtime = libtmux::blocking::Runtime::new()?;
-let server = libtmux::Server::new()?;
-
-let sessions = runtime.run(server.sessions())?;
-println!("{} sessions", sessions.len());
-# Ok(())
-# }
-```
 "#
 )]
 // docs.rs builds with this cfg set, so every gated item there carries the
@@ -328,7 +317,6 @@ println!("{} sessions", sessions.len());
 // never resolve those, so it is not told they are broken.
 #![cfg_attr(
     not(all(
-        feature = "blocking",
         feature = "control-mode",
         feature = "derive",
         feature = "plan",
@@ -351,8 +339,8 @@ compile_error!("libtmux requires a Unix target with tmux available");
 #[cfg(feature = "derive")]
 extern crate self as libtmux;
 
-#[cfg(feature = "blocking")]
-pub mod blocking;
+mod cancellation;
+pub use cancellation::{CancellationRegistration, CancellationToken};
 mod capabilities;
 mod client;
 mod command;
@@ -500,3 +488,12 @@ pub struct WorkspaceReadme;
 #[cfg(all(doctest, feature = "query", feature = "control-mode"))]
 #[doc = include_str!("../docs/migration.md")]
 pub struct MigrationGuide;
+
+/// Package selection and migration examples, compiled.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/packages.md")]
+pub struct PackagesGuide;
+
+mod primitives;
+/// Runtime-independent tmux control wire parsing.
+pub use primitives::control as protocol;

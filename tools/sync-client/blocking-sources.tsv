@@ -1,0 +1,27 @@
+# blocking-only Rust source	role
+examples/common/mod.rs	Cooperative deadline helper for runnable blocking examples.
+src/cancellation.rs	Shared explicit cancellation token and callback registrations, reexported by the native client.
+src/control/channel.rs	Bounded blocking control transport channels and cancellation wakeups.
+src/internal/listing/sync_tests.rs	Reviewed blocking port of a canonical inline test module; see test-ports.tsv.
+src/internal/process/persistent.rs	Blocking control-child ownership, admission and shutdown failure retention.
+src/internal/subprocess/parked.rs	Bounded resident blocking waiter admission and cleanup.
+src/plan/run/sync_tests.rs	Reviewed blocking port of a canonical inline test module; see test-ports.tsv.
+src/primitives/control.rs	Canonical standard-library values and protocol parsing; native client reuses the same public types.
+src/primitives/error.rs	Canonical standard-library values and protocol parsing; native client reuses the same public types.
+src/primitives/mod.rs	Canonical standard-library values and protocol parsing; native client reuses the same public types.
+src/primitives/target.rs	Canonical standard-library values and protocol parsing; native client reuses the same public types.
+src/primitives/text.rs	Canonical standard-library values and protocol parsing; native client reuses the same public types.
+src/primitives/version.rs	Canonical standard-library values and protocol parsing; native client reuses the same public types.
+src/query/fields.rs	Canonical runtime-independent query implementation; libtmux-tokio reexports these types.
+src/query/grammar.rs	Canonical runtime-independent query implementation; libtmux-tokio reexports these types.
+src/query/matching.rs	Canonical runtime-independent query implementation; libtmux-tokio reexports these types.
+src/query/private.rs	Canonical runtime-independent query implementation; libtmux-tokio reexports these types.
+src/query/schema.rs	Canonical runtime-independent query implementation; libtmux-tokio reexports these types.
+src/query/serde_v1.rs	Canonical runtime-independent query implementation; libtmux-tokio reexports these types.
+src/server/sync_tests.rs	Reviewed blocking port of a canonical inline test module; see test-ports.tsv.
+tests/common/mod.rs	Coordinated thread and token helpers for blocking integration tests.
+tests/primitives_arguments.rs	Regression coverage for the shared standard-library primitives.
+tests/primitives_control.rs	Regression coverage for the shared standard-library primitives.
+tests/primitives_target.rs	Regression coverage for the shared standard-library primitives.
+tests/primitives_text.rs	Regression coverage for the shared standard-library primitives.
+tests/primitives_version.rs	Regression coverage for the shared standard-library primitives.

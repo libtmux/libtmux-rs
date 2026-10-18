@@ -9,6 +9,8 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
@@ -110,8 +112,8 @@ fn set_token(value: impl Into<OsString>) -> Command {
 }
 
 /// Dispatch four commands, one per outcome, and return the error's kind.
-async fn dispatch_each_outcome(server: &Server) -> ErrorKind {
-    let result = server.cmd(set_token(SECRET)).await.expect("dispatched");
+fn dispatch_each_outcome(server: &Server, cancellation: libtmux::CancellationToken) -> ErrorKind {
+    let result = server.cmd(set_token(SECRET)).expect("dispatched");
     assert!(result.success(), "{result:?}");
 
     let refused = Command::new("set-environment")
@@ -119,7 +121,7 @@ async fn dispatch_each_outcome(server: &Server) -> ErrorKind {
         .arg("no-such-session-for-spans")
         .arg("LIBTMUX_SPAN_TOKEN")
         .sensitive_arg(SECRET);
-    let result = server.cmd(refused).await.expect("dispatched");
+    let result = server.cmd(refused).expect("dispatched");
     assert!(!result.success(), "{result:?}");
 
     // A NUL cannot reach a process and invalid UTF-8 cannot reach a control
@@ -128,48 +130,46 @@ async fn dispatch_each_outcome(server: &Server) -> ErrorKind {
     unsendable.extend_from_slice(b"\xff\0");
     let error = server
         .cmd(set_token(OsString::from_vec(unsendable)))
-        .await
         .expect_err("refused before dispatch");
 
-    // Poll once, so the dispatch is in flight, then drop it.
-    let in_flight = server.cmd(set_token(SECRET));
-    tokio::pin!(in_flight);
-    tokio::select! {
-        biased;
-        _ = &mut in_flight => panic!("a dispatch finished on its first poll"),
-        () = std::future::ready(()) => {}
-    }
+    let cancelled =
+        common::with_deadline(cancellation, std::time::Duration::from_millis(100), || {
+            server.cmd(Command::new("wait-for").sensitive_arg(SECRET))
+        });
+    assert!(
+        cancelled.is_err(),
+        "the blocked dispatch reaches the caller deadline"
+    );
 
     error.kind()
 }
 
-#[tokio::test]
-async fn each_dispatch_runs_in_one_span_on_either_transport() {
-    let guard = TestServer::new().await.expect("tmux starts");
-    let server = guard.server().clone();
-    let session = server.new_session("spans").await.expect("a session");
+#[test]
+fn each_dispatch_runs_in_one_span_on_either_transport() {
+    let guard = TestServer::new().expect("tmux starts");
+    let (server, process_cancellation) = common::cancellable(guard.server());
+    let (control_server, control_cancellation) = common::cancellable(guard.server());
+    let session = server.new_session("spans").expect("a session");
     // The version probe is a dispatch of its own; take it before collecting.
-    server
+    server.capabilities().expect("tmux reports its version");
+    control_server
         .capabilities()
-        .await
-        .expect("tmux reports its version");
-    let (sender, events) = ControlMode::attach(&server, session.id())
-        .await
+        .expect("control handle reports its version");
+    let (sender, events) = ControlMode::attach(&control_server, session.id())
         .expect("a control client attaches")
         .split();
-    let routed = server
+    let routed = control_server
         .over_control_mode(&sender)
-        .await
         .expect("a routed handle");
 
     let collector = Collector::default();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
     let default = tracing::subscriber::set_default(subscriber);
-    let process_kind = dispatch_each_outcome(&server).await;
-    let control_kind = dispatch_each_outcome(&routed).await;
+    let process_kind = dispatch_each_outcome(&server, process_cancellation);
+    let control_kind = dispatch_each_outcome(&routed, control_cancellation);
     drop(default);
-    events.shutdown().await.expect("control shuts down");
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    events.shutdown().expect("control shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 
     let recorded = collector.0.lock().unwrap();
     let observed: Vec<_> = recorded
@@ -198,7 +198,7 @@ async fn each_dispatch_runs_in_one_span_on_either_transport() {
                 Some("error"),
                 Some(kind.as_str()),
             ),
-            (transport, "set-environment", Some("cancelled"), None),
+            (transport, "wait-for", Some("error"), Some("Cancelled")),
         ]);
     }
     assert_eq!(observed, expected, "one span per dispatch");

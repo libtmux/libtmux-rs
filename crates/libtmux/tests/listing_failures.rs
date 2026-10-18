@@ -12,14 +12,13 @@
 
 use libtmux::test::TestServer;
 
-#[tokio::test]
-async fn every_listing_reports_a_server_that_is_gone() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn every_listing_reports_a_server_that_is_gone() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server().clone();
-    let session = server.new_session("gone").await.expect("session");
+    let session = server.new_session("gone").expect("session");
     let window = session
         .active_window()
-        .await
         .expect("windows")
         .expect("a session has a window");
 
@@ -35,11 +34,11 @@ async fn every_listing_reports_a_server_that_is_gone() {
     // Positive control: each listing answers while the server is up, so a
     // later error is the server being gone rather than a method that never
     // worked.
-    assert!(!server.sessions().await.expect("sessions").is_empty());
-    assert!(!session.windows().await.expect("windows").is_empty());
-    assert!(!window.panes().await.expect("panes").is_empty());
+    assert!(!server.sessions().expect("sessions").is_empty());
+    assert!(!session.windows().expect("windows").is_empty());
+    assert!(!window.panes().expect("panes").is_empty());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 
     // Every listing now fails, and each says so rather than reporting empty.
     // The kind is `Transport` rather than `ServerGone` because the fixture
@@ -48,9 +47,7 @@ async fn every_listing_reports_a_server_that_is_gone() {
     // answers an outage with an empty vector.
     macro_rules! assert_reports_failure {
         ($label:literal, $call:expr) => {
-            let error = $call
-                .await
-                .expect_err(concat!($label, " reports the failure"));
+            let error = $call.expect_err(concat!($label, " reports the failure"));
             assert!(
                 !matches!(error.kind(), libtmux::ErrorKind::Decode),
                 "{}: {error}",

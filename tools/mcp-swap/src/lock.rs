@@ -174,14 +174,15 @@ pub(crate) fn retain_if_active_lock(
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(state) = active.as_mut() {
-        if state.device == metadata.dev() && state.inode == metadata.ino() {
-            state.retained.push(file);
-            return Err(FsError::new(format!(
-                "artifact aliases the active state lock: {}",
-                path.display()
-            )));
-        }
+    if let Some(state) = active.as_mut()
+        && state.device == metadata.dev()
+        && state.inode == metadata.ino()
+    {
+        state.retained.push(file);
+        return Err(FsError::new(format!(
+            "artifact aliases the active state lock: {}",
+            path.display()
+        )));
     }
     Ok(file)
 }

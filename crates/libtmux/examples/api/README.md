@@ -4,7 +4,7 @@ Run one task from its imports through daemon cleanup. Each `api_*.rs` file
 contains its own entrypoint and error handling; no Rustdoc setup or example
 helper is added before execution.
 
-You need a Unix environment, tmux 3.2a or newer, and the Rust toolchain in
+You need Linux or WSL, tmux 3.2a or newer, and the Rust toolchain in
 the repository's `rust-toolchain.toml`. Each program creates a private socket
 under `/tmp/libtmux-rs-dev/` and reads `/dev/null` as its tmux configuration.
 It does not connect to the default server or the server named by `$TMUX`.
@@ -32,13 +32,13 @@ $ cargo run --locked -p libtmux --example api_creation
 Filter a session snapshot with a typed field expression:
 
 ```console
-$ cargo run --locked -p libtmux --example api_query
+$ cargo run --locked -p libtmux --features query --example api_query
 ```
 
 Handle missing, unique and ambiguous matches:
 
 ```console
-$ cargo run --locked -p libtmux --example api_cardinality
+$ cargo run --locked -p libtmux --features query --example api_cardinality
 ```
 
 Send literal text and then a named Enter key:
@@ -77,8 +77,9 @@ $ mkdir src &&
 
 To try another task, copy its complete `api_*.rs` file to `src/main.rs`.
 The same Cargo and toolchain files apply to every program. The consumer
-declares its Tokio and tempfile dependencies explicitly and uses the
-library's default query feature; it does not enable `test-support`.
+declares tempfile and the optional `query` feature explicitly. It does not
+use Tokio or enable `test-support`. The production library itself requires
+neither query support nor tempfile for ordinary blocking operations.
 
 ## Results and cleanup
 

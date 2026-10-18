@@ -40,6 +40,8 @@ pub struct ServerBuilder {
     config_file: Option<PathBuf>,
     colors: Option<u16>,
     executable: OsString,
+    cancellation: crate::CancellationToken,
+    group_signal_helper: PathBuf,
     timeout: Duration,
     output_limits: OutputLimits,
     dispatch_limits: DispatchLimits,
@@ -86,6 +88,8 @@ impl ServerBuilder {
             config_file: None,
             colors: None,
             executable: OsString::from("tmux"),
+            cancellation: crate::CancellationToken::new(),
+            group_signal_helper: PathBuf::from("/usr/bin/kill"),
             timeout: CoreConfiguration::default_timeout(),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
@@ -94,6 +98,23 @@ impl ServerBuilder {
             #[cfg(feature = "test-support")]
             prevent_server_start: false,
         }
+    }
+
+    /// Share cooperative cancellation with this server's commands and scopes.
+    #[must_use = "use the returned builder to retain the token"]
+    pub fn cancellation_token(mut self, token: crate::CancellationToken) -> Self {
+        self.cancellation = token;
+        self
+    }
+
+    /// Select the absolute POSIX kill helper used to clean up process groups.
+    ///
+    /// The helper must accept `-KILL -- -PID`. It is checked before a client
+    /// starts; cleanup failures remain visible through command errors.
+    #[must_use = "use the returned builder to retain the helper"]
+    pub fn group_signal_helper(mut self, path: impl Into<PathBuf>) -> Self {
+        self.group_signal_helper = path.into();
+        self
     }
 
     /// Bound how many bytes one command may read from tmux.
@@ -302,7 +323,8 @@ impl ServerBuilder {
             BuildContext::capture(),
         )
         .map_err(Error::invalid_server_configuration)?
-        .with_limits(self.output_limits, self.dispatch_limits);
+        .with_limits(self.output_limits, self.dispatch_limits)
+        .with_group_signal_helper(self.group_signal_helper);
         #[cfg(feature = "control-mode")]
         let configuration = configuration.with_control_client_limits(self.control_client_limits);
         #[cfg(feature = "test-support")]
@@ -312,7 +334,18 @@ impl ServerBuilder {
             configuration
         };
         Ok(Server {
-            core: Arc::new(Core::new(configuration)),
+            core: Arc::new(Core::new(configuration).with_cancellation(self.cancellation)),
         })
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl Server {
+    pub(crate) fn execute_with_timeout(
+        &self,
+        command: crate::Command,
+        timeout: Duration,
+    ) -> Result<crate::CommandResult, Error> {
+        self.core.execute_with_timeout(command, timeout)
     }
 }

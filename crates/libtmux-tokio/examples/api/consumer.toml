@@ -1,0 +1,13 @@
+[package]
+name = "libtmux-tokio-api-example"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+exclude = ["libtmux-source"]
+
+[dependencies]
+libtmux-tokio = { path = "libtmux-source/crates/libtmux-tokio", features = ["query"] }
+tempfile = "3.20"
+tokio = { version = "1.40", features = ["macros", "rt", "time"] }

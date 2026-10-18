@@ -1770,13 +1770,12 @@ fn format_catalog_global_mode_field_is_universal_but_never_intrinsic() {
 }
 
 #[cfg(feature = "test-support")]
-async fn format_compat_test_server() -> (TestServer, std::ffi::OsString) {
+fn format_compat_test_server() -> (TestServer, std::ffi::OsString) {
     let executable =
         std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| std::ffi::OsString::from("tmux"));
     let guard = TestServer::builder()
         .tmux_executable(executable.clone())
         .start()
-        .await
         .expect("the explicitly selected tmux starts");
     assert!(
         guard.server().tmux_executable() == executable.as_os_str(),
@@ -1786,18 +1785,15 @@ async fn format_compat_test_server() -> (TestServer, std::ffi::OsString) {
 }
 
 #[cfg(feature = "test-support")]
-async fn format_compat_run(server: &crate::Server, command: Command) {
-    let result = server
-        .cmd(command)
-        .await
-        .expect("tmux fixture command executes");
+fn format_compat_run(server: &crate::Server, command: Command) {
+    let result = server.cmd(command).expect("tmux fixture command executes");
     assert!(result.success(), "tmux fixture command succeeds");
     assert!(result.stderr().is_empty(), "tmux fixture stderr is empty");
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transport() {
+#[test]
+fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transport() {
     use std::os::unix::ffi::OsStringExt as _;
 
     const OPTION_BYTES: [u8; 9] = [0x3a, 0x0a, 0x3d, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff];
@@ -1809,7 +1805,7 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
         0x37, 0x37, 0x3d, 0x0a,
     ];
 
-    let (guard, executable) = format_compat_test_server().await;
+    let (guard, executable) = format_compat_test_server();
     let server = guard.server();
     if let Some(expected) = std::env::var_os("LIBTMUX_TEST_TMUX") {
         assert!(
@@ -1829,16 +1825,14 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
             .arg("-s")
             .arg("format-bytes")
             .arg("sleep 120"),
-    )
-    .await;
+    );
     format_compat_run(
         server,
         Command::new("set-option")
             .arg("-g")
             .arg(RAW_FORMAT_BYTES.name())
             .sensitive_arg(std::ffi::OsString::from_vec(OPTION_BYTES.to_vec())),
-    )
-    .await;
+    );
 
     let plan = plan(vec![&RAW_FORMAT_BYTES]);
     assert_eq!(plan.template(), "#{q:@libtmux_format_bytes}=");
@@ -1850,13 +1844,11 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
     );
     let result = server
         .cmd(Command::new("list-sessions").arg("-F").arg(plan.template()))
-        .await
         .expect("the raw format listing executes");
     assert!(result.success(), "the raw format listing succeeds");
     assert!(result.stderr().is_empty(), "the raw format stderr is empty");
     let version = server
         .capabilities()
-        .await
         .expect("tmux capabilities are detected")
         .tmux_version();
     // A numbered release's wire is frozen forever, so its exact bytes are
@@ -1901,7 +1893,7 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
     assert_eq!(decode_text(slot).as_bytes(), OPTION_BYTES);
     assert!(slots.next().is_none());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Record which format names each listing asks tmux for.

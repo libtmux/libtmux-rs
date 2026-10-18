@@ -1,8 +1,8 @@
 use std::fmt;
 use std::ops::Range;
 
+use super::TmuxText;
 use super::plan::{FormatPlan, TransportDialect};
-use super::text::TmuxText;
 use super::{DecoderKind, FormatDescriptor, ListProfile};
 
 /// Bytes that `#{q:}` prefixes with a backslash.

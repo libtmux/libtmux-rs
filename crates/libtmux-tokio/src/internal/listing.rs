@@ -1,0 +1,707 @@
+//! The shared path from a list command to hydrated snapshots.
+//!
+//! Every public listing follows the same four steps: build a format plan for
+//! the detected tmux version, render its template into a list command, parse
+//! the transport bytes, and hydrate rows. Keeping that here means the public
+//! handles differ only in the target they scope to.
+
+use std::ffi::{OsStr, OsString};
+
+use crate::error::ListingDecodeError;
+use crate::formats::{FormatCodecError, FormatPlan, ListProfile};
+use crate::internal::core::Core;
+use crate::snapshot::{
+    ClientInfo, PaneProjection, SessionInfo, WindowProjection, hydrate_client_infos_from_stdout,
+    hydrate_pane_projections_from_stdout, hydrate_session_infos_from_stdout,
+    hydrate_window_projections_from_stdout, pane_projection_plan, window_projection_plan,
+};
+use crate::{Command, Error};
+
+/// How a listing is scoped.
+///
+/// tmux spells "everything on the server" and "everything under this object"
+/// with different flags, so the two are distinguished here rather than by
+/// passing an optional target that callers could forget.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Scope<'target> {
+    /// Every object on the server, using tmux's `-a` flag.
+    Server,
+    /// Only objects under one target, using tmux's `-t` flag.
+    ///
+    /// For `list-panes` the target is a window; tmux resolves a session target
+    /// to that session's current window, which is rarely what a caller means.
+    Target(&'target str),
+    /// Every pane in one session, using tmux's `-s -t` flags.
+    ///
+    /// `list-panes` needs `-s` to widen a session target from the current
+    /// window to the whole session.
+    SessionTarget(&'target str),
+    /// No scoping flag, for commands that are already server-wide.
+    ///
+    /// `list-sessions` and `list-clients` cover the whole server and reject
+    /// `-a`, so they take neither flag.
+    Unscoped,
+}
+
+impl<'target> Scope<'target> {
+    /// Return the target this scope names, if it names one.
+    const fn target(self) -> Option<&'target str> {
+        match self {
+            Self::Target(target) | Self::SessionTarget(target) => Some(target),
+            Self::Server | Self::Unscoped => None,
+        }
+    }
+
+    /// Apply this scope's flags to a list command.
+    fn apply(self, command: Command) -> Command {
+        match self {
+            Self::Server => command.arg("-a"),
+            Self::Target(target) => command.arg("-t").arg(OsString::from(target)),
+            Self::SessionTarget(target) => command.arg("-s").arg("-t").arg(OsString::from(target)),
+            Self::Unscoped => command,
+        }
+    }
+}
+
+/// A value that may be interpolated into a tmux `-f` predicate.
+///
+/// tmux documents no escaping for a predicate, so a value that could contain
+/// `#`, `}`, or a comma would change what the predicate means. Only values
+/// drawn from a validated domain implement this: an id is a sigil followed by
+/// digits, and an index is an integer. A name is user-chosen text and is
+/// deliberately absent, which is what keeps the rule enforced by the compiler
+/// rather than by remembering it.
+pub(crate) trait Pushdown {
+    /// Render this value as a tmux predicate comparing one format field.
+    fn predicate(&self, field: &str) -> String;
+}
+
+macro_rules! pushdown_via_display {
+    ($($type:ty),+ $(,)?) => {
+        $(impl Pushdown for $type {
+            fn predicate(&self, field: &str) -> String {
+                format!("#{{==:#{{{field}}},{self}}}")
+            }
+        })+
+    };
+}
+
+pushdown_via_display!(crate::SessionId, crate::WindowId, crate::PaneId, i32, u32,);
+
+/// Run one list command and return its raw stdout.
+async fn list(
+    core: &Core,
+    list_command: &'static str,
+    scope: Scope<'_>,
+    filter: Option<&str>,
+    template: &str,
+) -> Result<Vec<u8>, Error> {
+    let mut command = scope.apply(Command::new(list_command));
+    // tmux evaluates the predicate per row, so a filtered listing returns only
+    // matching rows rather than every row for the caller to scan.
+    if let Some(filter) = filter {
+        command = command.arg("-f").arg(OsString::from(filter));
+    }
+    let result = core
+        .execute(command.arg("-F").arg(OsString::from(template)))
+        .await?;
+    if !result.success() {
+        let stderr = result.stderr_lossy().into_owned();
+        // A server holding no sessions has no current target, and tmux says
+        // so even for `-a`, which asks for everything. A server-wide listing
+        // has nothing to list; a listing under a target could not resolve it,
+        // which the classifier reports as the target being gone.
+        if scope.target().is_none() && stderr.trim_end() == crate::error::NO_CURRENT_TARGET {
+            return Ok(Vec::new());
+        }
+
+        // Anything else is not an empty listing. The lenient accessors turn
+        // this back into an empty Vec; the loud forms exist so a caller who
+        // must not guess gets the reason instead.
+        return Err(Error::from_refused_result(
+            list_command,
+            &result,
+            scope.target().map(OsStr::new),
+        ));
+    }
+
+    Ok(result.stdout().to_vec())
+}
+
+/// Convert a private codec failure into the public listing error.
+fn decode_error(list_command: &'static str) -> impl Fn(FormatCodecError) -> Error {
+    move |error| Error::DecodeListing {
+        list_command,
+        detail: ListingDecodeError::new(error),
+    }
+}
+
+/// List sessions.
+pub(crate) async fn sessions(core: &Core, filter: Option<&str>) -> Result<Vec<SessionInfo>, Error> {
+    const LIST_COMMAND: &str = "list-sessions";
+
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
+    let stdout = list(core, LIST_COMMAND, Scope::Unscoped, filter, plan.template()).await?;
+
+    hydrate_session_infos_from_stdout(&plan, &stdout).map_err(decode_error(LIST_COMMAND))
+}
+
+/// List windows, either server-wide or under one target.
+pub(crate) async fn windows(
+    core: &Core,
+    scope: Scope<'_>,
+    filter: Option<&str>,
+) -> Result<Vec<WindowProjection>, Error> {
+    const LIST_COMMAND: &str = "list-windows";
+
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = window_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
+    let stdout = list(core, LIST_COMMAND, scope, filter, plan.template()).await?;
+
+    hydrate_window_projections_from_stdout(core.configuration().identity(), &plan, &stdout)
+        .map_err(decode_error(LIST_COMMAND))
+}
+
+/// Resolve one pane and hydrate its containing window from the same tmux row.
+pub(crate) async fn window_for_pane(
+    core: &Core,
+    pane: &crate::PaneId,
+) -> Result<Option<WindowProjection>, Error> {
+    const LIST_COMMAND: &str = "list-panes";
+
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = window_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
+    let target = pane.to_string();
+    let filter = pane.predicate("pane_id");
+    let stdout = match list(
+        core,
+        LIST_COMMAND,
+        Scope::Target(&target),
+        Some(&filter),
+        plan.template(),
+    )
+    .await
+    {
+        Err(error) if error.is_object_gone() => return Ok(None),
+        result => result?,
+    };
+
+    Ok(
+        hydrate_window_projections_from_stdout(core.configuration().identity(), &plan, &stdout)
+            .map_err(decode_error(LIST_COMMAND))?
+            .into_iter()
+            .next(),
+    )
+}
+
+/// List panes, either server-wide or under one target.
+pub(crate) async fn panes(
+    core: &Core,
+    scope: Scope<'_>,
+    filter: Option<&str>,
+) -> Result<Vec<PaneProjection>, Error> {
+    const LIST_COMMAND: &str = "list-panes";
+
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = pane_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
+    let stdout = list(core, LIST_COMMAND, scope, filter, plan.template()).await?;
+
+    hydrate_pane_projections_from_stdout(core.configuration().identity(), &plan, &stdout)
+        .map_err(decode_error(LIST_COMMAND))
+}
+
+/// List attached clients.
+pub(crate) async fn clients(core: &Core, filter: Option<&str>) -> Result<Vec<ClientInfo>, Error> {
+    const LIST_COMMAND: &str = "list-clients";
+
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = FormatPlan::for_profile(ListProfile::Clients, &version);
+    let stdout = list(core, LIST_COMMAND, Scope::Unscoped, filter, plan.template()).await?;
+
+    hydrate_client_infos_from_stdout(&plan, &stdout).map_err(decode_error(LIST_COMMAND))
+}
+
+/// The command that renders a format in one client's context.
+const IN_CLIENT: &str = "display-message";
+
+/// Render a listing template in one client's context and hydrate one row.
+///
+/// tmux runs `display-message` through the same format machinery as a list
+/// command, and fills in what the client implies: `format_defaults` takes the
+/// session from the client, the window from that session's current window, and
+/// the pane from that window's active pane. So one round trip returns the whole
+/// snapshot, where asking for an id and then listing the object that owns it
+/// costs two. The row is byte-identical to the matching `list-sessions -f` row,
+/// `#{q:}` escaping included.
+///
+/// `None` when the client is attached to nothing, which is an ordinary state.
+/// The template is wrapped in `#{?session_id,...,}` so tmux expands it to
+/// nothing in that case: a format plan asks for fields that are `Required`, and
+/// hydrating a row of empty ones would report a decode failure for a client
+/// that is simply not attached yet. Nesting is safe because a plan's template
+/// is `#{q:<name>}=` repeated and a tmux format name carries no comma.
+///
+/// This is the one route where a plan's `FIELD_SEPARATOR` must not be `%`.
+/// `display-message` expands through `format_expand_time`
+/// (`cmd-display-message.c:141`), which runs the template through `strftime`
+/// before tmux reads a single `#{`; a list command calls `format_expand`
+/// (`cmd-list-clients.c:99`) and never time-expands. Apple's libc drops the
+/// `%` of a conversion it does not define and keeps the character alone, so a
+/// `%`-separated template would arrive here with its separators eaten and the
+/// row would fail to decode on macOS and nowhere else. The separator is
+/// chosen in `formats/row.rs` to keep this template free of `%` entirely.
+///
+/// Targeted with `-t` rather than `-c`, and that is not a preference.
+/// `display-message`'s option string is `acd:INpt:F:v` on 3.2a, where `c`
+/// carries no colon and so takes no argument: a client name after it becomes a
+/// positional argument, the command exceeds its one-argument maximum, and tmux
+/// answers with a usage error while every format expands empty. `-c` gained its
+/// argument in 3.5a. The usage line on 3.2a advertises `[-c target-client]`
+/// anyway, on the line after the option string that refuses it, so the error
+/// quotes the flag it just rejected and reads as a typo rather than as a
+/// disagreement between tmux's help and its parser.
+///
+/// `-t` resolves a client on every supported release. Verified to report the
+/// target rather than the caller, which the obvious probe cannot show: the
+/// asking process and the client usually share a `TERM`, so a wrong answer is
+/// byte-identical to a right one. With the client attached as
+/// `screen-256color` and the caller at `vt100`, 3.2a and 3.7c both answer
+/// `screen-256color`.
+async fn in_client_context<T>(
+    core: &Core,
+    client: &OsStr,
+    plan: &FormatPlan,
+    hydrate: impl FnOnce(&FormatPlan, &[u8]) -> Result<Vec<T>, FormatCodecError>,
+) -> Result<Option<T>, Error> {
+    let guarded = format!("#{{?session_id,{},}}", plan.template());
+    let result = core
+        .execute(
+            Command::new(IN_CLIENT)
+                .arg("-p")
+                .arg("-t")
+                .arg(client.to_os_string())
+                .arg(OsString::from(guarded)),
+        )
+        .await?;
+
+    if !result.success() {
+        let stderr = result.stderr_lossy();
+        if stderr.trim_end() == crate::error::NO_CURRENT_CLIENT {
+            return Ok(None);
+        }
+        return Err(Error::from_refused_result(IN_CLIENT, &result, None));
+    }
+
+    let stdout = result.stdout();
+    if stdout.strip_suffix(b"\n").unwrap_or(stdout).is_empty() {
+        return Ok(None);
+    }
+
+    Ok(hydrate(plan, stdout)
+        .map_err(decode_error(IN_CLIENT))?
+        .into_iter()
+        .next())
+}
+
+/// The session one client is attached to, in one round trip.
+pub(crate) async fn client_session(
+    core: &Core,
+    client: &OsStr,
+) -> Result<Option<SessionInfo>, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
+
+    in_client_context(core, client, &plan, hydrate_session_infos_from_stdout).await
+}
+
+/// The current window of the session one client is attached to.
+pub(crate) async fn client_window(
+    core: &Core,
+    client: &OsStr,
+) -> Result<Option<WindowProjection>, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = window_projection_plan(&version).map_err(decode_error(IN_CLIENT))?;
+
+    in_client_context(core, client, &plan, |plan, stdout| {
+        hydrate_window_projections_from_stdout(core.configuration().identity(), plan, stdout)
+    })
+    .await
+}
+
+/// The active pane of that window.
+pub(crate) async fn client_pane(
+    core: &Core,
+    client: &OsStr,
+) -> Result<Option<PaneProjection>, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = pane_projection_plan(&version).map_err(decode_error(IN_CLIENT))?;
+
+    in_client_context(core, client, &plan, |plan, stdout| {
+        hydrate_pane_projections_from_stdout(core.configuration().identity(), plan, stdout)
+    })
+    .await
+}
+
+/// Run a creating command that prints its new object, and hydrate it.
+///
+/// tmux's `-P -F` prints the created object through the same format machinery
+/// as a listing, so creation costs one round trip rather than a create
+/// followed by a lookup.
+async fn create_one<T>(
+    core: &Core,
+    command_name: &'static str,
+    build: impl FnOnce(&str) -> Command,
+    template: &str,
+    hydrate: impl FnOnce(&[u8]) -> Result<Vec<T>, Error>,
+) -> Result<T, Error> {
+    // The builder places `-P -F` itself, because tmux stops parsing flags at
+    // the first positional and these commands end with a shell command.
+    let command = build(template);
+    let target = command.target().map(OsStr::to_os_string);
+    let result = core.execute(command).await?;
+    if !result.success() {
+        return Err(Error::from_refused_result(
+            command_name,
+            &result,
+            target.as_deref(),
+        ));
+    }
+    // tmux can exit 0 having done nothing: `-S <dir>/missing/sock` prints
+    // `error creating ... (No such file or directory)` on stderr and exits
+    // 0 with empty stdout, though not every build writes that line -- an
+    // empty stdout alone already means nothing was created. Either way this
+    // is a plain refusal, not a partial effect, and tmux's own reason (when
+    // it gave one) is worth more than the generic message below.
+    if result.stdout().is_empty() {
+        let stderr = result.stderr_lossy();
+        return Err(Error::NoEffect {
+            command: command_name,
+            stderr: if stderr.trim().is_empty() {
+                "tmux gave no reason".to_owned()
+            } else {
+                stderr.into_owned()
+            },
+        });
+    }
+
+    hydrate(result.stdout())
+        .map_err(|error| error.after_effect(command_name))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            Error::CommandFailed {
+                command: command_name,
+                exit_code: result.exit_code(),
+                stderr: String::from("tmux printed no object for a creating command"),
+            }
+            .after_effect(command_name)
+        })
+}
+
+/// Create one session and return its hydrated snapshot.
+pub(crate) async fn create_session(
+    core: &Core,
+    build: impl FnOnce(&str) -> Command,
+) -> Result<SessionInfo, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
+    let template = plan.template().to_owned();
+
+    create_one(core, "new-session", build, &template, |stdout| {
+        hydrate_session_infos_from_stdout(&plan, stdout).map_err(decode_error("new-session"))
+    })
+    .await
+}
+
+/// Create one window and return its hydrated projection.
+pub(crate) async fn create_window(
+    core: &Core,
+    build: impl FnOnce(&str) -> Command,
+) -> Result<WindowProjection, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = window_projection_plan(&version).map_err(decode_error("new-window"))?;
+    let template = plan.template().to_owned();
+    let identity = core.configuration().identity();
+
+    create_one(core, "new-window", build, &template, |stdout| {
+        hydrate_window_projections_from_stdout(identity, &plan, stdout)
+            .map_err(decode_error("new-window"))
+    })
+    .await
+}
+
+/// Create one pane and return its hydrated projection.
+pub(crate) async fn create_pane(
+    core: &Core,
+    build: impl FnOnce(&str) -> Command,
+) -> Result<PaneProjection, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = pane_projection_plan(&version).map_err(decode_error("split-window"))?;
+    let template = plan.template().to_owned();
+    let identity = core.configuration().identity();
+
+    create_one(core, "split-window", build, &template, |stdout| {
+        hydrate_pane_projections_from_stdout(identity, &plan, stdout)
+            .map_err(decode_error("split-window"))
+    })
+    .await
+}
+
+/// Run a mutation that returns nothing, requiring tmux to accept it.
+pub(crate) async fn mutate(
+    core: &Core,
+    command_name: &'static str,
+    command: Command,
+) -> Result<(), Error> {
+    let target = command.target().map(OsStr::to_os_string);
+    let result = core.execute(command).await?;
+    if result.success() {
+        return Ok(());
+    }
+
+    Err(mutation_failure(command_name, &result, target.as_deref()))
+}
+
+pub(crate) fn mutation_failure(
+    command_name: &'static str,
+    result: &crate::CommandResult,
+    target: Option<&OsStr>,
+) -> Error {
+    Error::from_refused_result(command_name, result, target)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{client_session, create_session, mutation_failure};
+    use crate::command::{CommandRequest, CommandResult, ProcessStatus, RequestId};
+    use crate::formats::{FIELD_SEPARATOR, FormatPlan, ListProfile};
+    use crate::internal::core::Core;
+    use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+    use crate::{Command, Error, ErrorKind};
+
+    struct CreationExecutor {
+        calls: AtomicUsize,
+        stdout: &'static [u8],
+    }
+
+    impl Executor for CreationExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let stdout = if call == 0 {
+                b"tmux 3.7b\n".to_vec()
+            } else {
+                assert_eq!(call, 1, "one probe and one creating command");
+                self.stdout.to_vec()
+            };
+            DispatchFuture::new(async move {
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    /// Records the commands a lookup dispatches, answering the version probe.
+    struct CapturingExecutor {
+        commands: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl Executor for CapturingExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            // `CommandSummary` truncates each argument at `MAX_DIAGNOSTIC_BYTES`
+            // for safe display; a sessions template has nine fields and runs
+            // past that, so the diagnostic view would hide most separators.
+            // `argv()` is the untruncated argv tmux actually receives.
+            let summary = format!("{:?}", request.argv());
+            let probe = summary.contains("display-message") || summary.contains("list-");
+            self.commands
+                .lock()
+                .expect("the capture lock")
+                .push(summary);
+            let stdout = if probe {
+                Vec::new()
+            } else {
+                b"tmux 3.7b\n".to_vec()
+            };
+            DispatchFuture::new(async move {
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    /// Apple's `strftime` rule for a conversion it does not define.
+    ///
+    /// `stdtime/FreeBSD/strftime.c` reaches `default: break;` and then writes
+    /// `*pt++ = *format`, which is the conversion character alone: the `%` was
+    /// consumed to detect the conversion and is never emitted. glibc writes
+    /// both characters, which is exactly why this cannot be observed on Linux
+    /// -- and macOS tests do not run on a pull request, so a live test could
+    /// not catch it either. `%%` is defined, and yields one `%`.
+    fn darwin_strftime(template: &str) -> String {
+        let mut out = String::new();
+        let mut rest = template.chars();
+        while let Some(character) = rest.next() {
+            if character != '%' {
+                out.push(character);
+                continue;
+            }
+            match rest.next() {
+                // `%%` is the one conversion this template means to use.
+                Some('%') => out.push('%'),
+                // Undefined: the conversion character survives, the `%` does not.
+                Some(undefined) => out.push(undefined),
+                None => {}
+            }
+        }
+        out
+    }
+
+    /// A client lookup's template must reach tmux's format parser intact.
+    ///
+    /// `display-message` expands through `strftime` first -- tmux calls
+    /// `format_expand_time` where every listing calls `format_expand` -- and a
+    /// format plan separates its fields with `%`. So the separators are
+    /// conversions as far as `strftime` is concerned, and on Apple's libc they
+    /// are deleted, leaving one unparseable field and a `DecodeListing` for
+    /// every attached client.
+    #[tokio::test]
+    async fn a_client_lookup_template_survives_darwin_strftime() {
+        let executor = Arc::new(CapturingExecutor {
+            commands: std::sync::Mutex::new(Vec::new()),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
+
+        // An empty answer is "attached to nothing", which is a clean `None`
+        // and leaves the dispatched template to inspect.
+        let _ = client_session(&core, std::ffi::OsStr::new("/dev/pts/0")).await;
+
+        let commands = executor.commands.lock().expect("the capture lock").clone();
+        let dispatched = commands
+            .iter()
+            .find(|command| command.contains("#{"))
+            .expect("a lookup dispatches a format template");
+
+        // What tmux time-expands is only a problem for a command that time
+        // expands. A lookup that avoids one has nothing to preserve.
+        if !dispatched.contains("display-message") {
+            return;
+        }
+
+        let field_separator = FIELD_SEPARATOR as char;
+        let expected = FormatPlan::for_profile(
+            ListProfile::Sessions,
+            core.capabilities().await.expect("a version").tmux_version(),
+        );
+        let wanted = expected.template().matches(field_separator).count();
+        assert!(wanted > 0, "a sessions template separates its fields");
+
+        // The strftime pass is skipped whenever the template holds no `%`
+        // (`format.c`'s `strchr(fmt, '%') != NULL` guard), on every libc.
+        assert!(
+            !dispatched.contains('%'),
+            "a lookup template must contain no `%`; sent {dispatched}",
+        );
+
+        let survived = darwin_strftime(dispatched).matches(field_separator).count();
+        assert_eq!(
+            survived, wanted,
+            "every field separator has to survive strftime; sent {dispatched}",
+        );
+    }
+
+    #[test]
+    fn sensitive_mutation_failure_withholds_tmux_output() {
+        let secret = "sentinel-mutation-secret";
+        let command = Command::new("set-option")
+            .arg("--")
+            .arg("mouse")
+            .sensitive_arg(secret);
+        let result = CommandResult::new(
+            RequestId::new(1),
+            command.summary(),
+            ProcessStatus::from_exit_status(ExitStatus::from_raw(1 << 8)),
+            Vec::new(),
+            format!("bad value: {secret}\n").into_bytes(),
+        );
+
+        let error = mutation_failure("set-option", &result, None);
+        assert!(matches!(&error, Error::CommandFailed { .. }));
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
+
+    #[tokio::test]
+    async fn successful_creation_marks_decode_and_missing_object_failures() {
+        let executor = Arc::new(CreationExecutor {
+            calls: AtomicUsize::new(0),
+            stdout: b"malformed\n".as_slice(),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
+
+        let error = create_session(&core, |_format| Command::new("new-session"))
+            .await
+            .expect_err("tmux succeeded but did not describe the created session");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
+        assert!(matches!(
+            error,
+            Error::AfterEffect {
+                operation: "new-session",
+                ..
+            }
+        ));
+    }
+
+    /// Output tmux could not decode is a partial effect: something was made and
+    /// this cannot say what. No output at all is not, and the difference is not
+    /// cosmetic -- a caller told an effect may be outstanding cannot safely
+    /// retry. A creating command that worked always prints the object it made,
+    /// so nothing printed means nothing made, which is what every tmux does for
+    /// a socket path under a directory that does not exist.
+    #[tokio::test]
+    async fn creation_that_printed_nothing_is_a_refusal_not_a_partial_effect() {
+        let executor = Arc::new(CreationExecutor {
+            calls: AtomicUsize::new(0),
+            stdout: b"".as_slice(),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
+
+        let error = create_session(&core, |_format| Command::new("new-session"))
+            .await
+            .expect_err("tmux succeeded but described no session");
+
+        assert_ne!(error.kind(), ErrorKind::PartialEffect);
+        assert!(matches!(
+            error,
+            Error::NoEffect {
+                command: "new-session",
+                ..
+            }
+        ));
+    }
+}

@@ -16,14 +16,10 @@ fn check(condition: bool, message: &str) -> Result<(), ExampleError> {
     }
 }
 
-async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
-    server
-        .new_session(NewSessionOptions::new("prod-api").command("cat"))
-        .await?;
-    server
-        .new_session(NewSessionOptions::new("dev-api").command("cat"))
-        .await?;
-    let sessions = server.sessions().await?;
+fn demonstrate(server: &Server) -> Result<(), ExampleError> {
+    server.new_session(NewSessionOptions::new("prod-api").command("cat"))?;
+    server.new_session(NewSessionOptions::new("dev-api").command("cat"))?;
+    let sessions = server.sessions()?;
     let fields = Session::filter_fields();
     let production = fields.session_name.starts_with("prod-");
     let selected = sessions.iter().matching(&production).exactly_one()?;
@@ -36,8 +32,7 @@ async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), ExampleError> {
+fn main() -> Result<(), ExampleError> {
     let root = std::path::Path::new("/tmp/libtmux-rs-dev");
     std::fs::create_dir_all(root)?;
     let directory = tempfile::Builder::new()
@@ -47,16 +42,25 @@ async fn main() -> Result<(), ExampleError> {
         directory.path().join("owner"),
         std::process::id().to_string(),
     )?;
+    let cancellation = libtmux::CancellationToken::new();
     let server = Server::builder()
         .socket_path(directory.path().join("tmux.sock"))
         .config_file("/dev/null")
         .default_timeout(Duration::from_secs(5))
+        .cancellation_token(cancellation.clone())
         .build()?;
-    let outcome = tokio::time::timeout(Duration::from_secs(10), demonstrate(&server)).await;
+    let cleanup = Server::builder()
+        .socket_path(directory.path().join("tmux.sock"))
+        .config_file("/dev/null")
+        .default_timeout(Duration::from_secs(5))
+        .build()?;
+    let outcome = with_deadline(cancellation, Duration::from_secs(10), || {
+        demonstrate(&server)
+    });
 
     // Stop the owned daemon before closing the client executor.
-    let killed = server.kill().await;
-    let closed = server.shutdown().await;
+    let killed = cleanup.kill();
+    let closed = server.shutdown().and_then(|()| cleanup.shutdown());
     let cleanup_failed = killed.is_err() || closed.is_err();
     let mut failures = Vec::new();
     match outcome {
@@ -81,4 +85,36 @@ async fn main() -> Result<(), ExampleError> {
     } else {
         Err(failures.join("; ").into())
     }
+}
+
+fn with_deadline<T>(
+    token: libtmux::CancellationToken,
+    within: Duration,
+    operation: impl FnOnce() -> T,
+) -> Result<T, &'static str> {
+    std::thread::scope(|threads| {
+        let (finished, completion) = std::sync::mpsc::channel::<()>();
+        let timer = threads.spawn(move || {
+            if matches!(
+                completion.recv_timeout(within),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ) {
+                token.cancel();
+                true
+            } else {
+                false
+            }
+        });
+        let result = operation();
+        drop(finished);
+        let elapsed = match timer.join() {
+            Ok(elapsed) => elapsed,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        if elapsed {
+            Err("example deadline elapsed")
+        } else {
+            Ok(result)
+        }
+    })
 }

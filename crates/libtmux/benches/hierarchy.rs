@@ -4,7 +4,7 @@
 //! $ cargo bench --features test-support
 //! ```
 //!
-//! The claim under test is that [`libtmux::Server::hierarchy`] costs three
+//! The claim under test is that [`libtmux_tokio::Server::hierarchy`] costs three
 //! tmux commands whatever the server holds, where walking down costs one per
 //! session and one per window. `tests/command_budget.rs` asserts the command
 //! counts, which are exact; this reports what they cost in time, which is not.
@@ -43,14 +43,13 @@ impl Fixture {
 }
 
 /// Build a server holding `sessions` sessions of `windows` two-pane windows.
-async fn build(sessions: usize, windows: usize) -> Fixture {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+fn build(sessions: usize, windows: usize) -> Fixture {
+    let guard = TestServer::builder().start().expect("tmux starts");
 
     for session in 0..sessions {
         let created = guard
             .server()
             .new_session(format!("bench-{session}").as_str())
-            .await
             .expect("session");
 
         for window in 0..windows {
@@ -59,11 +58,9 @@ async fn build(sessions: usize, windows: usize) -> Fixture {
                     NewWindowOptions::new(format!("window-{window}").as_str())
                         .command("sleep 3600"),
                 )
-                .await
                 .expect("window");
             created
                 .split(SplitOptions::new(SplitDirection::Below).command("sleep 3600"))
-                .await
                 .expect("pane");
         }
     }
@@ -76,11 +73,11 @@ async fn build(sessions: usize, windows: usize) -> Fixture {
 }
 
 /// Gather the hierarchy the obvious way, one listing per parent.
-async fn walk(server: &Server) -> usize {
+fn walk(server: &Server) -> usize {
     let mut panes = 0;
-    for session in server.sessions().await.expect("sessions") {
-        for window in session.windows().await.expect("windows") {
-            panes += window.panes().await.expect("panes").len();
+    for session in server.sessions().expect("sessions") {
+        for window in session.windows().expect("windows") {
+            panes += window.panes().expect("panes").len();
         }
     }
 
@@ -88,11 +85,6 @@ async fn walk(server: &Server) -> usize {
 }
 
 fn hierarchy(criterion: &mut Criterion) {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime");
-
     let mut group = criterion.benchmark_group("hierarchy");
     // Every sample spawns tmux processes, so the default sample count would
     // spend minutes measuring the same thing.
@@ -101,16 +93,14 @@ fn hierarchy(criterion: &mut Criterion) {
         .measurement_time(Duration::from_secs(10));
 
     for (sessions, windows) in [(1, 1), (2, 4), (4, 8)] {
-        let fixture = runtime.block_on(build(sessions, windows));
+        let fixture = build(sessions, windows);
         let label = fixture.label();
 
         group.bench_with_input(
             BenchmarkId::new("gathered", &label),
             &fixture,
             |bench, fixture| {
-                bench
-                    .to_async(&runtime)
-                    .iter(|| async { fixture.server().hierarchy().await.expect("hierarchy") });
+                bench.iter(|| fixture.server().hierarchy().expect("hierarchy"));
             },
         );
 
@@ -118,15 +108,11 @@ fn hierarchy(criterion: &mut Criterion) {
             BenchmarkId::new("walked", &label),
             &fixture,
             |bench, fixture| {
-                bench
-                    .to_async(&runtime)
-                    .iter(|| async { walk(fixture.server()).await });
+                bench.iter(|| walk(fixture.server()));
             },
         );
 
-        runtime
-            .block_on(fixture.guard.shutdown())
-            .expect("tmux fixture shuts down");
+        fixture.guard.shutdown().expect("tmux fixture shuts down");
     }
 
     group.finish();

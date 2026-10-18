@@ -38,22 +38,18 @@ const fn pane_mode_is_active(count: u32) -> bool {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
-/// let pane = window.active_pane().await?.expect("a window has a pane");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let window = session.active_window()?.expect("a session has a window");
+/// let pane = window.active_pane()?.expect("a window has a pane");
 ///
-/// pane.send_line("echo hello").await?;
+/// pane.send_line("echo hello")?;
 ///
 /// // Capture returns `TmuxText`, because a pane can print any bytes.
-/// let lines = pane.capture().await?;
+/// let lines = pane.capture()?;
 /// assert!(!lines.is_empty());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -98,27 +94,23 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::Pane;
     ///
-    /// let session = server.new_session("locating").await?;
-    /// let expected = session.panes().await?.remove(0);
+    /// let session = server.new_session("locating")?;
+    /// let expected = session.panes()?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
-    /// let found = Pane::from_env_value(server, Some(expected.id().as_ref())).await?;
+    /// let found = Pane::from_env_value(server, Some(expected.id().as_ref()))?;
     ///
     /// assert_eq!(found.expect("the pane exists").id(), expected.id());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_env(server: &crate::Server) -> Result<Option<Self>, Error> {
-        Self::from_env_value(server, std::env::var_os("TMUX_PANE")).await
+    pub fn from_env(server: &crate::Server) -> Result<Option<Self>, Error> {
+        Self::from_env_value(server, std::env::var_os("TMUX_PANE"))
     }
 
     /// Find a pane from an explicit `TMUX_PANE` value.
@@ -127,13 +119,15 @@ impl Pane {
     ///
     /// Returns an error when the value is absent or is not a pane ID, or when
     /// the pane listing fails.
-    pub async fn from_env_value(
+    pub fn from_env_value(
         server: &crate::Server,
         value: Option<impl AsRef<OsStr>>,
     ) -> Result<Option<Self>, Error> {
-        server
-            .pane_by_id(&parse_env_id(value.as_ref().map(AsRef::as_ref))?)
-            .await
+        let pane_id = match value {
+            Some(value) => parse_env_id(Some(value.as_ref())),
+            None => parse_env_id(None),
+        }?;
+        server.pane_by_id(&pane_id)
     }
 
     /// Return the tmux pane identity.
@@ -253,24 +247,22 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{SplitDirection, SplitOptions};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("edges").await?;
-    /// let mut window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("edges")?;
+    /// let mut window = session.active_window()?.expect("a window");
     ///
     /// // One pane fills the window, so it touches every edge.
-    /// let only = window.active_pane().await?.expect("a pane");
+    /// let only = window.active_pane()?.expect("a pane");
     /// assert!(only.is_at_top() && only.is_at_bottom());
     ///
     /// // Splitting below leaves the original touching the top and not the
     /// // bottom, and the new one the other way round.
-    /// let lower = window.split(SplitOptions::new(SplitDirection::Below)).await?;
+    /// let lower = window.split(SplitOptions::new(SplitDirection::Below))?;
     /// let upper = window
     ///     .panes()
-    ///     .await?
+    ///     ?
     ///     .into_iter()
     ///     .find(|pane| pane.id() != lower.id())
     ///     .expect("the original pane");
@@ -278,9 +270,7 @@ impl Pane {
     /// assert!(upper.is_at_top() && !upper.is_at_bottom());
     /// assert!(lower.is_at_bottom() && !lower.is_at_top());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -346,24 +336,20 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("piped").await?;
-    /// let mut pane = session.panes().await?.remove(0);
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("piped")?;
+    /// let mut pane = session.panes()?.remove(0);
     ///
     /// assert!(!pane.is_piped());
     ///
-    /// pane.pipe(Some("cat >/dev/null")).await?;
-    /// pane.refresh().await?;
+    /// pane.pipe(Some("cat >/dev/null"))?;
+    /// pane.refresh()?;
     /// assert!(pane.is_piped());
     ///
-    /// pane.pipe(None::<String>).await?;
-    /// pane.refresh().await?;
+    /// pane.pipe(None::<String>)?;
+    /// pane.refresh()?;
     /// assert!(!pane.is_piped());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -392,10 +378,9 @@ impl Pane {
     ///
     /// Returns [`Error::ObjectGone`] when the pane no longer exists, or a
     /// listing error when tmux could not be read.
-    pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
+    pub fn refresh(&mut self) -> Result<&mut Self, Error> {
         let target = self.id().to_string();
-        let projection = listing::panes(&self.core, listing::Scope::Target(&target), None)
-            .await?
+        let projection = listing::panes(&self.core, listing::Scope::Target(&target), None)?
             .into_iter()
             .find(|projection| projection.pane().pane_id() == self.id())
             .ok_or_else(|| Error::ObjectGone {
@@ -413,9 +398,9 @@ impl Pane {
     ///
     /// Returns [`Error::ObjectGone`] when the pane no longer exists, or a
     /// listing error when tmux could not be read.
-    pub async fn refreshed(&self) -> Result<Self, Error> {
+    pub fn refreshed(&self) -> Result<Self, Error> {
         let mut refreshed = self.clone();
-        refreshed.refresh().await?;
+        refreshed.refresh()?;
         Ok(refreshed)
     }
 
@@ -430,9 +415,8 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when the parent lookup fails.
-    pub async fn window(&self) -> Result<Option<Window>, Error> {
-        Ok(listing::window_for_pane(&self.core, self.id())
-            .await?
+    pub fn window(&self) -> Result<Option<Window>, Error> {
+        Ok(listing::window_for_pane(&self.core, self.id())?
             .map(|projection| Window::new(Arc::clone(&self.core), projection)))
     }
 
@@ -453,15 +437,15 @@ impl Pane {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
-    /// if let Some(session) = pane.session().await? {
+    /// #  fn example(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+    /// if let Some(session) = pane.session()? {
     ///     println!("{}", session.name().to_string_lossy());
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn session(&self) -> Result<Option<Session>, Error> {
-        let infos = listing::sessions(&self.core, None).await?;
+    pub fn session(&self) -> Result<Option<Session>, Error> {
+        let infos = listing::sessions(&self.core, None)?;
 
         Ok(infos
             .into_iter()
@@ -483,14 +467,12 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::{PaneSize, SplitDirection, SplitOptions};
     ///
-    /// let session = server.new_session("split-from-pane").await?;
-    /// let pane = session.panes().await?.remove(0);
+    /// let session = server.new_session("split-from-pane")?;
+    /// let pane = session.panes()?.remove(0);
     ///
     /// let above = pane
     ///     .split(
@@ -498,21 +480,19 @@ impl Pane {
     ///             .size(PaneSize::Percent(30))
     ///             .command("sleep 300"),
     ///     )
-    ///     .await?;
+    ///     ?;
     ///
     /// assert_ne!(above.id(), pane.id());
     /// assert_eq!(above.window_id(), pane.window_id());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn split(&self, options: impl Into<crate::SplitOptions>) -> Result<Self, Error> {
+    pub fn split(&self, options: impl Into<crate::SplitOptions>) -> Result<Self, Error> {
         let options = options.into();
         let pane = self.id().to_string();
         let projection =
-            listing::create_pane(&self.core, |format| options.into_command(&pane, format)).await?;
+            listing::create_pane(&self.core, |format| options.into_command(&pane, format))?;
 
         Ok(Self::new(Arc::clone(&self.core), projection))
     }
@@ -532,28 +512,24 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::{ResizeDirection, SplitDirection, SplitOptions};
     ///
-    /// let session = server.new_session("resized-pane").await?;
-    /// let pane = session.panes().await?.remove(0);
-    /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
+    /// let session = server.new_session("resized-pane")?;
+    /// let pane = session.panes()?.remove(0);
+    /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))?;
     ///
-    /// let mut pane = pane.refreshed().await?;
+    /// let mut pane = pane.refreshed()?;
     /// let before = pane.height();
-    /// pane.resize_by(ResizeDirection::Down, 2).await?;
+    /// pane.resize_by(ResizeDirection::Down, 2)?;
     ///
     /// assert_eq!(pane.height(), before + 2);
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn resize_by(
+    pub fn resize_by(
         &mut self,
         direction: crate::ResizeDirection,
         cells: u32,
@@ -566,11 +542,9 @@ impl Pane {
                 .arg(self.id().to_string())
                 .arg(direction.flag())
                 .arg(cells.to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("resize-pane"))?;
         Ok(self)
     }
@@ -588,29 +562,25 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::{SplitDirection, SplitOptions};
     ///
-    /// let session = server.new_session("zoomed").await?;
-    /// let pane = session.panes().await?.remove(0);
-    /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
+    /// let session = server.new_session("zoomed")?;
+    /// let pane = session.panes()?.remove(0);
+    /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))?;
     ///
-    /// let mut pane = pane.refreshed().await?;
-    /// pane.toggle_zoom().await?;
-    /// assert!(pane.window().await?.expect("the window").is_zoomed());
+    /// let mut pane = pane.refreshed()?;
+    /// pane.toggle_zoom()?;
+    /// assert!(pane.window()?.expect("the window").is_zoomed());
     ///
-    /// pane.toggle_zoom().await?;
-    /// assert!(!pane.window().await?.expect("the window").is_zoomed());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// pane.toggle_zoom()?;
+    /// assert!(!pane.window()?.expect("the window").is_zoomed());
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn toggle_zoom(&mut self) -> Result<&mut Self, Error> {
+    pub fn toggle_zoom(&mut self) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "resize-pane",
@@ -618,11 +588,9 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("-Z"),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("resize-pane"))?;
         Ok(self)
     }
@@ -639,7 +607,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn send_keys(&self, keys: impl Into<OsString>) -> Result<(), Error> {
+    pub fn send_keys(&self, keys: impl Into<OsString>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "send-keys",
@@ -650,7 +618,6 @@ impl Pane {
                 .arg("--")
                 .sensitive_arg(keys.into()),
         )
-        .await
     }
 
     /// Send literal text followed by Enter as one dispatch.
@@ -661,18 +628,17 @@ impl Pane {
     ///
     /// Returns an error when tmux refuses the line.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// The effect may or may not have happened, but never half of it: the text
-    /// and its Enter travel as one `send-keys`, so a dropped future cannot leave
-    /// a line typed and not submitted. A retry can type the line twice.
-    pub async fn send_line(&self, text: impl Into<OsString>) -> Result<(), Error> {
+    /// The effect may or may not have happened, but never half of it: the text and its
+    /// Enter travel as one `send-keys`, so cancellation cannot leave a line typed and
+    /// not submitted. A retry can type the line twice.
+    pub fn send_line(&self, text: impl Into<OsString>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "send-keys",
             send_line_command(self.id(), text.into()),
         )
-        .await
     }
 
     /// Send tmux key names, such as `C-c` or `Enter`.
@@ -680,7 +646,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize a key name.
-    pub async fn send_key_names<I, K>(&self, keys: I) -> Result<(), Error>
+    pub fn send_key_names<I, K>(&self, keys: I) -> Result<(), Error>
     where
         I: IntoIterator<Item = K>,
         K: Into<OsString>,
@@ -693,7 +659,7 @@ impl Pane {
             command = command.arg(key.into());
         }
 
-        listing::mutate(&self.core, "send-keys", command).await
+        listing::mutate(&self.core, "send-keys", command)
     }
 
     /// Make this pane active in its window.
@@ -701,18 +667,16 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn select(&mut self) -> Result<&mut Self, Error> {
+    pub fn select(&mut self) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "select-pane",
             Command::new("select-pane")
                 .arg("-t")
                 .arg(self.id().to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("select-pane"))?;
         Ok(self)
     }
@@ -722,7 +686,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the size.
-    pub async fn resize(&mut self, width: u32, height: u32) -> Result<&mut Self, Error> {
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "resize-pane",
@@ -733,11 +697,9 @@ impl Pane {
                 .arg(width.to_string())
                 .arg("-y")
                 .arg(height.to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("resize-pane"))?;
         Ok(self)
     }
@@ -750,7 +712,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn kill(self) -> Result<(), Error> {
+    pub fn kill(self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "kill-pane",
@@ -758,7 +720,16 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
+    }
+
+    pub(crate) fn with_core(mut self, core: Arc<Core>) -> Self {
+        self.core = core;
+        self
+    }
+
+    pub(crate) fn kill_for_cleanup(mut self) -> Result<(), Error> {
+        self.core = self.core.for_cleanup();
+        self.kill()
     }
 
     /// Run a raw tmux command against this pane.
@@ -773,35 +744,28 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns an error when the process cannot be started, captured, or
-    /// awaited.
+    /// Returns an error when the process cannot be started, captured, or waited for.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("raw").await?;
-    /// let window = session.active_window().await?.expect("a window");
-    /// let pane = window.active_pane().await?.expect("a pane");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("raw")?;
+    /// let window = session.active_window()?.expect("a window");
+    /// let pane = window.active_pane()?.expect("a pane");
     ///
     /// let result = pane
     ///     .cmd(libtmux::Command::new("display-message").arg("-p").arg("#{pane_id}"))
-    ///     .await?;
+    ///     ?;
     /// assert_eq!(result.stdout_lossy().trim(), pane.id().to_string());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
-        self.core
-            .execute(command.targeting(self.id().to_string()))
-            .await
+    pub fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
+        self.core.execute(command.targeting(self.id().to_string()))
     }
 
     /// Expand a tmux format string in this pane's context.
@@ -819,31 +783,25 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("shown").await?;
-    /// let window = session.active_window().await?.expect("a window");
-    /// let pane = window.active_pane().await?.expect("a pane");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("shown")?;
+    /// let window = session.active_window()?.expect("a window");
+    /// let pane = window.active_pane()?.expect("a pane");
     ///
-    /// let expanded = pane.format("#{pane_id}").await?;
+    /// let expanded = pane.format("#{pane_id}")?;
     /// assert_eq!(expanded.to_string_lossy(), pane.id().to_string());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn format(&self, template: &str) -> Result<TmuxText, Error> {
-        let result = self
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("--")
-                    .arg(OsString::from(template)),
-            )
-            .await?;
+    pub fn format(&self, template: &str) -> Result<TmuxText, Error> {
+        let result = self.cmd(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("--")
+                .arg(OsString::from(template)),
+        )?;
         if !result.success() {
             return Err(Error::from_refused_result(
                 "display-message",
@@ -871,14 +829,12 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses the message.
-    pub async fn display(&self, message: &str) -> Result<(), Error> {
-        let result = self
-            .cmd(
-                Command::new("display-message")
-                    .arg("--")
-                    .arg(OsString::from(message)),
-            )
-            .await?;
+    pub fn display(&self, message: &str) -> Result<(), Error> {
+        let result = self.cmd(
+            Command::new("display-message")
+                .arg("--")
+                .arg(OsString::from(message)),
+        )?;
         if result.success() {
             return Ok(());
         }
@@ -895,7 +851,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the title.
-    pub async fn set_title(&mut self, title: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
+    pub fn set_title(&mut self, title: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "select-pane",
@@ -904,11 +860,9 @@ impl Pane {
                 .arg(self.id().to_string())
                 .arg("-T")
                 .sensitive_arg(title.into().into_os_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("select-pane"))?;
         Ok(self)
     }
@@ -918,7 +872,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn clear_history(&self) -> Result<(), Error> {
+    pub fn clear_history(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "clear-history",
@@ -926,7 +880,6 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
     }
 
     /// Paste a buffer's contents into the pane.
@@ -936,7 +889,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when no such buffer exists.
-    pub async fn paste_buffer(&self, name: Option<&str>) -> Result<(), Error> {
+    pub fn paste_buffer(&self, name: Option<&str>) -> Result<(), Error> {
         let mut command = Command::new("paste-buffer")
             .arg("-t")
             .arg(self.id().to_string());
@@ -944,7 +897,7 @@ impl Pane {
             command = command.arg("-b").arg(OsString::from(name));
         }
 
-        listing::mutate(&self.core, "paste-buffer", command).await
+        listing::mutate(&self.core, "paste-buffer", command)
     }
 
     /// Pipe the pane's output to a shell command.
@@ -961,7 +914,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn pipe(&self, command: Option<impl Into<OsString>>) -> Result<(), Error> {
+    pub fn pipe(&self, command: Option<impl Into<OsString>>) -> Result<(), Error> {
         let mut pipe = Command::new("pipe-pane")
             .arg("-t")
             .arg(self.id().to_string());
@@ -969,7 +922,7 @@ impl Pane {
             pipe = pipe.arg("--").sensitive_arg(command.into());
         }
 
-        listing::mutate(&self.core, "pipe-pane", pipe).await
+        listing::mutate(&self.core, "pipe-pane", pipe)
     }
 
     /// Restart the pane's command in place.
@@ -980,7 +933,7 @@ impl Pane {
     ///
     /// Returns an error under [`Respawn::OnlyIfDead`] when the command is
     /// still running.
-    pub async fn respawn(
+    pub fn respawn(
         &mut self,
         command: Option<impl Into<OsString>>,
         respawn_mode: Respawn,
@@ -995,9 +948,8 @@ impl Pane {
             respawn = respawn.arg("--").arg(command.into());
         }
 
-        listing::mutate(&self.core, "respawn-pane", respawn).await?;
+        listing::mutate(&self.core, "respawn-pane", respawn)?;
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("respawn-pane"))?;
         Ok(self)
     }
@@ -1008,7 +960,7 @@ impl Pane {
     ///
     /// Returns [`Error::ServerMismatch`] when `other` belongs to another
     /// server, or an error when tmux refuses the swap.
-    pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
+    pub fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
         self.core
             .require_same_server(other.server_identity(), "swap-pane")?;
         listing::mutate(
@@ -1019,11 +971,9 @@ impl Pane {
                 .arg(self.id().to_string())
                 .arg("-t")
                 .arg(other.id().to_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("swap-pane"))?;
         Ok(self)
     }
@@ -1055,27 +1005,23 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{SplitDirection, SplitOptions};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("broken-out").await?;
-    /// let pane = session.panes().await?.remove(0);
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("broken-out")?;
+    /// let pane = session.panes()?.remove(0);
     /// let stays = pane.window_id().clone();
     ///
-    /// let moved = pane.split(SplitOptions::new(SplitDirection::Below)).await?;
-    /// let moved = moved.break_out().await?;
+    /// let moved = pane.split(SplitOptions::new(SplitDirection::Below))?;
+    /// let moved = moved.break_out()?;
     ///
     /// // The window it landed in, without listing the server to find it.
     /// assert_ne!(moved.window_id(), &stays);
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn break_out(self) -> Result<Self, Error> {
+    pub fn break_out(self) -> Result<Self, Error> {
         listing::mutate(
             &self.core,
             "break-pane",
@@ -1083,11 +1029,9 @@ impl Pane {
                 .arg("-d")
                 .arg("-s")
                 .arg(self.id().to_string()),
-        )
-        .await?;
+        )?;
 
         self.refreshed()
-            .await
             .map_err(|error| error.after_effect("break-pane"))
     }
 
@@ -1108,34 +1052,26 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{JoinOptions, SplitDirection};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("moving").await?;
-    /// let window = session.active_window().await?.expect("a window");
-    /// let elsewhere = session.new_window("elsewhere").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("moving")?;
+    /// let window = session.active_window()?.expect("a window");
+    /// let elsewhere = session.new_window("elsewhere")?;
     ///
-    /// let stranded = elsewhere.panes().await?.remove(0);
-    /// let here = window.panes().await?.remove(0);
+    /// let stranded = elsewhere.panes()?.remove(0);
+    /// let here = window.panes()?.remove(0);
     /// let moved = stranded
     ///     .join_into(&here, JoinOptions::new(SplitDirection::Below))
-    ///     .await?;
+    ///     ?;
     ///
     /// assert_eq!(moved.window_id(), window.id());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn join_into(
-        self,
-        beside: &Self,
-        options: crate::JoinOptions,
-    ) -> Result<Self, Error> {
+    pub fn join_into(self, beside: &Self, options: crate::JoinOptions) -> Result<Self, Error> {
         self.core
             .require_same_server(beside.server_identity(), "join-pane")?;
         let command = options.apply(
@@ -1146,10 +1082,9 @@ impl Pane {
                 .arg("-t")
                 .arg(beside.id().to_string()),
         );
-        listing::mutate(&self.core, "join-pane", command).await?;
+        listing::mutate(&self.core, "join-pane", command)?;
 
         self.refreshed()
-            .await
             .map_err(|error| error.after_effect("join-pane"))
     }
 
@@ -1158,7 +1093,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn copy_mode(&self) -> Result<(), Error> {
+    pub fn copy_mode(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "copy-mode",
@@ -1166,7 +1101,6 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
     }
 
     /// Leave copy mode, or any other mode the pane is in.
@@ -1183,7 +1117,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn exit_mode(&self) -> Result<(), Error> {
+    pub fn exit_mode(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "copy-mode",
@@ -1192,7 +1126,6 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
     }
 
     /// Show the clock in this pane.
@@ -1200,7 +1133,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn clock_mode(&self) -> Result<(), Error> {
+    pub fn clock_mode(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "clock-mode",
@@ -1208,7 +1141,6 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
     }
 
     /// Send the configured prefix key to the pane.
@@ -1216,7 +1148,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn send_prefix(&self) -> Result<(), Error> {
+    pub fn send_prefix(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "send-prefix",
@@ -1224,7 +1156,6 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
     }
 }
 
@@ -1276,21 +1207,19 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::query::Filterable as _;
     /// use libtmux::{Availability, Pane, TmuxText};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
-    /// let mut pane = session.panes().await?.remove(0);
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("read")?;
+    /// let mut pane = session.panes()?.remove(0);
     /// let fields = Pane::filter_fields();
     ///
     /// // Outside copy mode tmux reports no scroll position at all.
     /// assert_eq!(pane.get(fields.scroll_position), Availability::Absent);
     ///
-    /// pane.copy_mode().await?;
-    /// pane.refresh().await?;
+    /// pane.copy_mode()?;
+    /// pane.refresh()?;
     /// assert_eq!(pane.get(fields.scroll_position), Availability::Available(0));
     /// assert_eq!(
     ///     pane.get(fields.pane_mode),
@@ -1298,9 +1227,7 @@ impl Pane {
     /// );
     /// assert_eq!(pane.get(fields.pane_id), Availability::Available(pane.id()));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1412,24 +1339,20 @@ pub enum PaneWait {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::CaptureOptions;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("capture").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
-/// let pane = window.active_pane().await?.expect("a window has a pane");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("capture")?;
+/// let window = session.active_window()?.expect("a session has a window");
+/// let pane = window.active_pane()?.expect("a window has a pane");
 ///
 /// // The constructors name the two questions people actually ask, rather
 /// // than making a caller remember that zero is the top of the screen.
-/// let visible = pane.capture_with(CaptureOptions::visible()).await?;
-/// let everything = pane.capture_with(CaptureOptions::history()).await?;
+/// let visible = pane.capture_with(CaptureOptions::visible())?;
+/// let everything = pane.capture_with(CaptureOptions::history())?;
 /// assert!(everything.len() >= visible.len());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1663,23 +1586,19 @@ enum CaptureBound {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{CaptureOptions, CapturedLine};
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux::test::TestServer::new()?;
 /// let server = guard.server();
-/// let session = server.new_session("marked").await?;
-/// let pane = session.panes().await?.remove(0);
+/// let session = server.new_session("marked")?;
+/// let pane = session.panes()?.remove(0);
 ///
-/// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
-///     let lines: Vec<CapturedLine> = pane.capture_lines(CaptureOptions::visible()).await?;
+/// if server.capabilities()?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
+///     let lines: Vec<CapturedLine> = pane.capture_lines(CaptureOptions::visible())?;
 ///     assert!(lines.iter().all(|line| !line.starts_output || !line.starts_prompt));
 /// }
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```

@@ -44,8 +44,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the listing.
-    pub async fn option_names(&self) -> Result<Vec<String>, Error> {
-        options::names(&self.core, options::Scope::Server).await
+    pub fn option_names(&self) -> Result<Vec<String>, Error> {
+        options::names(&self.core, options::Scope::Server)
     }
 
     /// Read every option set at this server, decoded by its declared kind.
@@ -71,23 +71,19 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
-    /// server.set_option("buffer-limit", "42").await?;
-    /// let options = server.options().await?;
+    /// server.set_option("buffer-limit", "42")?;
+    /// let options = server.options()?;
     /// assert!(options.contains_key("buffer-limit"));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
-        options::typed_all(&self.core, options::Scope::Server).await
+    pub fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
+        options::typed_all(&self.core, options::Scope::Server)
     }
 
     /// Set one server option to text, unchecked.
@@ -98,8 +94,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name or value.
-    pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
-        options::set(&self.core, options::Scope::Server, name, value, false).await
+    pub fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+        options::set(&self.core, options::Scope::Server, name, value, false)
     }
 
     /// Set one server option to a typed value, checked before it is sent.
@@ -117,17 +113,13 @@ impl Server {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-    /// server.set_typed_option("escape-time", 10).await?;
+    /// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// server.set_typed_option("escape-time", 10)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_typed_option(
-        &self,
-        name: &str,
-        value: impl Into<OptionValue>,
-    ) -> Result<(), Error> {
-        options::set_typed(&self.core, options::Scope::Server, name, value.into()).await
+    pub fn set_typed_option(&self, name: &str, value: impl Into<OptionValue>) -> Result<(), Error> {
+        options::set_typed(&self.core, options::Scope::Server, name, value.into())
     }
 
     /// Remove one server option.
@@ -135,8 +127,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name.
-    pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
-        options::unset(&self.core, options::Scope::Server, name).await
+    pub fn unset_option(&self, name: &str) -> Result<(), Error> {
+        options::unset(&self.core, options::Scope::Server, name)
     }
 
     /// Set one global session option to text, unchecked.
@@ -147,11 +139,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name or value.
-    pub async fn set_global_option(
-        &self,
-        name: &str,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
+    pub fn set_global_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         options::set(
             &self.core,
             options::Scope::GlobalSession,
@@ -159,7 +147,6 @@ impl Server {
             value,
             false,
         )
-        .await
     }
 
     /// Set one global session option to a typed value, checked before it is
@@ -179,14 +166,14 @@ impl Server {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-    /// server.set_typed_global_option("mouse", true).await?;
-    /// server.set_typed_global_option("history-limit", 50_000).await?;
-    /// server.set_typed_global_option("status-position", "top").await?;
+    /// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// server.set_typed_global_option("mouse", true)?;
+    /// server.set_typed_global_option("history-limit", 50_000)?;
+    /// server.set_typed_global_option("status-position", "top")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_typed_global_option(
+    pub fn set_typed_global_option(
         &self,
         name: &str,
         value: impl Into<OptionValue>,
@@ -197,7 +184,6 @@ impl Server {
             name,
             value.into(),
         )
-        .await
     }
 
     /// Set a variable in the server's own environment.
@@ -225,37 +211,29 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::EnvironmentEntry;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
-    /// server.set_environment("EDITOR", "hx").await?;
+    /// server.set_environment("EDITOR", "hx")?;
     /// assert!(matches!(
-    ///     server.environment("EDITOR").await?,
+    ///     server.environment("EDITOR")?,
     ///     Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"hx",
     /// ));
     ///
     /// // Separate stores: the session has no entry of its own, and reading it
     /// // does not fall back to the server. The value still reaches a process
     /// // the session starts.
-    /// let session = server.new_session("separate").await?;
-    /// assert_eq!(session.environment("EDITOR").await?, None);
+    /// let session = server.new_session("separate")?;
+    /// assert_eq!(session.environment("EDITOR")?, None);
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_environment(
-        &self,
-        name: &str,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        environment::set(&self.core, environment::Scope::Global, name, value.into()).await
+    pub fn set_environment(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+        environment::set(&self.core, environment::Scope::Global, name, value.into())
     }
 
     /// Read one variable from the server's environment.
@@ -271,8 +249,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached.
-    pub async fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
-        environment::get(&self.core, environment::Scope::Global, name).await
+    pub fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
+        environment::get(&self.core, environment::Scope::Global, name)
     }
 
     /// Read the server's whole environment.
@@ -287,8 +265,8 @@ impl Server {
     /// and [`Error::DecodeListing`] when the listing is not in the shape tmux
     /// prints. An empty map means the server holds nothing, never that the
     /// listing failed.
-    pub async fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
-        environment::all(&self.core, environment::Scope::Global).await
+    pub fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
+        environment::all(&self.core, environment::Scope::Global)
     }
 
     /// Hide a variable from processes tmux starts.
@@ -302,8 +280,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name.
-    pub async fn hide_environment(&self, name: &str) -> Result<(), Error> {
-        environment::hide(&self.core, environment::Scope::Global, name).await
+    pub fn hide_environment(&self, name: &str) -> Result<(), Error> {
+        environment::hide(&self.core, environment::Scope::Global, name)
     }
 
     /// Remove a variable from the server's environment.
@@ -311,8 +289,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name.
-    pub async fn unset_environment(&self, name: &str) -> Result<(), Error> {
-        environment::unset(&self.core, environment::Scope::Global, name).await
+    pub fn unset_environment(&self, name: &str) -> Result<(), Error> {
+        environment::unset(&self.core, environment::Scope::Global, name)
     }
 
     /// Read every value an array option holds, by index.
@@ -331,35 +309,33 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
     /// // Written far apart on purpose: nothing renumbers, so the gap stays.
-    /// server.set_array_option("command-alias", 30, "thirty=display -p 30").await?;
-    /// server.set_array_option("command-alias", 35, "five=display -p 35").await?;
+    /// server.set_array_option("command-alias", 30, "thirty=display -p 30")?;
+    /// server.set_array_option("command-alias", 35, "five=display -p 35")?;
     ///
-    /// let aliases = server.array_option("command-alias").await?;
+    /// let aliases = server.array_option("command-alias")?;
     /// assert_eq!(aliases.get(31), None, "the gap is tmux's, and it is kept");
     /// assert_eq!(
     ///     aliases.get(35).map(|value| value.to_string_lossy().into_owned()),
     ///     Some("five=display -p 35".to_owned()),
     /// );
     ///
-    /// server.unset_array_option("command-alias", 35).await?;
-    /// assert_eq!(server.array_option("command-alias").await?.get(35), None);
+    /// server.unset_array_option("command-alias", 35)?;
+    /// assert_eq!(server.array_option("command-alias")?.get(35), None);
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn array_option(&self, name: &str) -> Result<SparseValues<TmuxText>, Error> {
-        Ok(SparseValues::from(
-            options::indexed(&self.core, array_scope(name), name).await?,
-        ))
+    pub fn array_option(&self, name: &str) -> Result<SparseValues<TmuxText>, Error> {
+        Ok(SparseValues::from(options::indexed(
+            &self.core,
+            array_scope(name),
+            name,
+        )?))
     }
 
     /// Write one index of an array option, leaving the others alone.
@@ -367,7 +343,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the option name or the value.
-    pub async fn set_array_option(
+    pub fn set_array_option(
         &self,
         name: &str,
         index: u32,
@@ -380,7 +356,6 @@ impl Server {
             value,
             false,
         )
-        .await
     }
 
     /// Extend the value already at one index of an array option.
@@ -391,7 +366,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the option name or the value.
-    pub async fn append_array_option(
+    pub fn append_array_option(
         &self,
         name: &str,
         index: u32,
@@ -404,7 +379,6 @@ impl Server {
             value,
             true,
         )
-        .await
     }
 
     /// Remove one index of an array option, leaving a gap where it was.
@@ -412,8 +386,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the option name.
-    pub async fn unset_array_option(&self, name: &str, index: u32) -> Result<(), Error> {
-        options::unset(&self.core, array_scope(name), &format!("{name}[{index}]")).await
+    pub fn unset_array_option(&self, name: &str, index: u32) -> Result<(), Error> {
+        options::unset(&self.core, array_scope(name), &format!("{name}[{index}]"))
     }
 
     /// Set one global window option to text, unchecked.
@@ -423,12 +397,12 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name or value.
-    pub async fn set_global_window_option(
+    pub fn set_global_window_option(
         &self,
         name: &str,
         value: impl Into<OsString>,
     ) -> Result<(), Error> {
-        options::set(&self.core, options::Scope::GlobalWindow, name, value, false).await
+        options::set(&self.core, options::Scope::GlobalWindow, name, value, false)
     }
 
     /// Set one global window option to a typed value, checked before it is
@@ -448,17 +422,17 @@ impl Server {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-    /// server.set_typed_global_window_option("mode-keys", "vi").await?;
+    /// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// server.set_typed_global_window_option("mode-keys", "vi")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_typed_global_window_option(
+    pub fn set_typed_global_window_option(
         &self,
         name: &str,
         value: impl Into<OptionValue>,
     ) -> Result<(), Error> {
-        options::set_typed(&self.core, options::Scope::GlobalWindow, name, value.into()).await
+        options::set_typed(&self.core, options::Scope::GlobalWindow, name, value.into())
     }
 
     /// Set one global hook.
@@ -469,8 +443,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the hook name or command.
-    pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
-        options::set_hook(&self.core, options::Scope::GlobalSession, name, command).await
+    pub fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
+        options::set_hook(&self.core, options::Scope::GlobalSession, name, command)
     }
 
     /// Remove one global hook.
@@ -478,8 +452,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the hook name.
-    pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
-        options::unset_hook(&self.core, options::Scope::GlobalSession, name).await
+    pub fn unset_hook(&self, name: &str) -> Result<(), Error> {
+        options::unset_hook(&self.core, options::Scope::GlobalSession, name)
     }
 
     /// Write a whole hook at once.
@@ -497,7 +471,7 @@ impl Server {
     ///
     /// Returns an error when tmux rejects the name or any command.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
     /// Under [`ReplaceMode::Replace`] the clear and the entries are one
     /// invocation, so a drop leaves the hook as it was or fully written,
@@ -510,12 +484,10 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use std::collections::BTreeMap;
     /// use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
     /// let mut entries = BTreeMap::new();
@@ -524,19 +496,17 @@ impl Server {
     ///
     /// server
     ///     .set_hooks("alert-bell", &IndexedHooks::from(entries), ReplaceMode::Replace)
-    ///     .await?;
+    ///     ?;
     ///
-    /// let written = server.hook("alert-bell").await?.expect("the hook is set");
+    /// let written = server.hook("alert-bell")?.expect("the hook is set");
     /// assert_eq!(written.len(), 2);
     /// assert!(written.get(1).is_none(), "the gap is kept");
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_hooks(
+    pub fn set_hooks(
         &self,
         name: &str,
         hooks: &IndexedHooks,
@@ -549,7 +519,6 @@ impl Server {
             hooks,
             replace,
         )
-        .await
     }
 
     /// Read every hook set at this server.
@@ -566,23 +535,19 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
-    /// server.set_hook("alert-bell", "display-message rang").await?;
-    /// let hooks = server.hooks().await?;
+    /// server.set_hook("alert-bell", "display-message rang")?;
+    /// let hooks = server.hooks()?;
     /// assert!(hooks.contains_key("alert-bell"));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn hooks(&self) -> Result<BTreeMap<String, IndexedHooks>, Error> {
-        options::hooks(&self.core, options::Scope::GlobalSession).await
+    pub fn hooks(&self) -> Result<BTreeMap<String, IndexedHooks>, Error> {
+        options::hooks(&self.core, options::Scope::GlobalSession)
     }
 
     /// Read one hook's commands, or `None` when it holds nothing.
@@ -595,23 +560,19 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
-    /// assert!(server.hook("alert-bell").await?.is_none());
-    /// server.set_hook("alert-bell", "display-message rang").await?;
-    /// assert!(server.hook("alert-bell").await?.is_some());
+    /// assert!(server.hook("alert-bell")?.is_none());
+    /// server.set_hook("alert-bell", "display-message rang")?;
+    /// assert!(server.hook("alert-bell")?.is_some());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
-        options::hook(&self.core, options::Scope::GlobalSession, name).await
+    pub fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
+        options::hook(&self.core, options::Scope::GlobalSession, name)
     }
 
     /// Read one server option, decoded according to its declared kind.
@@ -627,8 +588,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
-        options::get_typed(&self.core, options::Scope::Server, name).await
+    pub fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
+        options::get_typed(&self.core, options::Scope::Server, name)
     }
 
     /// Read one global session option, decoded according to its declared kind.
@@ -639,8 +600,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_global_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
-        options::get_typed(&self.core, options::Scope::GlobalSession, name).await
+    pub fn typed_global_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
+        options::get_typed(&self.core, options::Scope::GlobalSession, name)
     }
 
     /// Read one global window option, decoded according to its declared kind.
@@ -655,18 +616,15 @@ impl Server {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
     /// use libtmux::OptionValue;
     ///
-    /// let base = server.typed_global_window_option("pane-base-index").await?;
+    /// let base = server.typed_global_window_option("pane-base-index")?;
     /// assert!(matches!(base, Some(OptionValue::Number(_))));
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn typed_global_window_option(
-        &self,
-        name: &str,
-    ) -> Result<Option<OptionValue>, Error> {
-        options::get_typed(&self.core, options::Scope::GlobalWindow, name).await
+    pub fn typed_global_window_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
+        options::get_typed(&self.core, options::Scope::GlobalWindow, name)
     }
 }

@@ -30,30 +30,20 @@ impl Executor for ControlModeExecutor {
         let span = DispatchSpan::new(&request, "control");
         let request_id = request.request_id();
         let summary = request.summary().clone();
-        let sensitive_input = summary.sensitive_argument_count() > 0;
-        let commands = request.command_count();
+        let cancellation = request.cancellation_token().clone();
         let line = request.into_control_line();
 
-        span.run(async move {
+        span.run(move || {
             let Some(line) = line else {
                 return Err(crate::Error::control_mode_unrepresentable());
             };
-            let block = sender.send_line(line, sensitive_input, commands).await?;
+            let block = sender.send_line(line, request_id.get(), summary.clone(), cancellation)?;
 
             // tmux prints a command's output inside the block, one line at a
             // time, with the trailing newline that separated them removed.
             // Putting it back is what makes the bytes identical to the
             // stdout a process would have written, which every parser above
             // this already reads.
-            let bytes = |lines: &[crate::TmuxText]| {
-                let mut bytes = Vec::new();
-                for line in lines {
-                    bytes.extend_from_slice(line.as_bytes());
-                    bytes.push(b'\n');
-                }
-                bytes
-            };
-
             // A refused command prints its reason where a process would have
             // put it: an `%error` block is stderr, not stdout, and error
             // classification reads stderr. What a chain printed before it is
@@ -74,10 +64,19 @@ impl Executor for ControlModeExecutor {
         // The connection belongs to whoever attached it. Closing it from a
         // routed handle would end a caller's event stream as a side effect of
         // dropping a server object.
-        ShutdownFuture::new(async { Ok(()) })
+        ShutdownFuture::new(|| Ok(()))
     }
 
     fn renders_control_line(&self) -> bool {
         true
     }
+}
+
+fn bytes<'a>(lines: impl Iterator<Item = &'a crate::TmuxText>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for line in lines {
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+    }
+    bytes
 }

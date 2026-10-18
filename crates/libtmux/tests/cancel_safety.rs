@@ -1,18 +1,15 @@
-//! Methods whose dropped future leaves something to know keep saying so.
+//! Methods whose cancellation leaves something to know keep saying so.
 
 // Helpers outside a test function are not covered by clippy.toml's in-test
 // exemptions, and this file has them.
 #![allow(clippy::expect_used)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Every public `async fn` that owes a `# Cancel safety` section, as
-/// (file, impl type, method).
-///
-/// Each one holds something, can half-happen, keeps running after a drop, or
-/// is a wait or stream read a caller races in `select!`. `.github/WRITING.md`
-/// says when a method belongs here.
+/// Blocking effects, reads, and fixture cleanup whose contracts must stay
+/// explicit, as (file, impl type, method). Async drop safety is covered in
+/// the native client's corresponding gate.
 const MUST_CARRY: &[(&str, &str, &str)] = &[
     ("src/control.rs", "ControlEvents", "next_event"),
     ("src/control.rs", "ControlMode", "attach"),
@@ -45,64 +42,106 @@ const MUST_CARRY: &[(&str, &str, &str)] = &[
     ("src/window/settings.rs", "Window", "set_hooks"),
 ];
 
-const HEADING: &str = "/// # Cancel safety";
+fn required_heading(owner: &str, method: &str) -> &'static str {
+    match (owner, method) {
+        ("ControlEvents" | "ControlMode", "next_event") | ("PaneOutput", "next_chunk") => {
+            "# Blocking"
+        }
+        ("TestServer", "shutdown") | ("TestServerBuilder", "start") => "# Cleanup",
+        _ => "# Cancellation",
+    }
+}
 
 #[test]
 fn listed_methods_keep_their_cancel_safety_section() {
-    let listed: BTreeSet<(String, String, String)> = MUST_CARRY
-        .iter()
-        .map(|(file, owner, method)| {
-            (
-                (*file).to_owned(),
-                (*owner).to_owned(),
-                (*method).to_owned(),
-            )
+    let sources = walk(Path::new("src"))
+        .into_iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(&path).expect("a readable source file");
+            (path.to_string_lossy().replace('\\', "/"), source)
         })
-        .collect();
-
-    let mut found = BTreeSet::new();
-    let mut carrying = BTreeSet::new();
-    for path in walk(Path::new("src")) {
-        let file = path.to_string_lossy().replace('\\', "/");
-        let source = std::fs::read_to_string(&path).expect("a readable source file");
-        for (owner, method, has_section) in public_async_fns(&source) {
-            let key = (file.clone(), owner, method);
-            if has_section {
-                carrying.insert(key.clone());
-            }
-            found.insert(key);
-        }
-    }
-
-    let mut problems = Vec::new();
-    for key in &listed {
-        let (file, owner, method) = key;
-        if !found.contains(key) {
-            problems.push(format!(
-                "{file}: `{owner}::{method}` is listed but not found"
-            ));
-        } else if !carrying.contains(key) {
-            problems.push(format!(
-                "{file}: `{owner}::{method}` lost its `# Cancel safety` section"
-            ));
-        }
-    }
-    for (file, owner, method) in carrying.difference(&listed) {
-        problems.push(format!(
-            "{file}: `{owner}::{method}` has a `# Cancel safety` section but is not in \
-             MUST_CARRY, so losing it would go unnoticed"
-        ));
-    }
-
+        .collect::<Vec<_>>();
+    let problems = contract_problems(&sources, MUST_CARRY);
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
-/// Each `pub async fn` in `source` as (impl type, method, has the heading).
-fn public_async_fns(source: &str) -> Vec<(String, String, bool)> {
+fn contract_problems(sources: &[(String, String)], required: &[(&str, &str, &str)]) -> Vec<String> {
+    let listed = required
+        .iter()
+        .map(|(file, owner, method)| {
+            (
+                (
+                    (*file).to_owned(),
+                    (*owner).to_owned(),
+                    (*method).to_owned(),
+                ),
+                required_heading(owner, method),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut found = BTreeMap::new();
+    let mut carrying = BTreeSet::new();
+    for (file, source) in sources {
+        for (owner, method, heading) in public_fns(source) {
+            let key = (file.clone(), owner, method);
+            if heading.is_some() {
+                carrying.insert(key.clone());
+            }
+            found.insert(key, heading);
+        }
+    }
+    let mut problems = Vec::new();
+    for (key, expected) in &listed {
+        let (file, owner, method) = key;
+        match found.get(key) {
+            None => problems.push(format!(
+                "{file}: `{owner}::{method}` is listed but not found"
+            )),
+            Some(Some(actual)) if actual == expected => {}
+            _ => problems.push(format!(
+                "{file}: `{owner}::{method}` needs its `{expected}` contract"
+            )),
+        }
+    }
+    for (file, owner, method) in carrying.iter().filter(|key| !listed.contains_key(*key)) {
+        problems.push(format!(
+            "{file}: `{owner}::{method}` has an unlisted blocking contract"
+        ));
+    }
+    problems
+}
+
+#[test]
+fn removing_or_misclassifying_a_blocking_contract_fails() {
+    let required = [("src/control.rs", "ControlMode", "send")];
+    let source = "impl ControlMode {\n    /// # Cancellation\n    /// A queued command is refused.\n    pub fn send() {}\n}\n";
+    let check =
+        |source: String| contract_problems(&[("src/control.rs".to_owned(), source)], &required);
+    assert!(check(source.to_owned()).is_empty());
+    assert_eq!(
+        check(source.replace("    /// # Cancellation\n", "")).len(),
+        1
+    );
+    assert_eq!(
+        check(source.replace("# Cancellation", "# Cancel safety")).len(),
+        1
+    );
+    assert_eq!(
+        check(source.replace("# Cancellation", "# Blocking")).len(),
+        1
+    );
+    assert_eq!(
+        check(source.replace("pub fn send", "pub fn renamed")).len(),
+        2
+    );
+}
+
+/// Each `pub fn` in `source` as (impl type, method, has the heading).
+fn public_fns(source: &str) -> Vec<(String, String, Option<&'static str>)> {
     let mut found = Vec::new();
     let mut owner = String::new();
     let mut in_doc = false;
-    let mut has_section = false;
+    let mut heading = None;
     let mut in_attribute = false;
 
     for line in source.lines() {
@@ -118,22 +157,28 @@ fn public_async_fns(source: &str) -> Vec<(String, String, bool)> {
         }
         if code.starts_with("///") {
             if !in_doc {
-                has_section = false;
+                heading = None;
             }
             in_doc = true;
-            has_section |= code.trim_end() == HEADING;
+            heading = match code.trim_end() {
+                "/// # Cancellation" => Some("# Cancellation"),
+                "/// # Blocking" => Some("# Blocking"),
+                "/// # Cleanup" => Some("# Cleanup"),
+                "/// # Cancel safety" => Some("# Cancel safety"),
+                _ => heading,
+            };
             continue;
         }
         if in_doc && code.starts_with("#[") {
             in_attribute = !code.ends_with(']');
             continue;
         }
-        if let Some(rest) = code.strip_prefix("pub async fn ") {
+        if let Some(rest) = code.strip_prefix("pub fn ") {
             let name: String = rest
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
-            found.push((owner.clone(), name, in_doc && has_section));
+            found.push((owner.clone(), name, if in_doc { heading } else { None }));
         }
         in_doc = false;
     }

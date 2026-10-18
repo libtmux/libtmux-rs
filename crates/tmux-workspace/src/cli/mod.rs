@@ -168,10 +168,10 @@ pub(super) fn main() -> ExitCode {
                 &mut load_state,
             )))
         });
-    if let Err(error) = &mut result {
-        if error.code == "interrupted" {
-            load_state.interrupted(error, &mut report);
-        }
+    if let Err(error) = &mut result
+        && error.code == "interrupted"
+    {
+        load_state.interrupted(error, &mut report);
     }
     let _ = report.clear_progress();
     match result {
@@ -294,10 +294,8 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
         {
             return report.line("warning", "Not saved", &discovery::masked(&path));
         }
-        if defaulted {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if defaulted && let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
         document::save(&path, &value, format, options.get_flag("force"))?;
         if report.machine() {
@@ -347,10 +345,10 @@ fn diagnostic(machine: bool, error: &CliError) {
         // it is how a caller recovers what an unfinished mutation touched.
         // An ordinary failure's message already says what happened; a second,
         // JSON-shaped copy of it is not for a human to read.
-        if error.code == "interrupted" {
-            if let Some(state) = &error.retained_state {
-                let _ = writeln!(io::stderr(), "Retained state: {state}");
-            }
+        if error.code == "interrupted"
+            && let Some(state) = &error.retained_state
+        {
+            let _ = writeln!(io::stderr(), "Retained state: {state}");
         }
     }
 }

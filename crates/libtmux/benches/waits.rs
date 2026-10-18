@@ -5,9 +5,9 @@
 //! ```
 //!
 //! Two lanes answer the same question, so the gap between them is a number
-//! rather than an argument. `polled` is [`libtmux::Pane::wait_for_text`],
+//! rather than an argument. `polled` is [`libtmux_tokio::Pane::wait_for_text`],
 //! which captures on an interval and is what a default build gets.
-//! `streamed` is [`libtmux::Pane::stream_output`], the control-mode `%output`
+//! `streamed` is [`libtmux_tokio::Pane::stream_output`], the control-mode `%output`
 //! doorbell, timed with its connection already open — the optimistic case for
 //! it, because opening one costs a client attach that polling never pays.
 //!
@@ -58,27 +58,22 @@ struct Fixture {
     pane: Pane,
 }
 
-async fn build() -> Fixture {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("waits")
-        .await
-        .expect("a session");
-    let pane = session.panes().await.expect("panes").remove(0);
+fn build() -> Fixture {
+    let guard = TestServer::builder().start().expect("tmux starts");
+    let session = guard.server().new_session("waits").expect("a session");
+    let pane = session.panes().expect("panes").remove(0);
 
     Fixture { guard, pane }
 }
 
 /// Dispatch a marker and poll the pane until it arrives.
-async fn polled(pane: &Pane) -> Duration {
+fn polled(pane: &Pane) -> Duration {
     let (command, needle) = dispatch();
 
     let started = Instant::now();
-    pane.send_line(command).await.expect("keys are sent");
+    pane.send_line(command).expect("keys are sent");
     let outcome = pane
         .wait_for_text(&needle, CEILING)
-        .await
         .expect("waiting is not an error");
     let waited = started.elapsed();
 
@@ -89,14 +84,14 @@ async fn polled(pane: &Pane) -> Duration {
 /// Dispatch a marker and read the doorbell until it carries the marker.
 ///
 /// The connection is already open, so this times the notification path alone.
-async fn streamed(pane: &Pane, output: &mut PaneOutput) -> Duration {
+fn streamed(pane: &Pane, output: &mut PaneOutput) -> Duration {
     let (command, needle) = dispatch();
 
     let started = Instant::now();
-    pane.send_line(command).await.expect("keys are sent");
+    pane.send_line(command).expect("keys are sent");
 
     let mut seen = Vec::new();
-    while let Some(chunk) = output.next_chunk().await {
+    while let Some(chunk) = output.next_chunk() {
         seen.extend_from_slice(&chunk);
         if contains(&seen, needle.as_bytes()) {
             return started.elapsed();
@@ -118,14 +113,13 @@ fn flood(lines: u64) -> (String, String) {
 }
 
 /// Print `lines` lines and poll until the marker after the last of them.
-async fn flooded(pane: &Pane, lines: u64) -> Duration {
+fn flooded(pane: &Pane, lines: u64) -> Duration {
     let (command, needle) = flood(lines);
 
     let started = Instant::now();
-    pane.send_line(command).await.expect("keys are sent");
+    pane.send_line(command).expect("keys are sent");
     let outcome = pane
         .wait_for_text(&needle, CEILING)
-        .await
         .expect("waiting is not an error");
     let waited = started.elapsed();
 
@@ -142,17 +136,17 @@ async fn flooded(pane: &Pane, lines: u64) -> Duration {
 /// This is the case the doorbell was expected to lose: polling costs one
 /// capture per interval whatever the pane is doing, while a notification path
 /// is handed every byte.
-async fn flooded_stream(pane: &Pane, output: &mut PaneOutput, lines: u64) -> Duration {
+fn flooded_stream(pane: &Pane, output: &mut PaneOutput, lines: u64) -> Duration {
     let (command, needle) = flood(lines);
 
     let started = Instant::now();
-    pane.send_line(command).await.expect("keys are sent");
+    pane.send_line(command).expect("keys are sent");
 
     // Only the tail can hold the marker, and keeping the whole flood would
     // measure this bench's own reallocation. A window twice the needle
     // catches it however tmux splits the chunks.
     let mut tail = Vec::new();
-    while let Some(chunk) = output.next_chunk().await {
+    while let Some(chunk) = output.next_chunk() {
         tail.extend_from_slice(&chunk);
         if contains(&tail, needle.as_bytes()) {
             return started.elapsed();
@@ -165,12 +159,7 @@ async fn flooded_stream(pane: &Pane, output: &mut PaneOutput, lines: u64) -> Dur
 }
 
 fn waits(criterion: &mut Criterion) {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime");
-
-    let fixture = runtime.block_on(build());
+    let fixture = build();
     let pane = &fixture.pane;
 
     let mut group = criterion.benchmark_group("marker");
@@ -181,15 +170,13 @@ fn waits(criterion: &mut Criterion) {
         .measurement_time(Duration::from_secs(20));
 
     group.bench_function("polled", |bench| {
-        bench
-            .to_async(&runtime)
-            .iter_custom(|iterations| async move {
-                let mut total = Duration::ZERO;
-                for _ in 0..iterations {
-                    total += polled(pane).await;
-                }
-                total
-            });
+        bench.iter_custom(|iterations| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iterations {
+                total += polled(pane);
+            }
+            total
+        });
     });
 
     // Subscribed inside the batch and closed at the end of it, never held
@@ -199,17 +186,15 @@ fn waits(criterion: &mut Criterion) {
     // that turns them into timeouts rather than measurements. Attaching is
     // outside the accumulated span, so it costs wall-clock, not the number.
     group.bench_function("streamed", |bench| {
-        bench
-            .to_async(&runtime)
-            .iter_custom(|iterations| async move {
-                let mut output = subscribe(pane).await;
-                let mut total = Duration::ZERO;
-                for _ in 0..iterations {
-                    total += streamed(pane, &mut output).await;
-                }
-                unsubscribe(output).await;
-                total
-            });
+        bench.iter_custom(|iterations| {
+            let mut output = subscribe(pane);
+            let mut total = Duration::ZERO;
+            for _ in 0..iterations {
+                total += streamed(pane, &mut output);
+            }
+            unsubscribe(output);
+            total
+        });
     });
 
     group.finish();
@@ -224,15 +209,13 @@ fn waits(criterion: &mut Criterion) {
     for lines in [20_000_u64, 200_000] {
         group.bench_with_input(BenchmarkId::new("polled", lines), &lines, |bench, lines| {
             let lines = *lines;
-            bench
-                .to_async(&runtime)
-                .iter_custom(move |iterations| async move {
-                    let mut total = Duration::ZERO;
-                    for _ in 0..iterations {
-                        total += flooded(pane, lines).await;
-                    }
-                    total
-                });
+            bench.iter_custom(move |iterations| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iterations {
+                    total += flooded(pane, lines);
+                }
+                total
+            });
         });
 
         group.bench_with_input(
@@ -240,39 +223,32 @@ fn waits(criterion: &mut Criterion) {
             &lines,
             |bench, lines| {
                 let lines = *lines;
-                bench
-                    .to_async(&runtime)
-                    .iter_custom(move |iterations| async move {
-                        let mut output = subscribe(pane).await;
-                        let mut total = Duration::ZERO;
-                        for _ in 0..iterations {
-                            total += flooded_stream(pane, &mut output, lines).await;
-                        }
-                        unsubscribe(output).await;
-                        total
-                    });
+                bench.iter_custom(move |iterations| {
+                    let mut output = subscribe(pane);
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iterations {
+                        total += flooded_stream(pane, &mut output, lines);
+                    }
+                    unsubscribe(output);
+                    total
+                });
             },
         );
     }
 
     group.finish();
 
-    runtime
-        .block_on(fixture.guard.shutdown())
-        .expect("tmux fixture shuts down");
+    fixture.guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Open a doorbell on the pane for the batch about to be timed.
-async fn subscribe(pane: &Pane) -> PaneOutput {
-    pane.stream_output().await.expect("a control connection")
+fn subscribe(pane: &Pane) -> PaneOutput {
+    pane.stream_output().expect("a control connection")
 }
 
 /// Close it, so no lane runs beside a subscription nobody is draining.
-async fn unsubscribe(output: PaneOutput) {
-    output
-        .shutdown()
-        .await
-        .expect("the control connection closes");
+fn unsubscribe(output: PaneOutput) {
+    output.shutdown().expect("the control connection closes");
 }
 
 /// Register the group. Generated by the macro, so it is documented here.

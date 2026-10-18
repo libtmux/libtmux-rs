@@ -8,28 +8,29 @@
 #![cfg(feature = "test-support")]
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+mod common;
+
 use std::time::{Duration, Instant};
 
 use libtmux::test::TestServer;
 use libtmux::{Command, DispatchLimits, OutputLimits};
 
-#[tokio::test]
-async fn output_past_the_budget_fails_rather_than_arriving_short() {
+#[test]
+fn output_past_the_budget_fails_rather_than_arriving_short() {
     let guard = TestServer::builder()
         // Above an ordinary listing row -- the crate's own snapshot projection
         // is a few hundred bytes, and a budget under that breaks every
         // command -- and far below the payload asked for next.
         .output_limits(OutputLimits::default().max_stdout_bytes(4096))
         .start()
-        .await
+
         .expect("tmux starts");
     let server = guard.server();
-    server.new_session("budget").await.expect("session");
+    server.new_session("budget").expect("session");
 
     // Comfortably inside the budget.
     let small = server
         .cmd(Command::new("display-message").arg("-p").arg("short"))
-        .await
         .expect("a small answer is read");
     assert_eq!(small.stdout_lossy().trim_end(), "short");
 
@@ -49,13 +50,11 @@ async fn output_past_the_budget_fails_rather_than_arriving_short() {
                 .arg("budget")
                 .arg(payload.as_os_str()),
         )
-        .await
         .expect("the buffer loads");
     let _ = std::fs::remove_file(&payload);
 
     let error = server
         .cmd(Command::new("show-buffer").arg("-b").arg("budget"))
-        .await
         .expect_err("an answer past the budget is refused");
 
     assert!(
@@ -68,11 +67,11 @@ async fn output_past_the_budget_fails_rather_than_arriving_short() {
     // decodes cleanly and reports fewer objects than exist.
     assert_eq!(error.kind(), libtmux::ErrorKind::Refused);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_server_runs_no_more_dispatches_at_once_than_it_admits() {
+#[test]
+fn a_server_runs_no_more_dispatches_at_once_than_it_admits() {
     // Concurrency is not observable from outside the executor, so it is
     // measured by the clock: twelve dispatches that each hold a tmux client
     // for ~120ms cannot finish in less than six rounds through two permits.
@@ -84,24 +83,24 @@ async fn a_server_runs_no_more_dispatches_at_once_than_it_admits() {
     let guard = TestServer::builder()
         .dispatch_limits(DispatchLimits::default().max_in_flight(PERMITS))
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
-    server.new_session("admission").await.expect("session");
+    server.new_session("admission").expect("session");
 
     let started = Instant::now();
     let mut handles = Vec::new();
     for _ in 0..TASKS {
         let server = server.clone();
-        handles.push(tokio::spawn(async move {
+        handles.push(std::thread::spawn(move || {
             server
                 .cmd(Command::new("run-shell").arg("sleep 0.12"))
-                .await
                 .map(|_| ())
         }));
     }
     for handle in handles {
-        handle.await.expect("task joins").expect("dispatch runs");
+        common::join(handle)
+            .expect("task joins")
+            .expect("dispatch runs");
     }
     let elapsed = started.elapsed();
 
@@ -113,11 +112,11 @@ async fn a_server_runs_no_more_dispatches_at_once_than_it_admits() {
          which is less than {floor:?}: they were not being admitted two at a time",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_full_server_says_so_instead_of_waiting_forever() {
+#[test]
+fn a_full_server_says_so_instead_of_waiting_forever() {
     let guard = TestServer::builder()
         .dispatch_limits(
             DispatchLimits::default()
@@ -125,26 +124,23 @@ async fn a_full_server_says_so_instead_of_waiting_forever() {
                 .acquire_timeout(Some(Duration::from_millis(50))),
         )
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
-    server.new_session("overload").await.expect("session");
+    server.new_session("overload").expect("session");
 
     // One long dispatch holds the only permit.
     let holder = {
         let server = server.clone();
-        tokio::spawn(async move {
+        std::thread::spawn(move || {
             server
                 .cmd(Command::new("run-shell").arg("sleep 1"))
-                .await
                 .map(|_| ())
         })
     };
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    std::thread::sleep(Duration::from_millis(150));
 
     let error = server
         .cmd(Command::new("display-message").arg("-p").arg("hello"))
-        .await
         .expect_err("the server is full");
 
     // Overload is not a timeout: nothing reached tmux, so retrying is safe.
@@ -157,24 +153,25 @@ async fn a_full_server_says_so_instead_of_waiting_forever() {
         "capacity becomes available without replacing the server handle",
     );
 
-    holder.await.expect("the holder joins").expect("it ran");
+    common::join(holder)
+        .expect("the holder joins")
+        .expect("it ran");
     let retried = server
         .cmd(Command::new("display-message").arg("-p").arg("hello"))
-        .await
         .expect("the same call is admitted once capacity clears");
     assert!(retried.success());
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "control-mode")]
-#[tokio::test]
-async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
+#[test]
+fn a_control_mode_frame_past_its_budget_ends_the_connection() {
     use libtmux::ControlLimits;
     use libtmux::control::ControlMode;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("frames").await.expect("session");
+    let session = server.new_session("frames").expect("session");
 
     // Small enough that an ordinary command's own response block exceeds it,
     // which is the point: the budget is the only thing bounding a connection
@@ -183,8 +180,7 @@ async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
         server,
         session.id(),
         ControlLimits::default().max_block_bytes(16),
-    )
-    .await;
+    );
 
     // Attaching itself reads tmux's opening block, so a 16-byte budget may
     // fail there; either way the connection refuses rather than growing.
@@ -197,23 +193,22 @@ async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
         Ok(control) => {
             let error = control
                 .send(Command::new("list-panes").arg("-a"))
-                .await
                 .expect_err("the answer is past the budget");
             assert!(
                 matches!(&error, libtmux::Error::ControlModeFrameTooLarge { .. }),
                 "got {error:?}",
             );
             assert_eq!(error.kind(), libtmux::ErrorKind::Decode);
-            let _ = control.shutdown().await;
+            let _ = control.shutdown();
         }
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "control-mode")]
-#[tokio::test]
-async fn persistent_clients_have_their_own_admission_limit() {
+#[test]
+fn persistent_clients_have_their_own_admission_limit() {
     use libtmux::ControlClientLimits;
     use libtmux::control::ControlMode;
 
@@ -224,38 +219,27 @@ async fn persistent_clients_have_their_own_admission_limit() {
                 .acquire_timeout(Some(Duration::from_millis(50))),
         )
         .start()
-        .await
         .expect("tmux starts");
     let server = guard.server();
-    let session = server
-        .new_session("persistent-admission")
-        .await
-        .expect("session");
-    let first = ControlMode::attach(server, session.id())
-        .await
-        .expect("the first persistent client is admitted");
+    let session = server.new_session("persistent-admission").expect("session");
+    let first =
+        ControlMode::attach(server, session.id()).expect("the first persistent client is admitted");
 
     let command = server
         .cmd(Command::new("display-message").arg("-p").arg("short-lived"))
-        .await
         .expect("persistent clients do not consume dispatch capacity");
     assert_eq!(command.stdout_lossy().trim_end(), "short-lived");
 
-    let error = ControlMode::attach(server, session.id())
-        .await
-        .expect_err("the persistent-client lane is full");
+    let error =
+        ControlMode::attach(server, session.id()).expect_err("the persistent-client lane is full");
     assert!(
         matches!(error, libtmux::Error::Overloaded { .. }),
         "{error:?}"
     );
 
-    first.shutdown().await.expect("the first client shuts down");
+    first.shutdown().expect("the first client shuts down");
     let replacement = ControlMode::attach(server, session.id())
-        .await
         .expect("released persistent capacity is reusable");
-    replacement
-        .shutdown()
-        .await
-        .expect("replacement shuts down");
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    replacement.shutdown().expect("replacement shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }

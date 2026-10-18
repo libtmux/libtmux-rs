@@ -101,13 +101,13 @@ pub(crate) fn resolve(pending: &[(&OsStr, usize)], version: &TmuxVersion) -> Res
     Ok(())
 }
 
-pub(crate) async fn version(server: &Server) -> Result<TmuxVersion, Error> {
-    let result = server.cmd(version_command()).await?;
+pub(crate) fn version(server: &Server) -> Result<TmuxVersion, Error> {
+    let result = server.cmd(version_command())?;
     if result.success() {
         return TmuxVersion::parse_output(result.stdout());
     }
     if is_cold(result.stderr()) {
-        return Ok(server.capabilities().await?.tmux_version().clone());
+        return Ok(server.capabilities()?.tmux_version().clone());
     }
     Err(Error::from_refused_result("display-message", &result, None))
 }

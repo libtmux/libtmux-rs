@@ -205,6 +205,8 @@ enum LeaderObservation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TestServerErrorKind {
+    /// Startup was cancelled before a fixture was handed to the caller.
+    Cancelled,
     /// The owned directory or empty configuration file could not be prepared.
     FilesystemSetupFailed,
     /// The generated Unix socket path cannot carry tmux's C-string terminator.
@@ -272,19 +274,16 @@ impl TestServerError {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::test::{TestServer, TestServerErrorKind};
     ///
     /// let missing = tempfile::tempdir()?.path().join("missing-tmux");
     /// let error = TestServer::builder()
     ///     .tmux_executable(missing)
     ///     .start()
-    ///     .await
+    ///
     ///     .expect_err("missing executable is rejected");
     /// assert_eq!(error.kind(), TestServerErrorKind::ExecutableNotFound);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
     #[must_use]
@@ -296,6 +295,7 @@ impl TestServerError {
 impl fmt::Display for TestServerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.kind {
+            TestServerErrorKind::Cancelled => "test-server startup was cancelled",
             TestServerErrorKind::FilesystemSetupFailed => "test-server filesystem setup failed",
             TestServerErrorKind::SocketPathTooLong => "test-server socket path is too long",
             TestServerErrorKind::ExecutableNotFound => "test-server executable was not found",
@@ -315,6 +315,7 @@ impl std::error::Error for TestServerError {}
 /// A consuming builder for an isolated foreground tmux test server.
 #[must_use = "use start to create the isolated test server"]
 pub struct TestServerBuilder {
+    cancellation: crate::CancellationToken,
     executable: OsString,
     lifecycle_timeout: Duration,
     output_limits: OutputLimits,
@@ -364,12 +365,20 @@ impl TestServerBuilder {
     fn new() -> Self {
         Self {
             executable: default_executable(),
+            cancellation: crate::CancellationToken::new(),
             lifecycle_timeout: scaled(Duration::from_secs(5)),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
             #[cfg(feature = "control-mode")]
             control_client_limits: ControlClientLimits::default(),
         }
+    }
+
+    /// Share cancellation with startup and the fixture's client commands.
+    #[must_use = "use the returned builder to retain the token"]
+    pub fn cancellation_token(mut self, token: crate::CancellationToken) -> Self {
+        self.cancellation = token;
+        self
     }
 
     /// Bound how many bytes one command may read, as [`crate::ServerBuilder`]
@@ -443,34 +452,33 @@ impl TestServerBuilder {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::builder().start().await?;
-    /// guard.shutdown().await?;
+    /// let guard = libtmux::test::TestServer::builder().start()?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
     ///
-    /// # Cancel safety
+    /// # Cleanup
     ///
-    /// Nothing is left behind, on a best-effort basis: a start dropped before
-    /// it returns the guard forces its daemon down and removes its files at
-    /// once, and a failure doing so goes unreported.
-    pub async fn start(self) -> Result<TestServer, TestServerError> {
+    /// Startup blocks until readiness or failure. Cancellation through the
+    /// builder's token rolls back the owned daemon and files before returning.
+    /// A rollback failure is reported as a cleanup error.
+    pub fn start(self) -> Result<TestServer, TestServerError> {
         self.start_with_leader_observer(leader_exited_unreaped, platform_fallback_grace_ceiling())
-            .await
     }
 
     #[allow(
         clippy::too_many_lines,
         reason = "server construction and rollback ownership form one startup sequence"
     )]
-    async fn start_with_leader_observer(
+    fn start_with_leader_observer(
         self,
         leader_observer: LeaderObserver,
         fallback_grace_ceiling: Option<Duration>,
     ) -> Result<TestServer, TestServerError> {
+        if self.cancellation.is_cancelled() {
+            return Err(TestServerError::new(TestServerErrorKind::Cancelled));
+        }
         let files = OwnedFiles::create()?;
         if !socket_path_fits_tmux(&files.socket_path) {
             return Err(TestServerError::new(TestServerErrorKind::SocketPathTooLong));
@@ -480,6 +488,7 @@ impl TestServerBuilder {
             .socket_path(&files.socket_path)
             .config_file(&files.config_path)
             .tmux_executable(self.executable.clone())
+            .cancellation_token(self.cancellation.clone())
             .output_limits(self.output_limits)
             .dispatch_limits(self.dispatch_limits);
         #[cfg(feature = "control-mode")]
@@ -522,7 +531,7 @@ impl TestServerBuilder {
                 } else {
                     TestServerErrorKind::DaemonSpawnFailed
                 };
-                return server_startup_failure(&server, kind).await;
+                return server_startup_failure(&server, kind);
             }
         };
         let mut startup = StartupGuard::new(Lifecycle::new_with_leader_observer(
@@ -532,40 +541,44 @@ impl TestServerBuilder {
             fallback_grace_ceiling,
         ));
         let Some(lifecycle) = startup.lifecycle() else {
-            return server_startup_failure(&server, TestServerErrorKind::CleanupFailed).await;
+            return server_startup_failure(&server, TestServerErrorKind::CleanupFailed);
         };
         if getpgid(Some(lifecycle.pid)).ok() != Some(lifecycle.pid) {
-            return startup_failure(&server, startup, TestServerErrorKind::DaemonSpawnFailed).await;
+            return startup_failure(&server, startup, TestServerErrorKind::DaemonSpawnFailed);
         }
 
         let Ok(daemon_pid) = u32::try_from(lifecycle.pid.as_raw_pid()) else {
-            return startup_failure(&server, startup, TestServerErrorKind::DaemonSpawnFailed).await;
+            return startup_failure(&server, startup, TestServerErrorKind::DaemonSpawnFailed);
         };
         let started = Instant::now();
         loop {
+            if self.cancellation.is_cancelled() {
+                return startup_failure(&server, startup, TestServerErrorKind::Cancelled);
+            }
             let Some(lifecycle) = startup.lifecycle_mut() else {
-                return server_startup_failure(&server, TestServerErrorKind::CleanupFailed).await;
+                return server_startup_failure(&server, TestServerErrorKind::CleanupFailed);
             };
             match lifecycle.observe_leader() {
                 LeaderObservation::ExitedUnreaped => {
-                    return startup_failure(&server, startup, TestServerErrorKind::DaemonExited)
-                        .await;
+                    return startup_failure(&server, startup, TestServerErrorKind::DaemonExited);
                 }
                 LeaderObservation::ExternallyReaped | LeaderObservation::Failed => {
-                    return startup_failure(&server, startup, TestServerErrorKind::ShutdownFailed)
-                        .await;
+                    return startup_failure(&server, startup, TestServerErrorKind::ShutdownFailed);
                 }
                 LeaderObservation::Running | LeaderObservation::Unavailable => {}
             }
             let Some(remaining) = remaining_timeout(started, self.lifecycle_timeout) else {
-                return startup_timeout(&server, startup).await;
+                return startup_timeout(&server, startup);
             };
-            match readiness_with_timeout(&server, remaining).await {
-                Err(()) => return startup_timeout(&server, startup).await,
+            let readiness = readiness_with_timeout(&server, remaining);
+            if self.cancellation.is_cancelled() {
+                return startup_failure(&server, startup, TestServerErrorKind::Cancelled);
+            }
+            match readiness {
+                Err(()) => return startup_timeout(&server, startup),
                 Ok(Ok(Some(found))) if found == daemon_pid => {
                     let Some(lifecycle) = startup.disarm() else {
-                        return server_startup_failure(&server, TestServerErrorKind::CleanupFailed)
-                            .await;
+                        return server_startup_failure(&server, TestServerErrorKind::CleanupFailed);
                     };
                     return Ok(TestServer {
                         server,
@@ -580,8 +593,7 @@ impl TestServerBuilder {
                         &server,
                         startup,
                         TestServerErrorKind::DaemonPidMismatch,
-                    )
-                    .await;
+                    );
                 }
                 Ok(Ok(None)) => {}
                 Ok(Err(())) => {
@@ -589,14 +601,13 @@ impl TestServerBuilder {
                         &server,
                         startup,
                         TestServerErrorKind::ReadinessProbeFailed,
-                    )
-                    .await;
+                    );
                 }
             }
             if remaining_timeout(started, self.lifecycle_timeout).is_none() {
-                return startup_timeout(&server, startup).await;
+                return startup_timeout(&server, startup);
             }
-            tokio::task::yield_now().await;
+            std::thread::yield_now();
         }
     }
 }
@@ -640,16 +651,13 @@ impl fmt::Debug for TestServer {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::test::{DaemonState, TestServer};
 ///
-/// let mut guard = TestServer::new().await?;
+/// let mut guard = TestServer::new()?;
 /// assert_eq!(guard.daemon_state(), DaemonState::Running);
 ///
-/// guard.shutdown().await?;
+/// guard.shutdown()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })
 /// # }
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -675,14 +683,11 @@ impl DaemonState {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let mut guard = libtmux::test::TestServer::new().await?;
+    /// let mut guard = libtmux::test::TestServer::new()?;
     /// assert!(guard.daemon_state().is_running());
     ///
-    /// guard.shutdown().await?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
     #[must_use]
@@ -710,16 +715,13 @@ impl TestServer {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// guard.shutdown().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
-    pub async fn new() -> Result<Self, TestServerError> {
-        Self::builder().start().await
+    pub fn new() -> Result<Self, TestServerError> {
+        Self::builder().start()
     }
 
     /// Start a consuming isolated test-server builder.
@@ -739,14 +741,11 @@ impl TestServer {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let client = guard.server().clone();
-    /// guard.shutdown().await?;
-    /// assert!(client.cmd(libtmux::Command::new("list-sessions")).await.is_err());
+    /// guard.shutdown()?;
+    /// assert!(client.cmd(libtmux::Command::new("list-sessions")).is_err());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
     #[must_use]
@@ -760,13 +759,10 @@ impl TestServer {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// assert!(guard.socket_path().is_absolute());
-    /// guard.shutdown().await?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
     #[must_use]
@@ -791,24 +787,20 @@ impl TestServer {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.session("work").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.session("work")?;
     ///
     /// assert_eq!(session.name().as_bytes(), b"work");
     ///
-    /// guard.shutdown().await?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
     /// # }
     /// ```
-    pub async fn session(
+    pub fn session(
         &self,
         options: impl Into<crate::NewSessionOptions>,
     ) -> Result<crate::Session, crate::Error> {
-        self.server().new_session(options).await
+        self.server().new_session(options)
     }
 
     /// Return the retained foreground daemon PID.
@@ -817,13 +809,10 @@ impl TestServer {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// assert!(guard.daemon_pid() > 1);
-    /// guard.shutdown().await?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
     #[must_use]
@@ -840,28 +829,24 @@ impl TestServer {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use std::time::Duration;
     ///
     /// use libtmux::{Command, test::{DaemonState, TestServer, retry_until}};
     ///
-    /// let mut guard = TestServer::new().await?;
-    /// guard.session("work").await?;
-    /// guard.server().cmd(Command::new("kill-server")).await.ok();
+    /// let mut guard = TestServer::new()?;
+    /// guard.session("work")?;
+    /// guard.server().cmd(Command::new("kill-server")).ok();
     ///
     /// // tmux stops answering on the socket before the kernel has a status
     /// // for the process behind it, so this is a wait rather than a reading.
-    /// retry_until(Duration::from_secs(5), async || {
+    /// retry_until(Duration::from_secs(5), || {
     ///     !guard.daemon_state().is_running()
     /// })
-    /// .await?;
+    /// ?;
     /// assert!(matches!(guard.daemon_state(), DaemonState::Gone(_)));
     ///
-    /// guard.shutdown().await?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
     /// # }
     /// ```
     pub fn daemon_state(&mut self) -> DaemonState {
@@ -885,22 +870,20 @@ impl TestServer {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// guard.shutdown().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// guard.shutdown()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })
     /// # }
     /// ```
     ///
-    /// # Cancel safety
+    /// # Cleanup
     ///
-    /// Nothing is left behind, on a best-effort basis: dropped early, the
-    /// guard's own forced cleanup runs; dropped once cleanup has started, a
-    /// blocking task finishes it. Either way a failure goes unreported.
-    pub async fn shutdown(mut self) -> Result<(), TestServerError> {
-        let executor_failed = self.server.shutdown().await.is_err();
+    /// Blocks until owned client work and the foreground daemon have stopped.
+    /// Cleanup continues even if the server's token was cancelled. Failures
+    /// are returned; dropping the guard instead performs best-effort cleanup
+    /// without a result.
+    pub fn shutdown(mut self) -> Result<(), TestServerError> {
+        let executor_failed = self.server.shutdown().is_err();
         let Some(mut lifecycle) = self.lifecycle.take() else {
             return Err(TestServerError::at(
                 TestServerErrorKind::CleanupFailed,
@@ -908,16 +891,8 @@ impl TestServer {
             ));
         };
         let timeout = self.lifecycle_timeout;
-        let waiter = tokio::task::spawn_blocking(move || {
-            let outcome = lifecycle.cleanup(timeout);
-            (outcome, lifecycle.failure())
-        });
-        let Ok((cleanup, detail)) = waiter.await else {
-            return Err(TestServerError::at(
-                TestServerErrorKind::ShutdownFailed,
-                "cleanup task",
-            ));
-        };
+        let cleanup = lifecycle.cleanup(timeout);
+        let detail = lifecycle.failure();
         if executor_failed {
             return Err(TestServerError::at(
                 TestServerErrorKind::ShutdownFailed,
@@ -968,26 +943,22 @@ mod tests;
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use std::time::Duration;
 /// use libtmux::test::retry_until;
 ///
 /// let mut polls = 0;
-/// retry_until(Duration::from_secs(5), async || {
+/// retry_until(Duration::from_secs(5), || {
 ///     polls += 1;
 ///     polls >= 3
 /// })
-/// .await?;
+/// ?;
 /// assert_eq!(polls, 3);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
-/// # Ok(())
 /// # }
 /// ```
-pub async fn retry_until(
+pub fn retry_until(
     within: Duration,
-    mut condition: impl AsyncFnMut() -> bool,
+    mut condition: impl FnMut() -> bool,
 ) -> Result<(), RetryTimeout> {
     // Widened like every other fixture deadline. This is the helper a fixture
     // polls tmux through, so a machine running several times its cores in work
@@ -998,7 +969,7 @@ pub async fn retry_until(
     // deadline in the crate reads an overflow.
     let deadline = Instant::now().checked_add(within);
     loop {
-        if condition().await {
+        if condition() {
             return Ok(());
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -1009,7 +980,7 @@ pub async fn retry_until(
         // worker thread and competes with whatever it is waiting for, so on a
         // busy machine it makes its own deadline harder to meet. This is a
         // public helper, so every caller would inherit that.
-        tokio::time::sleep(RETRY_POLL_INTERVAL).await;
+        std::thread::sleep(RETRY_POLL_INTERVAL);
     }
 }
 

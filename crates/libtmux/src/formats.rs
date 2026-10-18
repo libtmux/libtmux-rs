@@ -6,8 +6,8 @@ use crate::version::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
 mod fuzz;
 mod plan;
 mod row;
-mod text;
 
+pub use crate::primitives::TmuxText;
 #[cfg(feature = "unstable-fuzzing")]
 pub use fuzz::__fuzz_format_rows;
 pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose, TransportDialect};
@@ -19,7 +19,6 @@ pub(crate) use row::{FormatCodecError, FormatCodecErrorKind, ParsedRow, ParsedSl
 pub(crate) use row::{FormatCodecPhase, split_quoted_rows};
 #[cfg(test)]
 use row::{QUOTE_SHELL_SPECIALS, encode_like_tmux};
-pub use text::TmuxText;
 
 /// Decoder applied to a parsed format slot.
 #[allow(

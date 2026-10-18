@@ -32,33 +32,29 @@ use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::EnvironmentEntry;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("env").await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("env")?;
 ///
-/// session.set_environment("EDITOR", "hx").await?;
+/// session.set_environment("EDITOR", "hx")?;
 /// assert!(matches!(
-///     session.environment("EDITOR").await?,
+///     session.environment("EDITOR")?,
 ///     Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"hx",
 /// ));
 ///
 /// // Hiding a name is not unsetting it: a process started here is handed the
 /// // name *absent*, which tmux still records and reports.
-/// session.hide_environment("EDITOR").await?;
+/// session.hide_environment("EDITOR")?;
 /// assert_eq!(
-///     session.environment("EDITOR").await?,
+///     session.environment("EDITOR")?,
 ///     Some(EnvironmentEntry::Removed),
 /// );
 ///
 /// // Never set at all is the third thing, and the only one that is `None`.
-/// assert_eq!(session.environment("NEVER_SET").await?, None);
+/// assert_eq!(session.environment("NEVER_SET")?, None);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -77,8 +73,8 @@ pub enum EnvironmentEntry {
 /// not share observed state: refreshing one clone leaves the others as they
 /// were.
 ///
-/// Getters are synchronous because they read the owned snapshot. Anything that
-/// consults tmux is `async`.
+/// Getters are synchronous because they read the owned snapshot. Anything that consults
+/// tmux blocks until it finishes.
 ///
 /// [`Server`]: crate::Server
 ///
@@ -86,19 +82,15 @@ pub enum EnvironmentEntry {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
 ///
 /// // The name is read from the snapshot this handle owns, so it costs
-/// // nothing; asking tmux for the windows is `async` because it does.
+/// // nothing; asking tmux for the windows blocks until the reply arrives.
 /// assert_eq!(session.name().to_string_lossy(), "work");
-/// assert_eq!(session.windows().await?.len(), 1);
+/// assert_eq!(session.windows()?.len(), 1);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -131,27 +123,23 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::{Pane, Session};
     ///
-    /// let session = server.new_session("locating-session").await?;
-    /// let pane = session.panes().await?.remove(0);
+    /// let session = server.new_session("locating-session")?;
+    /// let pane = session.panes()?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
-    /// let found = Session::from_env_value(server, Some(pane.id().as_ref())).await?;
+    /// let found = Session::from_env_value(server, Some(pane.id().as_ref()))?;
     ///
     /// assert_eq!(found.expect("the session exists").id(), session.id());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_env(server: &crate::Server) -> Result<Option<Self>, Error> {
-        Self::from_env_value(server, std::env::var_os("TMUX_PANE")).await
+    pub fn from_env(server: &crate::Server) -> Result<Option<Self>, Error> {
+        Self::from_env_value(server, std::env::var_os("TMUX_PANE"))
     }
 
     /// Find a session from an explicit `TMUX_PANE` value.
@@ -160,15 +148,15 @@ impl Session {
     ///
     /// Returns an error when the value is absent or is not a pane ID, or when
     /// the listing fails.
-    pub async fn from_env_value(
+    pub fn from_env_value(
         server: &crate::Server,
         value: Option<impl AsRef<OsStr>>,
     ) -> Result<Option<Self>, Error> {
-        let Some(pane) = Pane::from_env_value(server, value).await? else {
+        let Some(pane) = Pane::from_env_value(server, value)? else {
             return Ok(None);
         };
 
-        server.session_by_id(pane.session_id()).await
+        server.session_by_id(pane.session_id())
     }
 
     /// Return the tmux session identity.
@@ -180,16 +168,12 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.session("work").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.session("work")?;
     ///
     /// assert!(session.id().to_string().starts_with('$'));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -274,10 +258,9 @@ impl Session {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn windows(&self) -> Result<Vec<Window>, Error> {
+    pub fn windows(&self) -> Result<Vec<Window>, Error> {
         let target = self.id().to_string();
-        let projections =
-            listing::windows(&self.core, listing::Scope::Target(&target), None).await?;
+        let projections = listing::windows(&self.core, listing::Scope::Target(&target), None)?;
 
         Ok(projections
             .into_iter()
@@ -296,32 +279,28 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::query::Filterable as _;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("searched").await?;
-    /// session.new_window("build").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("searched")?;
+    /// session.new_window("build")?;
     ///
     /// let fields = libtmux::Window::filter_fields();
-    /// let found = session.search_windows(&fields.window_name.eq("build")).await?;
+    /// let found = session.search_windows(&fields.window_name.eq("build"))?;
     /// assert_eq!(found.len(), 1);
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(feature = "query")]
-    pub async fn search_windows<M: crate::query::Matcher<Window>>(
+    pub fn search_windows<M: crate::query::Matcher<Window>>(
         &self,
         matcher: M,
     ) -> Result<Vec<Window>, Error> {
         use crate::query::QueryIteratorExt as _;
 
-        let all = self.windows().await?;
+        let all = self.windows()?;
         Ok(all.iter().matching(matcher).cloned().collect())
     }
 
@@ -340,25 +319,21 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("moving").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("moving")?;
     ///
     /// // One window, so there is nowhere to go and nothing broke.
-    /// assert!(session.next_window().await?.is_none());
+    /// assert!(session.next_window()?.is_none());
     ///
-    /// session.new_window("second").await?;
-    /// assert!(session.next_window().await?.is_some());
+    /// session.new_window("second")?;
+    /// assert!(session.next_window()?.is_some());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn next_window(&self) -> Result<Option<Window>, Error> {
-        self.step("next-window").await
+    pub fn next_window(&self) -> Result<Option<Window>, Error> {
+        self.step("next-window")
     }
 
     /// Move to the previous window, and return it.
@@ -368,8 +343,8 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses the move.
-    pub async fn previous_window(&self) -> Result<Option<Window>, Error> {
-        self.step("previous-window").await
+    pub fn previous_window(&self) -> Result<Option<Window>, Error> {
+        self.step("previous-window")
     }
 
     /// Move to the window that was active before this one, and return it.
@@ -380,17 +355,16 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses the move.
-    pub async fn last_window(&self) -> Result<Option<Window>, Error> {
-        self.step("last-window").await
+    pub fn last_window(&self) -> Result<Option<Window>, Error> {
+        self.step("last-window")
     }
 
     /// Run one window move and report what became active.
-    async fn step(&self, command: &'static str) -> Result<Option<Window>, Error> {
+    fn step(&self, command: &'static str) -> Result<Option<Window>, Error> {
         let target = self.id().to_string();
         let result = self
             .core
-            .execute(Command::new(command).arg("-t").arg(&target))
-            .await?;
+            .execute(Command::new(command).arg("-t").arg(&target))?;
         if !result.success() {
             let stderr = result.stderr_lossy();
             if crate::error::NO_SUCH_NEIGHBOUR.contains(&stderr.trim_end()) {
@@ -405,7 +379,6 @@ impl Session {
 
         let active = self
             .active_window()
-            .await
             .map_err(|error| error.after_effect(command))?;
         active
             .ok_or_else(|| {
@@ -424,8 +397,8 @@ impl Session {
     /// Returns an error when the window listing fails. A session always has an
     /// active window, so `Ok(None)` means the session disappeared between the
     /// snapshot and this call.
-    pub async fn active_window(&self) -> Result<Option<Window>, Error> {
-        Ok(self.windows().await?.into_iter().find(Window::is_active))
+    pub fn active_window(&self) -> Result<Option<Window>, Error> {
+        Ok(self.windows()?.into_iter().find(Window::is_active))
     }
 
     /// List every pane in this session, preserving any failure.
@@ -434,10 +407,9 @@ impl Session {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
+    pub fn panes(&self) -> Result<Vec<Pane>, Error> {
         let target = self.id().to_string();
-        let projections =
-            listing::panes(&self.core, listing::Scope::SessionTarget(&target), None).await?;
+        let projections = listing::panes(&self.core, listing::Scope::SessionTarget(&target), None)?;
 
         Ok(projections
             .into_iter()
@@ -453,9 +425,8 @@ impl Session {
     ///
     /// Returns [`Error::ObjectGone`] when the session no longer exists, or a
     /// listing error when tmux could not be read.
-    pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
-        let info = listing::sessions(&self.core, None)
-            .await?
+    pub fn refresh(&mut self) -> Result<&mut Self, Error> {
+        let info = listing::sessions(&self.core, None)?
             .into_iter()
             .find(|info| info.session_id() == self.id())
             .ok_or_else(|| Error::ObjectGone {
@@ -473,9 +444,9 @@ impl Session {
     ///
     /// Returns [`Error::ObjectGone`] when the session no longer exists, or a
     /// listing error when tmux could not be read.
-    pub async fn refreshed(&self) -> Result<Self, Error> {
+    pub fn refreshed(&self) -> Result<Self, Error> {
         let mut refreshed = self.clone();
-        refreshed.refresh().await?;
+        refreshed.refresh()?;
         Ok(refreshed)
     }
 
@@ -488,12 +459,11 @@ impl Session {
     /// tmux expands the name as a format before it checks it, so `#(command)`
     /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
     /// before passing text a caller supplied.
-    pub async fn new_window(&self, options: impl Into<NewWindowOptions>) -> Result<Window, Error> {
+    pub fn new_window(&self, options: impl Into<NewWindowOptions>) -> Result<Window, Error> {
         let options = options.into();
         let session = self.id().to_string();
         let projection =
-            listing::create_window(&self.core, |format| options.into_command(&session, format))
-                .await?;
+            listing::create_window(&self.core, |format| options.into_command(&session, format))?;
 
         Ok(Window::new(Arc::clone(&self.core), projection))
     }
@@ -507,7 +477,7 @@ impl Session {
     /// tmux expands the name as a format before it checks it, so `#(command)`
     /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
     /// before passing text a caller supplied.
-    pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
+    pub fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "rename-session",
@@ -516,11 +486,9 @@ impl Session {
                 .arg(self.id().to_string())
                 .arg("--")
                 .arg(name.into().into_os_string()),
-        )
-        .await?;
+        )?;
 
         self.refresh()
-            .await
             .map_err(|error| error.after_effect("rename-session"))?;
         Ok(self)
     }
@@ -533,7 +501,7 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn kill(self) -> Result<(), Error> {
+    pub fn kill(self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "kill-session",
@@ -541,7 +509,16 @@ impl Session {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
+    }
+
+    pub(crate) fn with_core(mut self, core: Arc<Core>) -> Self {
+        self.core = core;
+        self
+    }
+
+    pub(crate) fn kill_for_cleanup(mut self) -> Result<(), Error> {
+        self.core = self.core.for_cleanup();
+        self.kill()
     }
 
     /// Run a raw tmux command against this session.
@@ -556,33 +533,26 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns an error when the process cannot be started, captured, or
-    /// awaited.
+    /// Returns an error when the process cannot be started, captured, or waited for.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("raw").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("raw")?;
     ///
     /// let result = session
     ///     .cmd(libtmux::Command::new("display-message").arg("-p").arg("#{session_name}"))
-    ///     .await?;
+    ///     ?;
     /// assert_eq!(result.stdout_lossy().trim(), "raw");
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
-        self.core
-            .execute(command.targeting(self.id().to_string()))
-            .await
+    pub fn cmd(&self, command: Command) -> Result<CommandResult, Error> {
+        self.core.execute(command.targeting(self.id().to_string()))
     }
 
     /// Expand a tmux format string in this session's context.
@@ -599,29 +569,23 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("shown").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("shown")?;
     ///
-    /// let expanded = session.format("#{session_name}").await?;
+    /// let expanded = session.format("#{session_name}")?;
     /// assert_eq!(expanded.to_string_lossy(), "shown");
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn format(&self, template: &str) -> Result<TmuxText, Error> {
-        let result = self
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("--")
-                    .arg(OsString::from(template)),
-            )
-            .await?;
+    pub fn format(&self, template: &str) -> Result<TmuxText, Error> {
+        let result = self.cmd(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("--")
+                .arg(OsString::from(template)),
+        )?;
         if !result.success() {
             return Err(Error::from_refused_result(
                 "display-message",
@@ -649,14 +613,12 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses the message.
-    pub async fn display(&self, message: &str) -> Result<(), Error> {
-        let result = self
-            .cmd(
-                Command::new("display-message")
-                    .arg("--")
-                    .arg(OsString::from(message)),
-            )
-            .await?;
+    pub fn display(&self, message: &str) -> Result<(), Error> {
+        let result = self.cmd(
+            Command::new("display-message")
+                .arg("--")
+                .arg(OsString::from(message)),
+        )?;
         if result.success() {
             return Ok(());
         }
@@ -681,21 +643,17 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("locked").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("locked")?;
     ///
     /// // Locking a session nobody is attached to is accepted and does nothing.
-    /// session.lock().await?;
+    /// session.lock()?;
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn lock(&self) -> Result<(), Error> {
+    pub fn lock(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "lock-session",
@@ -703,7 +661,6 @@ impl Session {
                 .arg("-t")
                 .arg(self.id().to_string()),
         )
-        .await
     }
 
     /// Detach every client attached to this session.
@@ -723,26 +680,21 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("busy").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("busy")?;
     ///
     /// // Nothing is attached in a headless fixture, so this is a no-op.
-    /// session.detach_clients().await?;
+    /// session.detach_clients()?;
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn detach_clients(&self) -> Result<(), Error> {
+    pub fn detach_clients(&self) -> Result<(), Error> {
         let target = self.id().to_string();
         let result = self
             .core
-            .execute(Command::new("detach-client").arg("-s").arg(&target))
-            .await?;
+            .execute(Command::new("detach-client").arg("-s").arg(&target))?;
         if result.success() {
             return Ok(());
         }
@@ -773,26 +725,33 @@ impl Session {
     /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
     /// fails. The operation's error needs no conversion into [`Error`].
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
-    /// of their own, so the window is killed even if this future is dropped
-    /// or the operation panics, while the Tokio runtime is alive. A cleanup
-    /// failure then has no caller to reach; the `tracing` feature records it.
-    pub async fn with_window<T, E>(
+    /// Cancellation before creation starts leaves tmux untouched. After creation
+    /// starts, the call waits for the resource ID and kills the window before reporting
+    /// cancellation. Once the callback starts, cancellation is cooperative: its tmux
+    /// operations observe the token. Cleanup runs before return and during panic
+    /// unwinding, using an uncancelled handle.
+    pub fn with_window<T, E>(
         &self,
         options: impl Into<NewWindowOptions>,
-        operation: impl AsyncFnOnce(&Window) -> Result<T, E>,
+        operation: impl FnOnce(&Window) -> Result<T, E>,
     ) -> Result<T, crate::ScopeError<T, E>> {
-        let session = self.clone();
+        let mut session = self.clone();
+        session.core = self.core.for_cleanup();
+        let callback_core = Arc::clone(&self.core);
         let options = options.into();
         scoped::run(
+            self.core.cancellation_token(),
             "with-window",
-            async move { session.new_window(options).await },
-            Window::kill,
+            move || {
+                session
+                    .new_window(options)
+                    .map(|resource| resource.with_core(callback_core))
+            },
+            Window::kill_for_cleanup,
             operation,
         )
-        .await
     }
 
     /// Find this session's window with the given name.
@@ -803,12 +762,11 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when the window listing fails.
-    pub async fn window(&self, name: impl AsRef<[u8]>) -> Result<Option<Window>, Error> {
+    pub fn window(&self, name: impl AsRef<[u8]>) -> Result<Option<Window>, Error> {
         let name = name.as_ref();
 
         Ok(self
-            .windows()
-            .await?
+            .windows()?
             .into_iter()
             .find(|window| window.name() == name))
     }
@@ -818,15 +776,14 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when the window listing fails.
-    pub async fn window_at(&self, index: i32) -> Result<Option<Window>, Error> {
+    pub fn window_at(&self, index: i32) -> Result<Option<Window>, Error> {
         // An index is an integer, so tmux can match it and return one row.
         let target = self.id().to_string();
         let projections = listing::windows(
             &self.core,
             listing::Scope::Target(&target),
             Some(&index.predicate("window_index")),
-        )
-        .await?;
+        )?;
 
         Ok(projections
             .into_iter()
@@ -882,22 +839,18 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::query::Filterable as _;
     /// use libtmux::{Availability, Session};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("read")?;
     /// let fields = Session::filter_fields();
     ///
     /// // Nobody is attached, so nobody is attached twice.
     /// assert_eq!(session.get(fields.session_many_attached), Availability::Available(false));
     /// assert_eq!(session.get(fields.session_id), Availability::Available(session.id()));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -954,25 +907,21 @@ impl FilterSchema for Session {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::NewWindowOptions;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
 ///
 /// let window = session
 ///     .new_window(NewWindowOptions::new("editor").environment("EDITOR", "vi"))
-///     .await?;
+///     ?;
 /// assert_eq!(window.name().to_string_lossy(), "editor");
 ///
 /// // A bare name works too, because `new_window` takes anything that converts.
-/// session.new_window("logs").await?;
-/// assert_eq!(session.windows().await?.len(), 3);
+/// session.new_window("logs")?;
+/// assert_eq!(session.windows()?.len(), 3);
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1013,13 +962,11 @@ impl fmt::Debug for NewWindowOptions {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::{NewWindowOptions, WindowPlacement};
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let first = session.active_window().await?.expect("a session has a window");
+/// let guard = libtmux::test::TestServer::new()?;
+/// let session = guard.server().new_session("work")?;
+/// let first = session.active_window()?.expect("a session has a window");
 ///
 /// // Inserting before an index shifts the windows already at or after it, so
 /// // the index a caller holds is only good until the next insert.
@@ -1029,12 +976,10 @@ impl fmt::Debug for NewWindowOptions {
 ///             .index(first.index())
 ///             .placement(WindowPlacement::Before),
 ///     )
-///     .await?;
+///     ?;
 /// assert!(inserted.index() <= first.index());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```

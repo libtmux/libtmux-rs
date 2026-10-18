@@ -110,10 +110,10 @@ impl LoadState {
             .completed
             .clone()
             .unwrap_or_else(|| self.failure(error));
-        if self.completed.is_none() {
-            if let Err(publication) = report.summary("failed", &summary) {
-                let _ = write!(error.message, "; output failed: {publication}");
-            }
+        if self.completed.is_none()
+            && let Err(publication) = report.summary("failed", &summary)
+        {
+            let _ = write!(error.message, "; output failed: {publication}");
         }
         error.retained_state = Some(summary);
     }
@@ -143,11 +143,11 @@ pub(super) fn server(args: &ArgMatches) -> Result<Server> {
         builder = builder.socket_path(discovery::expand(path));
     } else if let Some(name) = option(args, "socket-name") {
         builder = builder.socket_name(name);
-    } else if let Ok(context) = std::env::var("TMUX") {
-        if !context.is_empty() {
-            let (socket, _) = tmux_context(&context)?;
-            builder = builder.socket_path(socket);
-        }
+    } else if let Ok(context) = std::env::var("TMUX")
+        && !context.is_empty()
+    {
+        let (socket, _) = tmux_context(&context)?;
+        builder = builder.socket_path(socket);
     }
     if let Some(config) = option(args, "tmux-config") {
         builder = builder.config_file(config);
@@ -176,10 +176,10 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
             )
         });
     }
-    if let Some(id) = invoking_session(server).await {
-        if let Some(session) = server.session_by_id(&id).await? {
-            return Ok(session);
-        }
+    if let Some(id) = invoking_session(server).await
+        && let Some(session) = server.session_by_id(&id).await?
+    {
+        return Ok(session);
     }
     let mut sessions = match server.sessions().await {
         Err(libtmux::Error::ServerGone { .. }) => Vec::new(),
@@ -222,10 +222,10 @@ fn read_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>
     for (index, file) in files.enumerate() {
         let path = discovery::resolve(file, None)?;
         let mut workspace = normalize::workspace(&document::read(&path)?, &path)?;
-        if index + 1 == count {
-            if let Some(name) = option(args, "session-name") {
-                workspace.name.clone_from(name);
-            }
+        if index + 1 == count
+            && let Some(name) = option(args, "session-name")
+        {
+            workspace.name.clone_from(name);
         }
         workspaces.push((path, workspace));
     }
@@ -398,15 +398,13 @@ pub(super) async fn load(
             report.loaded(&summary["results"], &appended)?;
             std::io::Write::flush(&mut std::io::stdout())?;
             report.log_warning();
-            if attach_at_end {
-                if let Some(session) = last_session {
-                    attach(
-                        &context.server,
-                        &session,
-                        context.inside_tmux.unwrap_or(false),
-                    )
-                    .await?;
-                }
+            if attach_at_end && let Some(session) = last_session {
+                attach(
+                    &context.server,
+                    &session,
+                    context.inside_tmux.unwrap_or(false),
+                )
+                .await?;
             }
         }
         Ok(())
@@ -803,12 +801,13 @@ async fn build(
     }
     let input = effects.input;
     let append = borrowed.is_some();
-    if !append && server.is_alive().await {
-        if let Some(session) = server.session(&workspace.name).await? {
-            effects.session = Some(session.clone());
-            effects.stage = REUSED;
-            return Ok((session, true));
-        }
+    if !append
+        && server.is_alive().await
+        && let Some(session) = server.session(&workspace.name).await?
+    {
+        effects.session = Some(session.clone());
+        effects.stage = REUSED;
+        return Ok((session, true));
     }
     let session = if let Some(target) = borrowed {
         target.session.clone()
@@ -1298,11 +1297,12 @@ fn session_dimensions() -> Result<Option<(u32, u32)>> {
     if std::env::var("TMUXP_DETECT_TERMINAL_SIZE").is_ok_and(|value| value != "1") {
         return Ok(None);
     }
-    if let Ok(winsize) = rustix::termios::tcgetwinsize(std::io::stdout()) {
-        if winsize.ws_col > 0 && winsize.ws_row > 0 {
-            width = u32::from(winsize.ws_col);
-            height = u32::from(winsize.ws_row);
-        }
+    if let Ok(winsize) = rustix::termios::tcgetwinsize(std::io::stdout())
+        && winsize.ws_col > 0
+        && winsize.ws_row > 0
+    {
+        width = u32::from(winsize.ws_col);
+        height = u32::from(winsize.ws_row);
     }
     if let Some(value) = env_dimension(&["COLUMNS"])? {
         width = value;

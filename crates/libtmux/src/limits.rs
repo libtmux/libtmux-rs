@@ -93,9 +93,9 @@ impl Default for OutputLimits {
 /// into process, descriptor, and memory pressure on the machine, and tmux
 /// itself serializes on the far side regardless.
 ///
-/// The client [`Server::wait_for_channel`](crate::Server::wait_for_channel)
-/// parks on a channel is the exception, and is not counted: it is waiting
-/// rather than working, and what releases it is a dispatch of its own.
+/// Parked channel and lock clients use a separate budget, configured with
+/// [`Self::max_wait_clients`]. They leave ordinary dispatch capacity available
+/// for the commands that signal or unlock them.
 ///
 /// # Examples
 ///
@@ -108,6 +108,7 @@ impl Default for OutputLimits {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchLimits {
     pub(crate) max_in_flight: usize,
+    pub(crate) max_wait_clients: usize,
     pub(crate) acquire_timeout: Option<Duration>,
 }
 
@@ -117,6 +118,29 @@ impl DispatchLimits {
     /// tmux serializes commands on its own thread, so more clients than this
     /// buys queueing rather than throughput.
     pub const DEFAULT_IN_FLIGHT: usize = 16;
+
+    /// How many parked channel and lock clients may remain resident by default.
+    pub const DEFAULT_WAIT_CLIENTS: usize = 64;
+
+    /// Bound parked channel and lock clients independently of ordinary commands.
+    ///
+    /// A full budget returns [`Error::Overloaded`](crate::Error::Overloaded)
+    /// immediately, before starting a client. Zero is treated as one. A timed
+    /// out channel wait may retain its client to preserve a later tmux signal;
+    /// it keeps this permit until completion or server shutdown.
+    #[must_use]
+    pub const fn max_wait_clients(self, clients: usize) -> Self {
+        Self {
+            max_wait_clients: if clients == 0 { 1 } else { clients },
+            ..self
+        }
+    }
+
+    /// How many parked channel and lock clients may remain resident.
+    #[must_use]
+    pub const fn wait_clients(self) -> usize {
+        self.max_wait_clients
+    }
 
     /// Set how many dispatches may run at once.
     ///
@@ -155,6 +179,7 @@ impl Default for DispatchLimits {
     fn default() -> Self {
         Self {
             max_in_flight: Self::DEFAULT_IN_FLIGHT,
+            max_wait_clients: Self::DEFAULT_WAIT_CLIENTS,
             acquire_timeout: None,
         }
     }
@@ -257,8 +282,7 @@ impl ControlLimits {
     /// displays.
     pub const DEFAULT_LINE_BYTES: usize = 8 * 1024 * 1024;
 
-    /// 64 MiB for one `%begin`/`%end` block, which is a whole command's
-    /// answer rather than one line.
+    /// 64 MiB for one response block or the combined reply to a request.
     pub const DEFAULT_BLOCK_BYTES: usize = 64 * 1024 * 1024;
 
     /// Set the budget for a single protocol line.
@@ -270,7 +294,10 @@ impl ControlLimits {
         }
     }
 
-    /// Set the budget for one command's response block.
+    /// Set the budget for a response block and the combined request reply.
+    ///
+    /// Nested commands and aliases share the request's budget. Output line
+    /// separators count toward it; private completion fences do not.
     #[must_use]
     pub const fn max_block_bytes(self, bytes: usize) -> Self {
         Self {
@@ -285,7 +312,7 @@ impl ControlLimits {
         self.max_line_bytes
     }
 
-    /// The budget for one command's response block.
+    /// The budget for a response block and the combined request reply.
     #[must_use]
     pub const fn block_bytes(self) -> usize {
         self.max_block_bytes

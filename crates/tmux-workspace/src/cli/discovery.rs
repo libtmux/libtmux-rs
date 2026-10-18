@@ -158,10 +158,8 @@ pub(super) fn resolve(name: &str, importer: Option<&str>) -> Result<PathBuf> {
     let expanded = expand(name);
     let path = PathBuf::from(&expanded);
     let pure = is_pure_name(&expanded);
-    if !pure {
-        if let Some(found) = candidate(&path) {
-            return Ok(found.canonicalize()?);
-        }
+    if !pure && let Some(found) = candidate(&path) {
+        return Ok(found.canonicalize()?);
     }
     if path.components().count() == 1 {
         let directory = match importer {

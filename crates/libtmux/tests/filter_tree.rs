@@ -20,37 +20,32 @@ use libtmux::{
 ///
 /// `build` ends up with windows `editor` (two panes) and `logs`; `idle` with
 /// one window, `shell`.
-async fn populate(server: &libtmux::Server) {
+fn populate(server: &libtmux::Server) {
     let build = server
         .new_session(NewSessionOptions::new("build").window_name("editor"))
-        .await
         .expect("session");
     build
         .windows()
-        .await
         .expect("windows")
         .remove(0)
         .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
-        .await
         .expect("pane");
     build
         .new_window(NewWindowOptions::new("logs").command("sleep 300"))
-        .await
         .expect("window");
 
     server
         .new_session(NewSessionOptions::new("idle").window_name("shell"))
-        .await
         .expect("session");
 }
 
-#[tokio::test]
-async fn a_session_is_selected_by_what_its_windows_hold() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_session_is_selected_by_what_its_windows_hold() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    populate(server).await;
+    populate(server);
 
-    let branches = server.hierarchy().await.expect("hierarchy");
+    let branches = server.hierarchy().expect("hierarchy");
     let sessions = SessionTree::filter_fields();
     let windows = WindowTree::filter_fields();
 
@@ -98,16 +93,16 @@ async fn a_session_is_selected_by_what_its_windows_hold() {
         .collect();
     assert_eq!(quiet, ["idle"]);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn every_window_must_satisfy_all_and_an_empty_relation_does_so_vacuously() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn every_window_must_satisfy_all_and_an_empty_relation_does_so_vacuously() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    populate(server).await;
+    populate(server);
 
-    let branches = server.hierarchy().await.expect("hierarchy");
+    let branches = server.hierarchy().expect("hierarchy");
     let sessions = SessionTree::filter_fields();
     let windows = WindowTree::filter_fields();
 
@@ -123,15 +118,15 @@ async fn every_window_must_satisfy_all_and_an_empty_relation_does_so_vacuously()
         .collect();
     assert_eq!(matched, ["idle"], "only the session with one such window");
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "serde")]
-#[tokio::test]
-async fn a_relation_survives_the_portable_envelope() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_relation_survives_the_portable_envelope() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    populate(server).await;
+    populate(server);
 
     let sessions = SessionTree::filter_fields();
     let windows = WindowTree::filter_fields();
@@ -154,7 +149,7 @@ async fn a_relation_survives_the_portable_envelope() {
     let decoded: libtmux::query::FilterExpr<SessionTree> =
         serde_json::from_value(wire).expect("the expression round-trips");
 
-    let branches = server.hierarchy().await.expect("hierarchy");
+    let branches = server.hierarchy().expect("hierarchy");
     assert_eq!(
         branches
             .iter()
@@ -194,30 +189,27 @@ async fn a_relation_survives_the_portable_envelope() {
     });
     assert!(serde_json::from_value::<libtmux::query::FilterExpr<SessionTree>>(unknown).is_err(),);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
+#[test]
+fn a_numeric_field_compares_by_order_as_well_as_by_value() {
     use libtmux::Session;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
     let busy = server
         .new_session(NewSessionOptions::new("busy"))
-        .await
         .expect("session");
     for name in ["one", "two", "three"] {
         busy.new_window(NewWindowOptions::new(name).command("sleep 300"))
-            .await
             .expect("window");
     }
     server
         .new_session(NewSessionOptions::new("quiet"))
-        .await
         .expect("session");
 
-    let sessions = server.sessions().await.expect("sessions");
+    let sessions = server.sessions().expect("sessions");
     let fields = Session::filter_fields();
     let named = |expression: &libtmux::query::FilterExpr<Session>| {
         let mut names: Vec<_> = sessions
@@ -245,15 +237,13 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
     // nine, where a string comparison would put "10" below "9".
     let ten = server
         .new_session(NewSessionOptions::new("ten"))
-        .await
         .expect("session");
     for index in 0..9 {
         ten.new_window(NewWindowOptions::new(format!("w{index}").as_str()).command("sleep 300"))
-            .await
             .expect("window");
     }
 
-    let sessions = server.sessions().await.expect("sessions");
+    let sessions = server.sessions().expect("sessions");
     let over_nine: Vec<_> = sessions
         .iter()
         .matching(&fields.session_windows.gt(9_u32))
@@ -261,7 +251,7 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
         .collect();
     assert_eq!(over_nine, ["ten"]);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "serde")]

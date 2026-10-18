@@ -22,8 +22,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the channel name.
-    pub async fn signal_channel(&self, channel: &str) -> Result<(), Error> {
-        wait_for::signal(&self.core, channel).await
+    pub fn signal_channel(&self, channel: &str) -> Result<(), Error> {
+        wait_for::signal(&self.core, channel)
     }
 
     /// Hold a `wait-for` channel for the length of an operation.
@@ -38,54 +38,53 @@ impl Server {
     /// runs out of time, `Operation` when the body fails, and `Cleanup` when
     /// the unlock fails after the body succeeded.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing is left held by a drop. The lock is taken and released in tasks
-    /// of their own, so a scope dropped while its lock is still queued unlocks
-    /// once tmux grants it, as [`Self::lock_channel`] describes.
+    /// Cancellation before locking leaves tmux untouched. Cancellation while queued
+    /// returns to the caller; a worker keeps the queued request and releases any later
+    /// grant. A callback already running must cooperate with the token. Cleanup runs
+    /// before return and during panic unwinding.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
     ///
     /// let count = server
-    ///     .with_channel_lock("deploy", async |server| {
-    ///         Ok::<_, libtmux::Error>(server.sessions().await?.len())
+    ///     .with_channel_lock("deploy",  |server| {
+    ///         Ok::<_, libtmux::Error>(server.sessions()?.len())
     ///     })
-    ///     .await?;
+    ///     ?;
     ///
     /// // The channel is free again, so the next locker is not blocked.
-    /// server.lock_channel("deploy").await?;
-    /// server.unlock_channel("deploy").await?;
+    /// server.lock_channel("deploy")?;
+    /// server.unlock_channel("deploy")?;
     /// # let _ = count;
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn with_channel_lock<T, E>(
+    pub fn with_channel_lock<T, E>(
         &self,
         channel: &str,
-        operation: impl AsyncFnOnce(&Self) -> Result<T, E>,
+        operation: impl FnOnce(&Self) -> Result<T, E>,
     ) -> Result<T, crate::ScopeError<T, E>> {
         let server = self.clone();
         let channel = channel.to_owned();
         let held = channel.clone();
-        let unlocking = self.clone();
+        let unlocking = Self {
+            core: self.core.for_cleanup(),
+        };
 
         crate::internal::scoped::run(
+            self.core.cancellation_token(),
             "with-channel-lock",
-            async move { server.lock_channel(&held).await.map(|()| server.clone()) },
-            move |_| async move { unlocking.unlock_channel(&channel).await },
-            async |_| operation(self).await,
+            move || server.lock_channel(&held).map(|()| server.clone()),
+            move |_| unlocking.unlock_channel(&channel),
+            |_| operation(self),
         )
-        .await
     }
 
     /// Lock a `wait-for` channel, blocking later lock attempts on it.
@@ -101,12 +100,11 @@ impl Server {
     /// [`Server::default_timeout`]. A handle from `Server::over_control_mode`
     /// is refused, for the reason [`Self::wait_for_channel`] gives.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing is left held. The lock is taken in a task of its own, so a lock
-    /// that is dropped -- or that runs out of time -- while queued behind
-    /// another locker is not withdrawn from tmux, which cannot withdraw one:
-    /// it is granted in turn and released at once. Between those two, later
+    /// Nothing is left held after cancellation. A lock cancelled or timed out while
+    /// queued is not withdrawn from tmux, which cannot withdraw one: a worker retains
+    /// it until it is granted, then releases it. Between grant and release, later
     /// lockers wait as they would for any other holder.
     ///
     /// Shutting the server down while such a lock is queued is the exception,
@@ -114,8 +112,8 @@ impl Server {
     /// is gone and every later lock on the channel blocks forever. A tmux
     /// defect (`cmd_wait_for_unlock` in `cmd-wait-for.c`), measured on 3.2a,
     /// 3.7d and 3.8-rc.
-    pub async fn lock_channel(&self, channel: &str) -> Result<(), Error> {
-        wait_for::lock(&self.core, channel, self.default_timeout()).await
+    pub fn lock_channel(&self, channel: &str) -> Result<(), Error> {
+        wait_for::lock(&self.core, channel, self.default_timeout())
     }
 
     /// Unlock a `wait-for` channel.
@@ -127,8 +125,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the channel name.
-    pub async fn unlock_channel(&self, channel: &str) -> Result<(), Error> {
-        wait_for::unlock(&self.core, channel).await
+    pub fn unlock_channel(&self, channel: &str) -> Result<(), Error> {
+        wait_for::unlock(&self.core, channel)
     }
 
     /// Wait for a `wait-for` channel to be signalled.
@@ -179,7 +177,7 @@ impl Server {
     /// queues it, so the wait would neither wait nor let anything else
     /// through. `Server::signal_channel` routes as usual.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
     /// Nothing is lost by a drop, and nothing is left for the next caller to
     /// find: the client stays on the channel exactly as it does after
@@ -196,32 +194,24 @@ impl Server {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::ChannelWait;
     /// use std::time::Duration;
     ///
-    /// # let guard = libtmux::test::TestServer::builder().start().await?;
+    /// # let guard = libtmux::test::TestServer::builder().start()?;
     /// # let server = guard.server();
     /// // Signalling first is safe: the channel keeps it.
-    /// server.signal_channel("ready").await?;
-    /// let outcome = server.wait_for_channel("ready", Duration::from_secs(5)).await?;
+    /// server.signal_channel("ready")?;
+    /// let outcome = server.wait_for_channel("ready", Duration::from_secs(5))?;
     /// assert_eq!(outcome, ChannelWait::Signalled);
     ///
     /// // The latch is spent, so a second wait runs out of time instead.
-    /// let again = server.wait_for_channel("ready", Duration::from_millis(200)).await?;
+    /// let again = server.wait_for_channel("ready", Duration::from_millis(200))?;
     /// assert_eq!(again, ChannelWait::TimedOut);
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn wait_for_channel(
-        &self,
-        channel: &str,
-        within: Duration,
-    ) -> Result<ChannelWait, Error> {
-        wait_for::wait(&self.core, channel, within.min(self.default_timeout())).await
+    pub fn wait_for_channel(&self, channel: &str, within: Duration) -> Result<ChannelWait, Error> {
+        wait_for::wait(&self.core, channel, within.min(self.default_timeout()))
     }
 }

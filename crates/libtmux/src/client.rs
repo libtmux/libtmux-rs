@@ -27,18 +27,14 @@ use crate::{Command, Error, ObjectKind};
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
-/// guard.server().new_session("work").await?;
+/// let guard = libtmux::test::TestServer::new()?;
+/// guard.server().new_session("work")?;
 ///
 /// // A session created without attaching has no client, which is the usual
 /// // shape under test and under automation.
-/// assert!(guard.server().clients().await?.is_empty());
+/// assert!(guard.server().clients()?.is_empty());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -130,10 +126,10 @@ impl Client {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn watchers(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// #  fn watchers(server: &libtmux::Server) -> Result<(), libtmux::Error> {
     /// let others = server
     ///     .clients()
-    ///     .await?
+    ///     ?
     ///     .into_iter()
     ///     .filter(|client| !client.is_own())
     ///     .count();
@@ -161,14 +157,13 @@ impl Client {
     /// suspended or locked, which tmux leaves out of the same listing. Keep
     /// the handle for the second: the client is listed again once it resumes.
     /// Returns a listing error when tmux could not be read.
-    pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
-        let listed = listing::clients(&self.core, None)
-            .await?
+    pub fn refresh(&mut self) -> Result<&mut Self, Error> {
+        let listed = listing::clients(&self.core, None)?
             .into_iter()
             .find(|info| info.client_name() == self.name());
 
         let Some(info) = listed else {
-            return Err(self.why_unlisted().await);
+            return Err(self.why_unlisted());
         };
 
         self.info = info;
@@ -187,7 +182,7 @@ impl Client {
     /// resolves without saying it is suspended, is reported gone exactly as
     /// before. The probe cannot turn a gone client into a live one, only a
     /// suspended one into something other than gone.
-    async fn why_unlisted(&self) -> Error {
+    fn why_unlisted(&self) -> Error {
         let gone = || Error::ObjectGone {
             kind: ObjectKind::Client,
             id: self.name().to_string_lossy().into_owned(),
@@ -197,17 +192,13 @@ impl Client {
         // never hold the separator, while a client name is a terminal path
         // and is not this crate's to constrain. Splitting once puts every
         // ambiguous byte on the far side.
-        let Ok(result) = self
-            .core
-            .execute(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("-t")
-                    .arg(OsString::from_vec(self.name().as_bytes().to_vec()))
-                    .arg(OsString::from("#{client_flags}|#{client_name}")),
-            )
-            .await
-        else {
+        let Ok(result) = self.core.execute(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("-t")
+                .arg(OsString::from_vec(self.name().as_bytes().to_vec()))
+                .arg(OsString::from("#{client_flags}|#{client_name}")),
+        ) else {
             return gone();
         };
         if !result.success() {
@@ -253,9 +244,9 @@ impl Client {
     /// two are worth telling apart: [`Error::is_object_gone`] answers false
     /// for the second, because the same handle works again once the client
     /// resumes. Returns a listing error when tmux could not be read.
-    pub async fn refreshed(&self) -> Result<Self, Error> {
+    pub fn refreshed(&self) -> Result<Self, Error> {
         let mut refreshed = self.clone();
-        refreshed.refresh().await?;
+        refreshed.refresh()?;
         Ok(refreshed)
     }
 
@@ -288,34 +279,29 @@ impl Client {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
-    /// let session = server.new_session("work").await?;
+    /// let session = server.new_session("work")?;
     ///
     /// // A control-mode connection is a client, so the server has one to find.
     /// # #[cfg(feature = "control-mode")]
     /// # {
-    /// let control = libtmux::control::ControlMode::attach(server, session.id()).await?;
-    /// let client = server.clients().await?.into_iter().next().expect("one client");
+    /// let control = libtmux::control::ControlMode::attach(server, session.id())?;
+    /// let client = server.clients()?.into_iter().next().expect("one client");
     ///
-    /// let attached = client.attached_session().await?.expect("it is attached");
+    /// let attached = client.attached_session()?.expect("it is attached");
     /// assert_eq!(attached.id(), session.id());
-    /// control.shutdown().await?;
+    /// control.shutdown()?;
     /// # }
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn attached_session(&self) -> Result<Option<crate::Session>, Error> {
+    pub fn attached_session(&self) -> Result<Option<crate::Session>, Error> {
         let name = OsString::from_vec(self.name().as_bytes().to_vec());
 
-        Ok(listing::client_session(&self.core, &name)
-            .await?
+        Ok(listing::client_session(&self.core, &name)?
             .map(|info| crate::Session::new(Arc::clone(&self.core), info)))
     }
 
@@ -334,11 +320,10 @@ impl Client {
     ///
     /// Returns an error when tmux cannot be reached, or answers with an ID
     /// this crate cannot parse.
-    pub async fn attached_window(&self) -> Result<Option<crate::Window>, Error> {
+    pub fn attached_window(&self) -> Result<Option<crate::Window>, Error> {
         let name = OsString::from_vec(self.name().as_bytes().to_vec());
 
-        Ok(listing::client_window(&self.core, &name)
-            .await?
+        Ok(listing::client_window(&self.core, &name)?
             .map(|projection| crate::Window::new(Arc::clone(&self.core), projection)))
     }
 
@@ -357,11 +342,10 @@ impl Client {
     ///
     /// Returns an error when tmux cannot be reached, or answers with an ID
     /// this crate cannot parse.
-    pub async fn attached_pane(&self) -> Result<Option<crate::Pane>, Error> {
+    pub fn attached_pane(&self) -> Result<Option<crate::Pane>, Error> {
         let name = OsString::from_vec(self.name().as_bytes().to_vec());
 
-        Ok(listing::client_pane(&self.core, &name)
-            .await?
+        Ok(listing::client_pane(&self.core, &name)?
             .map(|projection| crate::Pane::new(Arc::clone(&self.core), projection)))
     }
 
@@ -372,7 +356,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn detach(self) -> Result<(), Error> {
+    pub fn detach(self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "detach-client",
@@ -380,7 +364,6 @@ impl Client {
                 .arg("-t")
                 .arg(self.name().to_string_lossy().into_owned()),
         )
-        .await
     }
 
     /// Suspend this client, as if its user pressed the suspend key.
@@ -399,7 +382,7 @@ impl Client {
     /// handle afterwards gives [`Error::ClientSuspended`] rather than
     /// [`Error::ObjectGone`], so a caller can tell this from a client that
     /// left.
-    pub async fn suspend(&self) -> Result<(), Error> {
+    pub fn suspend(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "suspend-client",
@@ -407,7 +390,6 @@ impl Client {
                 .arg("-t")
                 .arg(self.name().to_string_lossy().into_owned()),
         )
-        .await
     }
 
     /// Lock this client's terminal.
@@ -427,7 +409,7 @@ impl Client {
     /// Returns an error when tmux refuses the command. Reading through the
     /// handle while the client is locked gives [`Error::ClientSuspended`],
     /// not [`Error::ObjectGone`].
-    pub async fn lock(&self) -> Result<(), Error> {
+    pub fn lock(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "lock-client",
@@ -435,7 +417,6 @@ impl Client {
                 .arg("-t")
                 .arg(self.name().to_string_lossy().into_owned()),
         )
-        .await
     }
 
     /// Redraw this client's terminal.
@@ -447,7 +428,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn redraw(&self) -> Result<(), Error> {
+    pub fn redraw(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "refresh-client",
@@ -455,7 +436,6 @@ impl Client {
                 .arg("-t")
                 .arg(self.name().to_string_lossy().into_owned()),
         )
-        .await
     }
 
     /// Point this client at another session.
@@ -464,7 +444,7 @@ impl Client {
     ///
     /// Returns [`Error::ServerMismatch`] when the session belongs to another
     /// server, or an error when the session does not exist or tmux refuses.
-    pub async fn switch_to(&self, session: &crate::Session) -> Result<(), Error> {
+    pub fn switch_to(&self, session: &crate::Session) -> Result<(), Error> {
         self.core
             .require_same_server(session.server_identity(), "switch-client")?;
         listing::mutate(
@@ -476,7 +456,6 @@ impl Client {
                 .arg("-t")
                 .arg(session.id().to_string()),
         )
-        .await
     }
 }
 
@@ -519,12 +498,12 @@ impl Client {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
     /// use libtmux::Client;
     /// use libtmux::query::Filterable as _;
     ///
     /// let fields = Client::filter_fields();
-    /// for client in server.clients().await? {
+    /// for client in server.clients()? {
     ///     // The key table a client is in: `prefix` right after the prefix key.
     ///     if let Some(table) = client.get(fields.client_key_table).available() {
     ///         println!("{client}: {}", table.to_string_lossy());

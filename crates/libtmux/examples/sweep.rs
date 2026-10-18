@@ -6,7 +6,7 @@
 //! fails with `No space left on device` somewhere unrelated.
 //!
 //! ```console
-//! $ cargo run --example sweep --features test-support
+//! $ cargo run -p libtmux --example sweep --features test-support
 //! ```
 //!
 //! Only this crate's own fixtures are considered, and only those whose owning

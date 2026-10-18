@@ -25,9 +25,9 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the listing.
-    pub async fn option_names(&self) -> Result<Vec<String>, Error> {
+    pub fn option_names(&self) -> Result<Vec<String>, Error> {
         let target = self.id().to_string();
-        options::names(&self.core, options::Scope::Session(&target)).await
+        options::names(&self.core, options::Scope::Session(&target))
     }
 
     /// Read every option set at this session, decoded by its declared kind.
@@ -53,24 +53,20 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("opts").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("opts")?;
     ///
-    /// session.set_option("status-left-length", "30").await?;
-    /// let options = session.options().await?;
+    /// session.set_option("status-left-length", "30")?;
+    /// let options = session.options()?;
     /// assert!(options.contains_key("status-left-length"));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
+    pub fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
         let target = self.id().to_string();
-        options::typed_all(&self.core, options::Scope::Session(&target)).await
+        options::typed_all(&self.core, options::Scope::Session(&target))
     }
 
     /// Set one option to text, unchecked.
@@ -85,7 +81,7 @@ impl Session {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+    pub fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
             &self.core,
@@ -94,7 +90,6 @@ impl Session {
             value,
             false,
         )
-        .await
     }
 
     /// Set one option to a typed value, checked before it is sent.
@@ -119,34 +114,26 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{Error, OptionValue};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("typed").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("typed")?;
     ///
-    /// session.set_typed_option("history-limit", 5000).await?;
+    /// session.set_typed_option("history-limit", 5000)?;
     /// assert_eq!(
-    ///     session.typed_option("history-limit").await?,
+    ///     session.typed_option("history-limit")?,
     ///     Some(OptionValue::Number(5000)),
     /// );
     ///
     /// // Below the range tmux's table declares, so it is never sent.
-    /// let refused = session.set_typed_option("history-limit", -1).await;
+    /// let refused = session.set_typed_option("history-limit", -1);
     /// assert!(matches!(refused, Err(Error::OptionValueRefused { .. })));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_typed_option(
-        &self,
-        name: &str,
-        value: impl Into<OptionValue>,
-    ) -> Result<(), Error> {
+    pub fn set_typed_option(&self, name: &str, value: impl Into<OptionValue>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set_typed(
             &self.core,
@@ -154,7 +141,6 @@ impl Session {
             name,
             value.into(),
         )
-        .await
     }
 
     /// Append to one option rather than replacing it.
@@ -165,7 +151,7 @@ impl Session {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+    pub fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
             &self.core,
@@ -174,7 +160,6 @@ impl Session {
             value,
             true,
         )
-        .await
     }
 
     /// Remove one option, restoring whatever it inherits.
@@ -185,9 +170,9 @@ impl Session {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
+    pub fn unset_option(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::unset(&self.core, options::Scope::Session(&target), name).await
+        options::unset(&self.core, options::Scope::Session(&target), name)
     }
 
     /// Set one hook to a tmux command.
@@ -202,9 +187,9 @@ impl Session {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
+    pub fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::set_hook(&self.core, options::Scope::Session(&target), name, command).await
+        options::set_hook(&self.core, options::Scope::Session(&target), name, command)
     }
 
     /// Remove one hook.
@@ -215,9 +200,9 @@ impl Session {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
+    pub fn unset_hook(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::unset_hook(&self.core, options::Scope::Session(&target), name).await
+        options::unset_hook(&self.core, options::Scope::Session(&target), name)
     }
 
     /// Write a whole hook at once.
@@ -235,7 +220,7 @@ impl Session {
     ///
     /// Returns an error when tmux rejects the name or any command.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
     /// Under [`ReplaceMode::Replace`] the clear and the entries are one
     /// invocation, so a drop leaves the hook as it was or fully written,
@@ -248,13 +233,11 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use std::collections::BTreeMap;
     /// use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("hooked")?;
     ///
     /// let mut entries = BTreeMap::new();
     /// entries.insert(0, TmuxText::from(b"display-message first".to_vec()));
@@ -262,19 +245,17 @@ impl Session {
     ///
     /// session
     ///     .set_hooks("alert-bell", &IndexedHooks::from(entries), ReplaceMode::Replace)
-    ///     .await?;
+    ///     ?;
     ///
-    /// let written = session.hook("alert-bell").await?.expect("the hook is set");
+    /// let written = session.hook("alert-bell")?.expect("the hook is set");
     /// assert_eq!(written.len(), 2);
     /// assert!(written.get(1).is_none(), "the gap is kept");
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_hooks(
+    pub fn set_hooks(
         &self,
         name: &str,
         hooks: &IndexedHooks,
@@ -288,7 +269,6 @@ impl Session {
             hooks,
             replace,
         )
-        .await
     }
 
     /// Read every hook set at this session.
@@ -305,24 +285,20 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("hooked")?;
     ///
-    /// session.set_hook("alert-bell", "display-message rang").await?;
-    /// let hooks = session.hooks().await?;
+    /// session.set_hook("alert-bell", "display-message rang")?;
+    /// let hooks = session.hooks()?;
     /// assert!(hooks.contains_key("alert-bell"));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn hooks(&self) -> Result<BTreeMap<String, IndexedHooks>, Error> {
+    pub fn hooks(&self) -> Result<BTreeMap<String, IndexedHooks>, Error> {
         let target = self.id().to_string();
-        options::hooks(&self.core, options::Scope::Session(&target)).await
+        options::hooks(&self.core, options::Scope::Session(&target))
     }
 
     /// Read one hook's commands, or `None` when it holds nothing.
@@ -335,24 +311,20 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("hooked")?;
     ///
-    /// assert!(session.hook("alert-bell").await?.is_none());
-    /// session.set_hook("alert-bell", "display-message rang").await?;
-    /// assert!(session.hook("alert-bell").await?.is_some());
+    /// assert!(session.hook("alert-bell")?.is_none());
+    /// session.set_hook("alert-bell", "display-message rang")?;
+    /// assert!(session.hook("alert-bell")?.is_some());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
+    pub fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
         let target = self.id().to_string();
-        options::hook(&self.core, options::Scope::Session(&target), name).await
+        options::hook(&self.core, options::Scope::Session(&target), name)
     }
 
     /// Set an environment variable for processes this session starts.
@@ -365,18 +337,13 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name or value.
-    pub async fn set_environment(
-        &self,
-        name: &str,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
+    pub fn set_environment(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         environment::set(
             &self.core,
             environment::Scope::Session(self.id().as_ref()),
             name,
             value.into(),
         )
-        .await
     }
 
     /// Read one variable from the session's environment.
@@ -397,40 +364,35 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::EnvironmentEntry;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("read")?;
     ///
-    /// assert_eq!(session.environment("EDITOR").await?, None);
+    /// assert_eq!(session.environment("EDITOR")?, None);
     ///
-    /// session.set_environment("EDITOR", "hx").await?;
+    /// session.set_environment("EDITOR", "hx")?;
     /// assert!(matches!(
-    ///     session.environment("EDITOR").await?,
+    ///     session.environment("EDITOR")?,
     ///     Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"hx",
     /// ));
     ///
-    /// session.hide_environment("EDITOR").await?;
+    /// session.hide_environment("EDITOR")?;
     /// assert_eq!(
-    ///     session.environment("EDITOR").await?,
+    ///     session.environment("EDITOR")?,
     ///     Some(EnvironmentEntry::Removed),
     /// );
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
+    pub fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
         environment::get(
             &self.core,
             environment::Scope::Session(self.id().as_ref()),
             name,
         )
-        .await
     }
 
     /// Read the session's whole environment.
@@ -458,31 +420,27 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::EnvironmentEntry;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("env").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("env")?;
     ///
-    /// session.set_environment("EDITOR", "vi").await?;
-    /// session.hide_environment("PAGER").await?;
+    /// session.set_environment("EDITOR", "vi")?;
+    /// session.hide_environment("PAGER")?;
     ///
-    /// let environment = session.environment_all().await?;
+    /// let environment = session.environment_all()?;
     /// assert!(matches!(
     ///     environment.get("EDITOR"),
     ///     Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"vi",
     /// ));
     /// assert_eq!(environment.get("PAGER"), Some(&EnvironmentEntry::Removed));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
-        environment::all(&self.core, environment::Scope::Session(self.id().as_ref())).await
+    pub fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
+        environment::all(&self.core, environment::Scope::Session(self.id().as_ref()))
     }
 
     /// Hide a variable from processes started in this session.
@@ -501,32 +459,27 @@ impl Session {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::EnvironmentEntry;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hidden").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("hidden")?;
     ///
-    /// session.hide_environment("PAGER").await?;
+    /// session.hide_environment("PAGER")?;
     /// assert_eq!(
-    ///     session.environment_all().await?.get("PAGER"),
+    ///     session.environment_all()?.get("PAGER"),
     ///     Some(&EnvironmentEntry::Removed),
     /// );
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn hide_environment(&self, name: &str) -> Result<(), Error> {
+    pub fn hide_environment(&self, name: &str) -> Result<(), Error> {
         environment::hide(
             &self.core,
             environment::Scope::Session(self.id().as_ref()),
             name,
         )
-        .await
     }
 
     /// Remove an environment variable from the session.
@@ -534,13 +487,12 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name.
-    pub async fn unset_environment(&self, name: &str) -> Result<(), Error> {
+    pub fn unset_environment(&self, name: &str) -> Result<(), Error> {
         environment::unset(
             &self.core,
             environment::Scope::Session(self.id().as_ref()),
             name,
         )
-        .await
     }
 
     /// Read one option, decoded according to what tmux declares about it.
@@ -558,8 +510,8 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
+    pub fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
         let target = self.id().to_string();
-        options::get_typed(&self.core, options::Scope::Session(&target), name).await
+        options::get_typed(&self.core, options::Scope::Session(&target), name)
     }
 }

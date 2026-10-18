@@ -22,7 +22,7 @@ impl Server {
     /// Returns [`Error::ServerMismatch`] when the client belongs to another
     /// server, or an error when no suitable client exists, when tmux refuses
     /// the command, and when the dispatch timeout expires before it exits.
-    pub async fn display_popup(
+    pub fn display_popup(
         &self,
         client: Option<&Client>,
         command: impl Into<OsString>,
@@ -36,7 +36,7 @@ impl Server {
                 .arg(client.name().to_string_lossy().into_owned());
         }
 
-        listing::mutate(&self.core, "display-popup", popup.arg(command.into())).await
+        listing::mutate(&self.core, "display-popup", popup.arg(command.into()))
     }
 
     /// Show a menu over a client.
@@ -52,7 +52,7 @@ impl Server {
     /// Returns [`Error::ServerMismatch`] when the client belongs to another
     /// server, or an error when no suitable client exists, when tmux refuses
     /// an item, and when the dispatch timeout expires before anyone chooses.
-    pub async fn display_menu(
+    pub fn display_menu(
         &self,
         client: Option<&Client>,
         title: &str,
@@ -72,7 +72,7 @@ impl Server {
             menu = menu.arg(item.label).arg(item.key).arg(item.command);
         }
 
-        listing::mutate(&self.core, "display-menu", menu).await
+        listing::mutate(&self.core, "display-menu", menu)
     }
 
     /// Open a command prompt on a client.
@@ -96,7 +96,7 @@ impl Server {
     /// Returns [`Error::ServerMismatch`] when the client belongs to another
     /// server, or an error when no suitable client exists, when tmux refuses,
     /// and when the dispatch timeout expires before the prompt is answered.
-    pub async fn command_prompt(
+    pub fn command_prompt(
         &self,
         client: Option<&Client>,
         prompt: Option<&str>,
@@ -114,7 +114,7 @@ impl Server {
             request = request.arg("-p").arg(OsString::from(prompt));
         }
 
-        listing::mutate(&self.core, "command-prompt", request.arg(command.into())).await
+        listing::mutate(&self.core, "command-prompt", request.arg(command.into()))
     }
 
     /// Open one of tmux's interactive choosers on a client.
@@ -134,7 +134,7 @@ impl Server {
     /// Returns [`Error::ServerMismatch`] when the client belongs to another
     /// server, or an error when tmux refuses the command. A missing client is
     /// not one: this does not need one.
-    pub async fn choose(&self, chooser: Chooser, client: Option<&Client>) -> Result<(), Error> {
+    pub fn choose(&self, chooser: Chooser, client: Option<&Client>) -> Result<(), Error> {
         let name = chooser.command();
         let mut request = Command::new(name);
         if let Some(client) = client {
@@ -145,7 +145,7 @@ impl Server {
                 .arg(client.name().to_string_lossy().into_owned());
         }
 
-        listing::mutate(&self.core, name, request).await
+        listing::mutate(&self.core, name, request)
     }
 
     /// Open tmux's window finder for a search string.
@@ -160,7 +160,7 @@ impl Server {
     /// Returns [`Error::ServerMismatch`] when the client belongs to another
     /// server, or an error when tmux refuses the command. A missing client is
     /// not one: this does not need one.
-    pub async fn find_window(&self, client: Option<&Client>, search: &str) -> Result<(), Error> {
+    pub fn find_window(&self, client: Option<&Client>, search: &str) -> Result<(), Error> {
         let mut request = Command::new("find-window");
         if let Some(client) = client {
             self.core
@@ -175,7 +175,6 @@ impl Server {
             "find-window",
             request.arg(OsString::from(search)),
         )
-        .await
     }
 
     /// Briefly show each pane's number on a client.
@@ -184,7 +183,7 @@ impl Server {
     ///
     /// Returns [`Error::ServerMismatch`] when the client belongs to another
     /// server, or an error when no suitable client exists or tmux refuses.
-    pub async fn display_panes(&self, client: Option<&Client>) -> Result<(), Error> {
+    pub fn display_panes(&self, client: Option<&Client>) -> Result<(), Error> {
         let mut request = Command::new("display-panes");
         if let Some(client) = client {
             self.core
@@ -194,7 +193,7 @@ impl Server {
                 .arg(client.name().to_string_lossy().into_owned());
         }
 
-        listing::mutate(&self.core, "display-panes", request).await
+        listing::mutate(&self.core, "display-panes", request)
     }
 }
 
@@ -206,7 +205,7 @@ impl Server {
 /// # Examples
 ///
 /// ```no_run
-/// # async fn menu(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// #  fn menu(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 /// use libtmux::MenuItem;
 ///
 /// server
@@ -218,7 +217,7 @@ impl Server {
 ///             MenuItem::new("Kill", "k", "kill-session"),
 ///         ],
 ///     )
-///     .await?;
+///     ?;
 /// # Ok(())
 /// # }
 /// ```

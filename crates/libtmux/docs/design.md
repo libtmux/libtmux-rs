@@ -10,6 +10,7 @@
   - [Literal Python-shaped port](#literal-python-shaped-port)
   - [Runtime-generic core and adapter workspace](#runtime-generic-core-and-adapter-workspace)
   - [Tokio-first crate with an internal executor boundary](#tokio-first-crate-with-an-internal-executor-boundary)
+  - [Blocking client and native Tokio client](#blocking-client-and-native-tokio-client)
 - [Spike findings](#spike-findings)
 - [Architecture](#architecture)
   - [Core and executor](#core-and-executor)
@@ -36,44 +37,45 @@
 
 ## Outcome
 
-The repository is a Cargo workspace whose members live under `crates/`, and
-all four are published:
+The workspace publishes five packages:
 
-| Crate            | What it is                                              |
-| ---------------- | ------------------------------------------------------- |
-| `libtmux`        | The async tmux client and object model                  |
-| `libtmux-macros` | `#[derive(Filterable)]`, for downstream structs         |
-| `tmux-mcp`       | A Model Context Protocol server over `libtmux`          |
+| Crate | What it is |
+| --- | --- |
+| `libtmux` | The blocking tmux client and shared values |
+| `libtmux-tokio` | The native async tmux client |
+| `libtmux-macros` | `#[derive(Filterable)]` for downstream structs |
+| `tmux-mcp` | A Model Context Protocol server over `libtmux-tokio` |
 | `tmux-workspace` | A tmuxp-compatible command and workspace-building library |
 
-`tmux-mcp` and `tmux-workspace` exist to exercise the public API from outside,
-the way a real consumer would, and are published so their dependency
-requirements are proven to resolve. The dependency runs one way: `libtmux`
-knows nothing about either.
+Both clients expose concrete `Server`, `Session`, `Window`, `Pane`, and
+`Client` handles. They provide the same hierarchy operations, refresh,
+options, hooks, buffers, key bindings, plans, and optional typed filtering.
+The base package has no default crate dependencies. Its `control-mode` and
+`plan` features also require only the standard library. Querying, derives,
+serialization, schemas, tracing, and test fixtures have separate opt-in
+dependencies.
 
-`libtmux` presents `Server`, `Session`, `Window`, `Pane`, and `Client`
-handles, hierarchy listings, refresh, options, hooks, buffers, key bindings,
-and the local typed filtering kernel, keeping Python libtmux's object
-vocabulary and the same tmux floor of 3.2a. The format catalog, intrinsic
-snapshots, and winlink projections back those handles and stay crate-private.
-Optional features add control mode, a blocking runtime, portable expression
-serialization, tracing, and the real-tmux test guard.
+`libtmux-tokio` depends on the base package for shared IDs, targets, text,
+protocol parsing, and query types. It owns native async execution and concrete
+async handles. Neither client depends on `tmux-mcp` or `tmux-workspace`.
 
-Cargo is authoritative for compilation, dependency resolution, testing,
-documentation, and publishing. A `justfile` groups those commands so `just`
-alone lists them; it adds no build step and does not participate in the
-published crate.
+The native operation layer is canonical. The private `tools/sync-client`
+generator translates that layer into checked-in blocking Rust. It is a
+development tool, not a build dependency or a published runtime dependency.
+Its gate checks generated code, manual-port digests, and the complete native
+Rust source inventory. Runtime-specific concurrency and cancellation tests
+are manually adapted and retain their own execution evidence.
 
-The default transport runs each command as a Tokio subprocess; the
-`control-mode` feature adds a persistent control-mode client. Command, target,
-result, capability, snapshot, and query values do not depend on the transport,
-so either serves the same object APIs.
+Cargo owns compilation, dependency resolution, testing, documentation, and
+publishing. The justfile groups Cargo commands. Normal dispatch runs one tmux
+client process per command; the optional `control-mode` feature holds a
+persistent tmux client and uses the same object operations.
 
 ## Goals
 
 - Reach behavioral feature parity with the pinned Python public API baseline.
 - Keep familiar names and hierarchy while using Rust ownership, errors,
-  builders, iterators, and async methods naturally.
+  builders, iterators, blocking methods, and native async methods naturally.
 - Preserve tmux 3.2a compatibility and gate newer format fields and flags by
   detected capabilities.
 - Make IDs, targets, fields, option scopes, directions, flags, and query
@@ -89,7 +91,7 @@ so either serves the same object APIs.
 ## Non-goals
 
 - A JavaScript, N-API, Python, WASM, or C binding.
-- A second synchronous API.
+- A generic public runtime parameter on every handle.
 - Control mode in the default transport. Normal commands stay one process per
   command whatever the optional `control-mode` feature does.
 - A literal port of Python inheritance, arbitrary keyword arguments, mutable
@@ -99,24 +101,21 @@ so either serves the same object APIs.
 - Reproducing Python's `QueryList` type, its equality and lookup-suffix
   defects, stale fields, or cross-server identity defects.
 - A process-global engine or operation registry.
-- Runtime independence. `tokio` is a required dependency, not an optional one:
-  the crate spawns and supervises child processes, bounds every dispatch with a
-  timer, and multiplexes a control connection, so it needs a runtime's process
-  reaping and timers rather than only its executor. `async-std` and `smol`
-  offer no compatible child supervision, and abstracting over the parts that
-  differ would mean either a lowest-common-denominator transport or a second
-  one to keep in step. `blocking::Runtime` is how code that is not async calls
-  in; it is a `tokio` current-thread runtime, so entering it from inside
-  another runtime is a panic rather than a nested executor -- use
-  `blocking::Runtime::try_run` where that is possible.
+- An async runtime hidden inside the blocking client. Blocking calls occupy
+  the calling thread; use `libtmux-tokio` when that work must yield to Tokio.
 
 ## Compatibility contract
 
-The target compatibility surface is tmux 3.2a and newer on Linux, macOS, and
-WSL. Native Windows is unsupported because tmux is unavailable there. The
-initial Rust MSRV is 1.85, the first stable compiler supporting Edition 2024.
-The Foundation gate verifies Linux with both Rust 1.85 and the pinned
-development toolchain; the release slice adds the remaining platform matrix.
+The supported targets are Linux and WSL, with tmux 3.2a or newer. Native
+Windows is unsupported because tmux is unavailable there. The workspace uses
+Rust 1.97.1 and Edition 2024.
+
+The dependency-free process backend uses Linux `/proc` to observe an exited
+child without reaping it, and an absolute group-signal helper, `/usr/bin/kill`
+by default, to terminate its process group. `ServerBuilder::group_signal_helper`
+selects a different absolute helper. An unavailable helper is reported when a command is executed; a helper that fails during cleanup is reported by the
+operation and retained for `Server::shutdown`. That failure can leave a
+descendant alive. Zero crate dependencies does not remove this host dependency.
 
 The compatibility baseline for the first Rust release is the Python package at
 commit
@@ -145,33 +144,36 @@ rejected.
 
 ### Runtime-generic core and adapter workspace
 
-This approach would begin with separate core and Tokio crates and make every
-handle generic over a transport. It keeps dispatch allocation-free, but
-`Server<T>` propagates through `Session<T>`, `Window<T>`, `Pane<T>`, queries,
-errors, and downstream signatures. The crate/version/feature coordination has
-no initial consumer. It is rejected as premature.
+A generic `Server<T>` carries its transport parameter through `Session<T>`,
+`Window<T>`, `Pane<T>`, queries, and downstream signatures. A private executor
+boundary keeps the public handles concrete instead.
 
 ### Tokio-first crate with an internal executor boundary
 
-This is the selected design. Public handles are concrete and cheap to clone.
-They share an `Arc<Core>`, while `Core` owns a private object-safe executor.
-The subprocess executor is Tokio-native. Public values above execution remain
-transport-independent.
+The original client put every operation above a private Tokio executor. Its
+blocking facade ran those futures on an owned runtime. That model remains in
+`libtmux-tokio`, including the optional `blocking::Runtime` compatibility API.
+It cannot provide a dependency-free blocking package by itself.
 
-The design grafts three proven ideas without importing their competing plan
-models:
+### Blocking client and native Tokio client
 
-- immutable, inspectable query and command values as the semantic source;
-- the familiar `Server -> Session -> Window -> Pane` authoring facade;
-- typed fields, portable predicates, traversal, and explicit cardinality.
+The base crate now owns blocking handles and runtime-independent values. The
+Tokio crate owns async handles and native Tokio process supervision. Both keep
+the familiar `Server -> Session -> Window -> Pane` hierarchy, immutable
+command and query values, typed fields, and explicit cardinality.
 
-A later engine layer can embed the same query and command values in one
-immutable statement graph. It must not introduce a second semantic model.
+Generating the common operation bodies keeps flags, capability checks,
+listing codecs, and error attribution aligned. Execution, scoped cleanup,
+channels, and control actors have separate implementations because waiting and
+cancellation differ between an occupied thread and a suspended future. The
+source inventory requires review when either canonical surface changes; a
+successful textual translation alone is not behavioral evidence.
 
 ## Spike findings
 
-The disposable spike compiled and exercised the selected seams against real
-tmux. Its source is not copied into the crate.
+The original Tokio implementation established these seams against real tmux.
+These findings describe that investigation; current package boundaries are
+described above.
 
 - Native async methods in a public transport trait are not object-safe. An
   internal boxed adapter kept the public transport implementation ergonomic
@@ -275,7 +277,7 @@ Server / Session / Window / Pane / Client
                                    |
                          private Executor trait
                                    |
-                        Tokio subprocess executor
+                   blocking subprocess or control executor
                                    |
                                   tmux
 ```
@@ -287,43 +289,37 @@ identity, default timeout, capability snapshot, and executor. Handles contain
 `Arc<Core>` plus owned identity and snapshot data. No public handle is generic
 over a runtime or executor.
 
-The private executor is stored as
-`Arc<dyn Executor + Send + Sync + 'static>`. It consumes an owned
-`CommandRequest` and returns a `Send` future producing a raw result. It never
-receives domain objects. Adding a public alternate executor later is additive
-because the boundary already exists, but the first release does not freeze an
-unused public async trait.
+The private executor is stored as `Arc<dyn Executor + Send + Sync + 'static>`.
+It consumes an owned `CommandRequest` and returns a lazy synchronous operation
+producing a raw result. It never receives domain objects. The native Tokio
+client has the corresponding future-returning executor boundary.
 
-Each `Core` owns its dispatch-request counter. Cloned `Server` values share
-that Core and counter; separately constructed servers have separate scopes,
-even when they identify the same tmux endpoint. The Core allocates an ID before
-executor validation, so a rejected request can carry an ID without spawning a
-process. A caller retry is another Core dispatch request and receives another
-ID. The ID is not globally unique or a process ID.
+A Core allocates an ID before validation, so a refused request still has an ID.
+Cloned and token-derived handles share the counter, capability cache, executor,
+and channel wait ledger. Separately constructed servers have separate request
+scopes, even when they identify the same endpoint. A retry receives a new ID;
+that ID is neither globally unique nor a process ID.
 
-The Tokio executor uses argv directly and never invokes a shell. Each spawned
-child is transferred to an independently owned supervisor task. That task
-captures stdout and stderr concurrently, applies a deadline, and remains
-responsible for terminating the child's isolated process group and awaiting the
-direct child after deadline expiry, caller cancellation, or explicit shutdown.
-Pipe draining precedes `wait`, so the unreaped direct child anchors the numeric
-process-group identity until inherited pipes close or the overall deadline
-expires. Dropping the caller future signals cancellation; `kill_on_drop` is
-only a final safety net and is never the reaping strategy.
+Blocking dispatch uses argv directly. It does not invoke a shell. The caller
+owns the direct child and drains nonblocking stdout and stderr fairly while
+checking the deadline, cancellation token, and shutdown state. Output limits
+bound retained bytes. The child remains unreaped until group signaling, so its
+PID anchors the process-group identity during normal library ownership. The
+absolute signal helper kills the group, then the direct child is waited for.
+A cleanup failure is retained for shutdown instead of reporting successful
+cleanup after the initiating caller has returned.
 
-Deterministic async reaping requires the Tokio runtime to remain alive until
-the operation or explicit executor shutdown completes. Runtime teardown cannot
-make that async guarantee; it synchronously signals the process group and uses
-`kill_on_drop` for the direct-child fallback, without claiming a completed
-wait. Callers that own a runtime shut the `Server` down before the runtime.
-`TestServer` separately owns its foreground tmux daemon as a synchronous child
-so its `Drop` cleanup does not depend on a live Tokio runtime.
+`CancellationToken` is explicit and shared. Cancellation can stop admission
+before spawning or interrupt an active request. It cannot undo a tmux mutation
+that has already happened, or stop a shell job tmux itself owns. Cleanup uses an
+uncancelled handle so cancelling a scope does not cancel its compensation.
+`Server::shutdown` closes admission, interrupts active clients, and waits for
+cleanup. It does not stop the tmux daemon.
 
-Concurrent subprocess requests have no ordering guarantee beyond the atomic
-execution of each process. Callers that require ordering await requests in
-sequence. A future persistent executor serializes protocol writes internally
-while preserving correlation between concurrent callers. Every public handle
-is `Send + Sync`; compile-time assertions make that contract executable.
+Concurrent subprocess requests have no ordering guarantee. Execute calls in
+sequence when order matters. Control mode serializes writes and correlates
+replies before admitting them to callers. Every public handle is `Send + Sync`;
+compile-time assertions keep that contract executable.
 
 ### Commands and results
 
@@ -422,7 +418,7 @@ relationships come from projection rows and IDs, never by splitting those
 display values.
 
 Future handles expose synchronous snapshot getters while live relationships
-and commands remain async. The planned `refresh(&mut self)` replaces the
+and commands perform blocking I/O. The planned `refresh(&mut self)` replaces the
 receiver's complete snapshot and returns `&mut Self`; `refreshed(&self)`
 returns a new handle. Clones remain independent snapshots sharing only
 `Core`.
@@ -685,22 +681,22 @@ or configuration input and never becomes the Rust authoring API.
 ### Object API
 
 Public modules and object names mirror Python. Properties that execute tmux
-become async methods; snapshot properties remain ordinary getters. Simple
+become blocking methods; snapshot properties remain ordinary getters. Simple
 operations remain methods with ordinary arguments. Operations with several
 optional clauses accept a consuming `#[must_use]` options builder through
 `impl Into<Options>`.
 
 ```no_run
-# async fn walk() -> Result<(), Box<dyn std::error::Error>> {
+# fn walk() -> Result<(), Box<dyn std::error::Error>> {
 use libtmux::Server;
 
 let server = Server::new()?;
-let session = server.new_session("work").await?;
-let window = session.new_window("editor").await?;
-let Some(pane) = window.active_pane().await? else {
+let session = server.new_session("work")?;
+let window = session.new_window("editor")?;
+let Some(pane) = window.active_pane()? else {
     return Ok(());
 };
-pane.send_keys("cargo test").await?;
+pane.send_keys("cargo test")?;
 # Ok(())
 # }
 ```
@@ -708,13 +704,13 @@ pane.send_keys("cargo test").await?;
 The same method accepts configured options without adding a second operation:
 
 ```no_run
-# async fn build(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+# fn build(server: &libtmux::Server) -> Result<(), libtmux::Error> {
 use libtmux::NewSessionOptions;
 
 let options = NewSessionOptions::new("work")
     .window_name("editor")
     .start_directory("workspace");
-let session = server.new_session(options).await?;
+let session = server.new_session(options)?;
 # let _ = session;
 # Ok(())
 # }
@@ -725,11 +721,12 @@ not extension traits users must import. Private macros may remove repetitive
 wrapper code while keeping generated public methods documented and tested.
 
 Python context-manager cleanup maps to `Server::with_session`,
-`Session::with_window`, and `Window::with_pane`. Each accepts an async closure
-and waits for cleanup after success or error. An owned task completes creation,
-arms cleanup before handing the object to the caller, and keeps cleanup running
-after cancellation. Cleanup needs the Tokio runtime to remain active; ordinary
-cloneable handles remain non-destructive.
+`Session::with_window`, and `Window::with_pane`. Each accepts an ordinary
+closure and completes cleanup before returning success or error. An owned
+guard also cleans up during panic unwinding. Cancellation before creation
+leaves tmux untouched; cancellation during creation waits for its resource ID
+and then removes it. A callback already running must cooperate with the token.
+Ordinary cloneable handles remain non-destructive.
 
 `ScopeError<T, E>` separates creation, operation and cleanup failures.
 Combined failures retain both the caller's generic error and the cleanup
@@ -761,20 +758,18 @@ List-shaped object access offers both shapes, and the short name is the loud one
 contract:
 
 ```no_run
-# async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-let loud = server.sessions().await?;
-let quiet = server.sessions().await.unwrap_or_default();
+# fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+let loud = server.sessions()?;
+let quiet = server.sessions().unwrap_or_default();
 # let _ = (loud, quiet);
 # Ok(())
 # }
 ```
 
-The first returns an empty `Vec` when the underlying tmux list operation fails
-and records the failure through tracing when enabled. The short form returns
-`Result<Vec<_>, Error>` and preserves command, framing, and decoding failures.
-This pair applies consistently to hierarchy collections. Expression
-construction, future explicit remote query execution, and mutations remain
-loud.
+The first call returns `Result<Vec<_>, Error>` and preserves command, framing,
+and decoding failures. The second explicitly converts every failure into an
+empty collection. Hierarchy collections follow the same rule; no method
+silently chooses that conversion for the caller.
 
 ### Capabilities and future engines
 
@@ -786,8 +781,9 @@ separate version-sensitive format concern. The version is reported by the
 configured executable and does not assert the build of a daemon already
 listening at the selected endpoint.
 
-The initial crate does not expose Statement, Program, planner, registry,
-approval, or retry policy APIs. The public query and command values can later
+The crate exposes immutable plans through its `plan` feature. It does not
+expose a global registry, approval policy, or automatic retry policy. Query
+and command values can later
 be embedded into one immutable graph. When prepared physical work lands, it
 must bind to the exact capability value and distinguish logical operation and
 node identity, the current Core-scoped dispatch-request identity,
@@ -873,7 +869,7 @@ not a current public module or export until its owning roadmap slice closes.
 | Targets         | Validated IDs, typed targets, winlink edges            | `src/target.rs`                         | object modules and `neo.py`               |
 | Queries         | Iterator extensions, typed expression AST, cardinality | `src/query.rs`                          | `_internal/query_list.py`, filtering docs |
 | Runtime core    | Configuration, capabilities, private executor          | `src/internal/core.rs`                  | command and fetch paths                   |
-| Tokio transport | Spawn, capture, timeout, cancellation, reaping         | `src/internal/subprocess.rs`            | `tmux_cmd`                                |
+| Process transport | Spawn, capture, timeout, cancellation, reaping         | `src/internal/subprocess.rs`            | `tmux_cmd`                                |
 | Server          | Connection and server-wide operations                  | `src/server.rs`                         | `src/libtmux/server.py`                   |
 | Session         | Session traversal and operations                       | `src/session.rs`                        | `src/libtmux/session.py`                  |
 | Window          | Winlink-aware traversal and operations                 | `src/window.rs`                         | `src/libtmux/window.py`                   |
@@ -901,7 +897,7 @@ Each guard:
   isolates its process group, and retains the foreground daemon child;
 - configures every command through the exposed `Server` with tmux's global
   no-start flag so it cannot bootstrap an unowned replacement daemon;
-- provides consuming async shutdown that awaits the owned daemon;
+- provides consuming blocking shutdown that waits for the owned daemon;
 - caps graceful observation at five seconds on targets without a safe
   non-reaping child-exit observer, then forces group cleanup and waits;
 - reobserves child ownership before each numeric signal phase and permanently
@@ -994,10 +990,9 @@ test file repeating an allow attribute. Files with helpers outside a test
 function still need one, since clippy's exemption follows test functions
 rather than file paths.
 
-`await_holding_lock` and `await_holding_invalid_type` are denied because the
-whole public surface is async and the transport supervisor holds a
-`std::sync::Mutex`. Nothing holds a guard across an await today; the lints
-keep it that way.
+`await_holding_lock` and `await_holding_invalid_type` remain workspace lints
+for the native async client. The blocking client uses scoped mutex guards
+and condition-variable waits; it has no async executor.
 
 `cargo semver-checks` compares the public API against the previous release
 and reports which lints a version bump would violate. It is a release gate
@@ -1169,44 +1164,24 @@ is `Copy`, so joining them allocates nothing per object.
 
 ## Toolchain and packaging
 
-MSRV is a promise about the published crates. `libtmux` and `libtmux-macros`
-build and test on 1.85. The consumer crates, `tmux-mcp` and `tmux-workspace`,
-exist to exercise the public API from outside. `tmux-mcp` carries its own MSRV
-of 1.88, because its dependencies need a compiler the libraries do not, and is
-tested on its own lane. All four crates publish; being published is part of
-the consumers' job rather than beside it, since a crate built only inside its
-own workspace never proves its dependency requirements resolve.
+All five published crates declare Rust 1.97.1. The workspace uses Edition
+2024, Cargo resolver 3, and the MIT OR Apache-2.0 license. The pinned toolchain
+installs Rustfmt, Clippy, and rust-src. Rustfmt uses stable settings.
 
-The consumers also prove the dependency edge runs one way: `libtmux` names
-neither of them, and `cargo tree -p libtmux` lists only caseless, regex,
-rustix, thiserror, and tokio.
+The default `libtmux` dependency graph contains only the package itself.
+`control-mode` and `plan` preserve that property. Optional capabilities add
+their declared dependencies: query uses caseless and regex; derive uses
+`libtmux-macros`; serde, schema, and tracing remain separate; test-support adds
+tempfile and rustix for fixture containment.
 
-A declared dependency version is the minimum this crate supports, not the
-newest published one. Cargo's version-aware resolver picks the newest release
-each toolchain can build, so a floor below the latest is the normal state
-rather than staleness. A floor is raised only for a fix the crate needs, and
-never above a version whose own `rust-version` exceeds the MSRV -- which is
-what rules out criterion 0.8 and trybuild 1.0.120 today.
+`libtmux-tokio` uses Tokio process, I/O, time, synchronization, runtime, and
+macro support; rustix provides native group signaling. It reuses the base
+package's primitive and query types. The downstream applications depend on
+that native client. Generator dependencies stay in the unpublished tool.
 
-The crate uses Edition 2024, Cargo resolver 3, `rust-version = "1.85"`, and
-the repository's MIT license. `rust-toolchain.toml` pins the development
-compiler and installs Rustfmt, Clippy, and rust-src. Rustfmt uses stable
-settings only.
-
-The Foundation dependency set stays narrow:
-
-- Tokio with only process, I/O, time, synchronization, runtime, and macro
-  features;
-- thiserror for the public error enum;
-- optional tracing instrumentation without subscriber configuration;
-- optional tempfile support for the public test guard.
-
-The query slice adds regex support plus independent optional `serde` and
-`derive` features. The derive macro lives in the sibling
-`libtmux-macros` proc-macro package; normal snapshot querying does not compile
-it. Current Cargo verifies the unpublished workspace packages in dependency
-order, while Rust 1.85 remains a build-and-test gate rather than a packaging
-toolchain.
+Package verification must cover the crates in dependency order. A workspace
+build alone does not prove that published archives contain their docs,
+examples, and dependency metadata, or that a standalone consumer resolves.
 
 The manifest includes complete description, repository, documentation,
 readme, license, keywords, categories, docs.rs feature metadata, and an
@@ -1265,8 +1240,8 @@ The crate is complete only when:
   pass;
 - real-tmux tests pass on tmux 3.2a and the maintained compatibility matrix;
 - socket isolation and cleanup pass under parallel tests and panic paths;
-- timeout, dropped-future, and task-abort tests prove process-group termination
-  and direct-child reaping;
+- blocking timeout, explicit cancellation, and shutdown tests prove process
+  cleanup; native dropped-future and task-abort tests cover async cleanup;
 - portable filter serialization matches the versioned grammar and local
   evaluation remains the reference semantics for any later pushdown;
 - server-wide linked-window and pane enumeration preserves every winlink;

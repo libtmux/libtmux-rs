@@ -20,8 +20,8 @@ assert_impl_all!(Pane: Clone, std::fmt::Debug, Eq, std::hash::Hash, Send, Sync);
 assert_impl_all!(Client: Clone, std::fmt::Debug, Eq, std::hash::Hash, Send, Sync);
 
 /// Run a setup command and require it to succeed.
-async fn run(server: &Server, command: Command) {
-    let result = server.cmd(command).await.expect("setup command executes");
+fn run(server: &Server, command: Command) {
+    let result = server.cmd(command).expect("setup command executes");
     assert!(
         result.success(),
         "setup command succeeds: {:?}",
@@ -30,7 +30,7 @@ async fn run(server: &Server, command: Command) {
 }
 
 /// Create a detached session running a long-lived placeholder process.
-async fn new_session(server: &Server, name: &str) {
+fn new_session(server: &Server, name: &str) {
     run(
         server,
         Command::new("new-session")
@@ -38,49 +38,36 @@ async fn new_session(server: &Server, name: &str) {
             .arg("-s")
             .arg(name)
             .arg("sleep 300"),
-    )
-    .await;
+    );
 }
 
-#[tokio::test]
-async fn empty_server_lists_nothing_across_the_hierarchy() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn empty_server_lists_nothing_across_the_hierarchy() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    assert!(server.sessions().await.unwrap_or_default().is_empty());
-    assert!(server.windows().await.unwrap_or_default().is_empty());
-    assert!(server.panes().await.unwrap_or_default().is_empty());
+    assert!(server.sessions().unwrap_or_default().is_empty());
+    assert!(server.windows().unwrap_or_default().is_empty());
+    assert!(server.panes().unwrap_or_default().is_empty());
 
     // An empty listing is an ordinary result, not a decoding failure.
-    assert!(
-        server
-            .sessions()
-            .await
-            .expect("loud form succeeds")
-            .is_empty()
-    );
-    assert!(
-        server
-            .windows()
-            .await
-            .expect("loud form succeeds")
-            .is_empty()
-    );
-    assert!(server.panes().await.expect("loud form succeeds").is_empty());
+    assert!(server.sessions().expect("loud form succeeds").is_empty());
+    assert!(server.windows().expect("loud form succeeds").is_empty());
+    assert!(server.panes().expect("loud form succeeds").is_empty());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn listings_preserve_tmux_order_and_report_snapshot_values() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn listings_preserve_tmux_order_and_report_snapshot_values() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     for name in ["alpha", "beta", "gamma"] {
-        new_session(server, name).await;
+        new_session(server, name);
     }
 
-    let sessions = server.sessions().await.expect("sessions list");
+    let sessions = server.sessions().expect("sessions list");
     let names = sessions
         .iter()
         .map(|session| session.name().as_bytes().to_vec())
@@ -109,21 +96,20 @@ async fn listings_preserve_tmux_order_and_report_snapshot_values() {
     assert_ne!(sessions[0], sessions[1]);
     assert_eq!(sessions[0], sessions[0].clone());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_linked_window_appears_once_per_session_that_links_it() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_linked_window_appears_once_per_session_that_links_it() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "origin").await;
-    new_session(server, "borrower").await;
+    new_session(server, "origin");
+    new_session(server, "borrower");
 
-    let origin = session_id(server, "origin").await;
+    let origin = session_id(server, "origin");
     let source = server
         .windows()
-        .await
         .expect("windows list")
         .into_iter()
         .find(|window| window.session_id().to_string() == origin)
@@ -136,10 +122,9 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
             .arg(source.id().to_string())
             .arg("-t")
             .arg("borrower:9"),
-    )
-    .await;
+    );
 
-    let windows = server.windows().await.expect("windows list");
+    let windows = server.windows().expect("windows list");
     let links = windows
         .iter()
         .filter(|window| window.id() == source.id())
@@ -162,7 +147,7 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
     );
 
     // Panes under a linked window repeat for the same reason.
-    let panes = server.panes().await.expect("panes list");
+    let panes = server.panes().expect("panes list");
     let pane_rows = panes
         .iter()
         .filter(|pane| pane.window_id() == source.id())
@@ -171,14 +156,13 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
     // Unlike windows, pane identity ignores the discovery edge.
     assert_eq!(pane_rows[0], pane_rows[1]);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Resolve a session id by name through the public listing.
-async fn session_id(server: &Server, name: &str) -> String {
+fn session_id(server: &Server, name: &str) -> String {
     server
         .sessions()
-        .await
         .expect("sessions list")
         .into_iter()
         .find(|session| session.name().as_bytes() == name.as_bytes())
@@ -187,12 +171,12 @@ async fn session_id(server: &Server, name: &str) -> String {
         .to_string()
 }
 
-#[tokio::test]
-async fn panes_report_their_window_and_process_details() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn panes_report_their_window_and_process_details() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "work").await;
+    new_session(server, "work");
     run(
         server,
         Command::new("split-window")
@@ -200,13 +184,12 @@ async fn panes_report_their_window_and_process_details() {
             .arg("work")
             .arg("-d")
             .arg("sleep 300"),
-    )
-    .await;
+    );
 
-    let panes = server.panes().await.expect("panes list");
+    let panes = server.panes().expect("panes list");
     assert_eq!(panes.len(), 2, "the split produced a second pane");
 
-    let windows = server.windows().await.expect("windows list");
+    let windows = server.windows().expect("windows list");
     assert_eq!(windows.len(), 1, "both panes share one window");
     assert_eq!(windows[0].pane_count(), 2);
 
@@ -227,18 +210,18 @@ async fn panes_report_their_window_and_process_details() {
     );
     assert_ne!(panes[0], panes[1]);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// `Pane::left`/`Pane::top` must agree with tmux's own `#{pane_left}` and
 /// `#{pane_top}`, and actually separate two panes a horizontal split placed
 /// side by side.
-#[tokio::test]
-async fn pane_position_matches_the_raw_format_fields() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn pane_position_matches_the_raw_format_fields() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "positions").await;
+    new_session(server, "positions");
     run(
         server,
         Command::new("split-window")
@@ -247,16 +230,14 @@ async fn pane_position_matches_the_raw_format_fields() {
             .arg("-h")
             .arg("-d")
             .arg("sleep 300"),
-    )
-    .await;
+    );
 
-    let panes = server.panes().await.expect("panes list");
+    let panes = server.panes().expect("panes list");
     assert_eq!(panes.len(), 2, "the split produced a second pane");
 
     for pane in &panes {
         let left = pane
             .format("#{pane_left}")
-            .await
             .expect("pane_left reads")
             .as_str()
             .expect("pane_left is ASCII")
@@ -264,7 +245,6 @@ async fn pane_position_matches_the_raw_format_fields() {
             .expect("pane_left is an integer");
         let top = pane
             .format("#{pane_top}")
-            .await
             .expect("pane_top reads")
             .as_str()
             .expect("pane_top is ASCII")
@@ -281,16 +261,16 @@ async fn pane_position_matches_the_raw_format_fields() {
     assert_ne!(lefts[0], lefts[1], "a horizontal split separates the panes");
     assert_eq!(panes[0].top(), panes[1].top());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn traversal_scopes_each_level_to_its_parent() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn traversal_scopes_each_level_to_its_parent() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "one").await;
-    new_session(server, "two").await;
+    new_session(server, "one");
+    new_session(server, "two");
     run(
         server,
         Command::new("new-window")
@@ -298,8 +278,7 @@ async fn traversal_scopes_each_level_to_its_parent() {
             .arg("-t")
             .arg("one")
             .arg("sleep 300"),
-    )
-    .await;
+    );
     run(
         server,
         Command::new("split-window")
@@ -307,10 +286,9 @@ async fn traversal_scopes_each_level_to_its_parent() {
             .arg("-t")
             .arg("one")
             .arg("sleep 300"),
-    )
-    .await;
+    );
 
-    let sessions = server.sessions().await.expect("sessions list");
+    let sessions = server.sessions().expect("sessions list");
     let one = sessions
         .iter()
         .find(|session| session.name().as_bytes() == b"one")
@@ -321,11 +299,11 @@ async fn traversal_scopes_each_level_to_its_parent() {
         .expect("session two exists");
 
     // Session scoping: the server sees three windows, each session sees its own.
-    assert_eq!(server.windows().await.expect("windows").len(), 3);
-    assert_eq!(one.windows().await.expect("windows").len(), 2);
-    assert_eq!(two.windows().await.expect("windows").len(), 1);
+    assert_eq!(server.windows().expect("windows").len(), 3);
+    assert_eq!(one.windows().expect("windows").len(), 2);
+    assert_eq!(two.windows().expect("windows").len(), 1);
 
-    let one_windows = one.windows().await.expect("windows");
+    let one_windows = one.windows().expect("windows");
     assert!(
         one_windows
             .iter()
@@ -336,7 +314,6 @@ async fn traversal_scopes_each_level_to_its_parent() {
     // Exactly one window is active per session, and it is reachable directly.
     let active = one
         .active_window()
-        .await
         .expect("active window resolves")
         .expect("a session always has an active window");
     assert!(active.is_active());
@@ -353,7 +330,7 @@ async fn traversal_scopes_each_level_to_its_parent() {
         .iter()
         .find(|window| window.pane_count() == 2)
         .expect("one window holds the split");
-    let panes = split_window.panes().await.expect("panes list");
+    let panes = split_window.panes().expect("panes list");
     assert_eq!(panes.len(), 2);
     assert!(
         panes
@@ -363,35 +340,32 @@ async fn traversal_scopes_each_level_to_its_parent() {
 
     let active_pane = split_window
         .active_pane()
-        .await
         .expect("active pane resolves")
         .expect("a window always has an active pane");
     assert!(active_pane.is_active());
 
     // Session-scoped panes span every window in that session.
-    assert_eq!(one.panes().await.expect("panes").len(), 3);
-    assert_eq!(two.panes().await.expect("panes").len(), 1);
+    assert_eq!(one.panes().expect("panes").len(), 3);
+    assert_eq!(two.panes().expect("panes").len(), 1);
 
     // Upward traversal re-reads tmux and lands back where we started.
     let parent = split_window
         .session()
-        .await
         .expect("parent resolves")
         .expect("the parent session still exists");
     assert_eq!(&parent, one);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn upward_traversal_reflects_a_rename_rather_than_the_snapshot() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn upward_traversal_reflects_a_rename_rather_than_the_snapshot() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "before").await;
+    new_session(server, "before");
     let window = server
         .windows()
-        .await
         .expect("windows list")
         .into_iter()
         .next()
@@ -403,13 +377,11 @@ async fn upward_traversal_reflects_a_rename_rather_than_the_snapshot() {
             .arg("-t")
             .arg("before")
             .arg("after"),
-    )
-    .await;
+    );
 
     // The handle still holds its original snapshot...
     let parent = window
         .session()
-        .await
         .expect("parent resolves")
         .expect("the parent session still exists");
 
@@ -418,18 +390,17 @@ async fn upward_traversal_reflects_a_rename_rather_than_the_snapshot() {
     // Identity is unchanged by a rename, so the handles still match.
     assert_eq!(parent.id(), window.session_id());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn refreshing_one_handle_leaves_its_clones_alone() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn refreshing_one_handle_leaves_its_clones_alone() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "before").await;
+    new_session(server, "before");
     let mut session = server
         .sessions()
-        .await
         .expect("sessions list")
         .into_iter()
         .next()
@@ -442,14 +413,13 @@ async fn refreshing_one_handle_leaves_its_clones_alone() {
             .arg("-t")
             .arg("before")
             .arg("after"),
-    )
-    .await;
+    );
 
     // Neither handle changes until one is asked to.
     assert_eq!(session.name().as_bytes().to_vec(), b"before".to_vec());
     assert_eq!(stale.name().as_bytes().to_vec(), b"before".to_vec());
 
-    session.refresh().await.expect("the session still exists");
+    session.refresh().expect("the session still exists");
 
     assert_eq!(session.name().as_bytes().to_vec(), b"after".to_vec());
     assert_eq!(
@@ -461,34 +431,32 @@ async fn refreshing_one_handle_leaves_its_clones_alone() {
     assert_eq!(session, stale);
 
     // The non-mutating form leaves the receiver as it was.
-    let refreshed = stale.refreshed().await.expect("the session still exists");
+    let refreshed = stale.refreshed().expect("the session still exists");
     assert_eq!(refreshed.name().as_bytes().to_vec(), b"after".to_vec());
     assert_eq!(stale.name().as_bytes().to_vec(), b"before".to_vec());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn refresh_reports_an_object_that_tmux_no_longer_has() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn refresh_reports_an_object_that_tmux_no_longer_has() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "keep").await;
-    new_session(server, "drop").await;
+    new_session(server, "keep");
+    new_session(server, "drop");
 
     let mut doomed = server
         .sessions()
-        .await
         .expect("sessions list")
         .into_iter()
         .find(|session| session.name().as_bytes() == b"drop")
         .expect("the doomed session exists");
 
-    run(server, Command::new("kill-session").arg("-t").arg("drop")).await;
+    run(server, Command::new("kill-session").arg("-t").arg("drop"));
 
     let error = doomed
         .refresh()
-        .await
         .expect_err("a killed session cannot refresh");
     assert!(
         matches!(
@@ -501,18 +469,17 @@ async fn refresh_reports_an_object_that_tmux_no_longer_has() {
         "a vanished object is distinct from a connection failure, got {error:?}",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn refresh_follows_a_window_that_moved_index() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn refresh_follows_a_window_that_moved_index() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "work").await;
+    new_session(server, "work");
     let mut window = server
         .windows()
-        .await
         .expect("windows list")
         .into_iter()
         .next()
@@ -526,38 +493,32 @@ async fn refresh_follows_a_window_that_moved_index() {
             .arg(window.id().to_string())
             .arg("-t")
             .arg("work:12"),
-    )
-    .await;
+    );
 
-    window.refresh().await.expect("the window still exists");
+    window.refresh().expect("the window still exists");
 
     assert_eq!(window.index(), 12);
     assert_ne!(window.index(), original);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn liveness_and_session_lookup_answer_over_raw_bytes() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn liveness_and_session_lookup_answer_over_raw_bytes() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    assert!(server.is_alive().await, "a started server answers");
-    assert!(!server.has_session("absent").await.expect("lookup succeeds"));
+    assert!(server.is_alive(), "a started server answers");
+    assert!(!server.has_session("absent").expect("lookup succeeds"));
 
-    new_session(server, "present").await;
+    new_session(server, "present");
+    assert!(server.has_session("present").expect("lookup succeeds"));
     assert!(
-        server
-            .has_session("present")
-            .await
-            .expect("lookup succeeds")
-    );
-    assert!(
-        !server.has_session("presen").await.expect("lookup succeeds"),
+        !server.has_session("presen").expect("lookup succeeds"),
         "matching is exact rather than a prefix",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// No `-t` target reaches a session named with `:` or `.` the way a bare
@@ -572,68 +533,60 @@ async fn liveness_and_session_lookup_answer_over_raw_bytes() {
 /// releases rewrite the separator out of the name and one refuses it at
 /// creation, so this skips itself rather than assume a version where the
 /// live session it needs cannot exist.
-#[tokio::test]
-async fn session_lookup_finds_a_name_no_target_could_address() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn session_lookup_finds_a_name_no_target_could_address() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    let Ok(session) = server.new_session(NewSessionOptions::new("my.proj")).await else {
-        guard.shutdown().await.expect("tmux fixture shuts down");
+    let Ok(session) = server.new_session(NewSessionOptions::new("my.proj")) else {
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     };
     if session.name().to_string_lossy() != "my.proj" {
-        guard.shutdown().await.expect("tmux fixture shuts down");
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     }
 
     assert!(
-        server
-            .has_session("my.proj")
-            .await
-            .expect("lookup succeeds"),
+        server.has_session("my.proj").expect("lookup succeeds"),
         "list-and-compare should find a session no -t target can address by name",
     );
     assert!(
         server
             .session("my.proj")
-            .await
             .expect("lookup succeeds")
             .is_some()
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_dead_server_yields_empty_leniently_and_an_error_loudly() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_dead_server_yields_empty_leniently_and_an_error_loudly() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server().clone();
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 
     // The lenient contract hides the cause behind an empty listing.
-    assert!(server.sessions().await.unwrap_or_default().is_empty());
-    assert!(server.windows().await.unwrap_or_default().is_empty());
-    assert!(server.panes().await.unwrap_or_default().is_empty());
+    assert!(server.sessions().unwrap_or_default().is_empty());
+    assert!(server.windows().unwrap_or_default().is_empty());
+    assert!(server.panes().unwrap_or_default().is_empty());
 
     // The loud form keeps it. This is the whole reason both forms exist: the
     // executor is gone, which is a caller mistake rather than an empty server.
     let error = server
         .sessions()
-        .await
         .expect_err("a shut-down executor cannot list");
     assert!(
         matches!(error, libtmux::Error::ExecutorShutdown { .. }),
         "the loud form preserves the real cause, got {error:?}",
     );
 
-    server
-        .shutdown()
-        .await
-        .expect("executor shutdown is idempotent");
+    server.shutdown().expect("executor shutdown is idempotent");
 }
 
-#[tokio::test]
-async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
+#[test]
+fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
     // A server that was never started is the ordinary "nothing running" case,
     // and the pair of listing forms is what lets one caller shrug at it while
     // another must not.
@@ -644,13 +597,12 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
         .expect("an inert server handle is built");
 
     assert!(
-        server.sessions().await.unwrap_or_default().is_empty(),
+        server.sessions().unwrap_or_default().is_empty(),
         "the lenient form suits a status line, which has nothing to say",
     );
 
     let error = server
         .sessions()
-        .await
         .expect_err("the loud form keeps the reason");
     assert!(
         !error.is_object_gone(),
@@ -658,11 +610,8 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
     );
 
     // Which question was being asked is what these primitives are for.
-    assert!(!server.is_alive().await);
-    let error = server
-        .check_alive()
-        .await
-        .expect_err("the daemon is absent");
+    assert!(!server.is_alive());
+    let error = server.check_alive().expect_err("the daemon is absent");
     assert_eq!(error.kind(), ErrorKind::ServerGone, "{error}");
     assert!(
         matches!(
@@ -676,11 +625,11 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
     );
     assert!(!error.is_object_gone());
 
-    server.shutdown().await.expect("executor shuts down");
+    server.shutdown().expect("executor shuts down");
 }
 
-#[tokio::test]
-async fn typed_server_absence_errors_withhold_endpoint_paths() {
+#[test]
+fn typed_server_absence_errors_withhold_endpoint_paths() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let server = Server::builder()
         .socket_path(directory.path().join("sentinel-absent.sock"))
@@ -688,16 +637,16 @@ async fn typed_server_absence_errors_withhold_endpoint_paths() {
         .expect("an inert server handle is built");
     let socket = server.socket_path().display().to_string();
 
-    let error = server.sessions().await.expect_err("the daemon is absent");
+    let error = server.sessions().expect_err("the daemon is absent");
     assert_eq!(error.kind(), ErrorKind::ServerGone, "{error}");
     assert!(!error.to_string().contains(&socket));
     assert!(!format!("{error:?}").contains(&socket));
 
-    server.shutdown().await.expect("executor shuts down");
+    server.shutdown().expect("executor shuts down");
 }
 
-#[tokio::test]
-async fn from_env_reads_only_the_socket_path_out_of_the_tmux_triple() {
+#[test]
+fn from_env_reads_only_the_socket_path_out_of_the_tmux_triple() {
     // tmux exports `<socket_path>,<server_pid>,<session_id>`. The pid and the
     // session id are frozen when a pane spawns, so only the path is used.
     let server = Server::from_env_value(Some("/tmp/libtmux-rs-test/from-env.sock,4242,$7"))
@@ -720,63 +669,53 @@ async fn from_env_reads_only_the_socket_path_out_of_the_tmux_triple() {
     );
 }
 
-#[tokio::test]
-async fn attached_sessions_selects_only_sessions_with_clients() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn attached_sessions_selects_only_sessions_with_clients() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    new_session(server, "solo").await;
+    new_session(server, "solo");
 
     // Nothing is attached in a headless fixture, so the filtered listing is
     // empty while the unfiltered one is not.
-    assert_eq!(server.sessions().await.expect("sessions").len(), 1);
+    assert_eq!(server.sessions().expect("sessions").len(), 1);
     assert!(
         server
             .attached_sessions()
-            .await
             .expect("attached sessions")
             .is_empty(),
     );
-    assert!(
-        server
-            .attached_sessions()
-            .await
-            .unwrap_or_default()
-            .is_empty()
-    );
+    assert!(server.attached_sessions().unwrap_or_default().is_empty());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn lookups_find_one_object_by_name_id_or_index() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn lookups_find_one_object_by_name_id_or_index() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    let alpha = server.new_session("alpha").await.expect("session");
-    server.new_session("beta").await.expect("session");
+    let alpha = server.new_session("alpha").expect("session");
+    server.new_session("beta").expect("session");
     alpha
         .new_window(NewWindowOptions::new("editor").command("sleep 300"))
-        .await
         .expect("window");
 
     // By name, byte-exact.
     let found = server
         .session("beta")
-        .await
         .expect("lookup")
         .expect("beta exists");
     assert_eq!(found.name().as_bytes().to_vec(), b"beta".to_vec());
-    assert!(server.session("gamma").await.expect("lookup").is_none());
+    assert!(server.session("gamma").expect("lookup").is_none());
     assert!(
-        server.session("bet").await.expect("lookup").is_none(),
+        server.session("bet").expect("lookup").is_none(),
         "matching is exact rather than a prefix",
     );
 
     // By id.
     let by_id = server
         .session_by_id(alpha.id())
-        .await
         .expect("lookup")
         .expect("alpha exists");
     assert_eq!(by_id, alpha);
@@ -784,48 +723,38 @@ async fn lookups_find_one_object_by_name_id_or_index() {
     // Scoped to the parent, by name and by index.
     let editor = alpha
         .window("editor")
-        .await
         .expect("lookup")
         .expect("editor exists");
     assert_eq!(editor.name().as_bytes().to_vec(), b"editor".to_vec());
     let at_index = alpha
         .window_at(editor.index())
-        .await
         .expect("lookup")
         .expect("the index is occupied");
     assert_eq!(at_index, editor);
-    assert!(alpha.window_at(999).await.expect("lookup").is_none());
+    assert!(alpha.window_at(999).expect("lookup").is_none());
 
     // A window in another session is not found through this one.
-    assert!(
-        alpha
-            .window("nothing-here")
-            .await
-            .expect("lookup")
-            .is_none()
-    );
+    assert!(alpha.window("nothing-here").expect("lookup").is_none());
 
     let pane = editor
         .pane_at(0)
-        .await
         .expect("lookup")
         .expect("a window always has a pane at its first index");
     assert_eq!(pane.window_id(), editor.id());
     assert_eq!(
         server
             .pane_by_id(pane.id())
-            .await
             .expect("lookup")
             .expect("the pane exists"),
         pane,
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_name_that_would_corrupt_a_tmux_filter_is_still_found() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_name_that_would_corrupt_a_tmux_filter_is_still_found() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // Looking up by building a tmux `-f` predicate around the name would let
@@ -835,16 +764,15 @@ async fn a_name_that_would_corrupt_a_tmux_filter_is_still_found() {
     // name as it is created, so `has#{format}` is stored as `has` and never
     // reaches a lookup. Braces and commas do survive.
     for name in ["has}brace", "has,comma"] {
-        server.new_session(name).await.expect("session");
+        server.new_session(name).expect("session");
         let found = server
             .session(name)
-            .await
             .expect("lookup")
             .unwrap_or_else(|| panic!("{name} is found"));
         assert_eq!(found.name().as_bytes().to_vec(), name.as_bytes().to_vec());
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A field tmux left empty must not fail the listing that carries it.
@@ -861,47 +789,42 @@ async fn a_name_that_would_corrupt_a_tmux_filter_is_still_found() {
 /// produced it, so one such session took the answer away from every caller of
 /// every session listing, including the lookups that would have found it to
 /// kill it.
-#[tokio::test]
-async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    let keep = server.new_session("keep").await.expect("a named session");
+    let keep = server.new_session("keep").expect("a named session");
 
     // Asking tmux rather than predicting it: either answer is a release
     // behaving as it does, and neither may cost another caller its listing.
     let mut expected = 1;
-    if let Ok(unnamed) = server.new_session("").await {
+    if let Ok(unnamed) = server.new_session("") {
         assert!(unnamed.name().as_bytes().is_empty());
         expected += 1;
     }
 
     let rootless = server
         .new_session(NewSessionOptions::new("rootless").start_directory(""))
-        .await
         .expect("an empty start directory");
     assert!(rootless.path().as_bytes().is_empty());
     expected += 1;
 
     assert_eq!(
-        server.sessions().await.expect("every row decodes").len(),
+        server.sessions().expect("every row decodes").len(),
         expected,
     );
-    assert_eq!(
-        server.hierarchy().await.expect("the whole tree").len(),
-        expected,
-    );
-    assert!(server.has_session("keep").await.expect("liveness"));
+    assert_eq!(server.hierarchy().expect("the whole tree").len(), expected,);
+    assert!(server.has_session("keep").expect("liveness"));
     assert_eq!(
         keep.refreshed()
-            .await
             .expect("a healthy handle refreshes")
             .name()
             .as_bytes(),
         b"keep",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// A name reaches tmux as text, and as a format only when asked.
@@ -919,15 +842,14 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
 /// decorative. Expansion is observed through the stored value, never through a
 /// `#()` job's side effect -- that job is asynchronous and unbounded, and
 /// waiting on the file it writes failed exactly that way at load average 21.
-#[tokio::test]
-async fn real_tmux_compat_a_name_reaches_tmux_as_text() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn real_tmux_compat_a_name_reaches_tmux_as_text() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // The ordinary path: what the caller passed is what tmux stored.
     let literal = server
         .new_session("#{version}")
-        .await
         .expect("tmux accepts the escaped name");
     assert_eq!(
         literal.name().as_bytes(),
@@ -938,13 +860,11 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_text() {
     // `#{version}` rather than anything about the session: tmux expands the
     // name before the session it would describe exists, which is why a
     // templated name so often expands to nothing.
-    let Ok(expanded) = server
-        .new_session(NewSessionOptions::new(TmuxArg::format("#{version}")))
-        .await
+    let Ok(expanded) = server.new_session(NewSessionOptions::new(TmuxArg::format("#{version}")))
     else {
         // A release that refuses the name is protecting the caller from all
         // of this, and there is nothing left to observe.
-        guard.shutdown().await.expect("tmux fixture shuts down");
+        guard.shutdown().expect("tmux fixture shuts down");
         return;
     };
     assert_ne!(
@@ -957,43 +877,39 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_text() {
         "the expansion had a value to put there",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn one_hierarchy_fetch_matches_walking_down() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn one_hierarchy_fetch_matches_walking_down() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     for name in ["alpha", "beta"] {
-        let session = server.new_session(name).await.expect("session");
+        let session = server.new_session(name).expect("session");
         session
             .new_window(NewWindowOptions::new("second").command("sleep 300"))
-            .await
             .expect("window");
     }
     let first = server
         .session("alpha")
-        .await
         .expect("lookup")
         .expect("alpha exists");
     first
-        .window_at(first.windows().await.expect("windows")[0].index())
-        .await
+        .window_at(first.windows().expect("windows")[0].index())
         .expect("lookup")
         .expect("the window exists")
         .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
-        .await
         .expect("pane");
 
     // Walking down and fetching at once must describe the same server.
-    let tree = server.hierarchy().await.expect("hierarchy");
+    let tree = server.hierarchy().expect("hierarchy");
     let walked: Vec<_> = {
         let mut walked = Vec::new();
-        for session in server.sessions().await.expect("sessions") {
+        for session in server.sessions().expect("sessions") {
             let mut windows = Vec::new();
-            for window in session.windows().await.expect("windows") {
-                let panes = window.panes().await.expect("panes");
+            for window in session.windows().expect("windows") {
+                let panes = window.panes().expect("panes");
                 windows.push((window, panes));
             }
             walked.push((session, windows));
@@ -1019,19 +935,18 @@ async fn one_hierarchy_fetch_matches_walking_down() {
     assert_eq!(tree[0].windows[0].panes.len(), 2);
     assert_eq!(tree[1].windows[0].panes.len(), 1);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_linked_window_appears_under_every_session_that_links_it() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_linked_window_appears_under_every_session_that_links_it() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    let origin = server.new_session("origin").await.expect("session");
-    server.new_session("borrower").await.expect("session");
+    let origin = server.new_session("origin").expect("session");
+    server.new_session("borrower").expect("session");
     let shared = origin
         .new_window(NewWindowOptions::new("shared").command("sleep 300"))
-        .await
         .expect("window");
 
     run(
@@ -1041,12 +956,11 @@ async fn a_linked_window_appears_under_every_session_that_links_it() {
             .arg(shared.id().to_string())
             .arg("-t")
             .arg("borrower:9"),
-    )
-    .await;
+    );
 
     // Stitching is by winlink, so a linked window is under both sessions with
     // the same panes rather than being assigned to one of them.
-    let tree = server.hierarchy().await.expect("hierarchy");
+    let tree = server.hierarchy().expect("hierarchy");
     let holders: Vec<_> = tree
         .iter()
         .filter(|branch| {
@@ -1066,33 +980,30 @@ async fn a_linked_window_appears_under_every_session_that_links_it() {
         assert_eq!(built.panes.len(), 1);
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_process_inside_tmux_can_find_where_it_is() {
+#[test]
+fn a_process_inside_tmux_can_find_where_it_is() {
     use libtmux::{Pane, Session, Window};
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("located").await.expect("session");
+    let session = server.new_session("located").expect("session");
     let window = session
         .new_window(NewWindowOptions::new("second").command("sleep 300"))
-        .await
         .expect("window");
-    let pane = window.panes().await.expect("panes").remove(0);
+    let pane = window.panes().expect("panes").remove(0);
 
     // tmux exports TMUX_PANE to every process it starts. Reading it back is
     // how a program answers "where am I" without being told.
     let reported = server
         .format(Some(&pane), "#{pane_id}")
-        .await
         .expect("a format expands");
     let value = std::ffi::OsString::from(reported.to_string_lossy().into_owned());
 
     assert_eq!(
         Pane::from_env_value(server, Some(&value))
-            .await
             .expect("the lookup runs")
             .expect("the pane exists")
             .id(),
@@ -1100,7 +1011,6 @@ async fn a_process_inside_tmux_can_find_where_it_is() {
     );
     assert_eq!(
         Window::from_env_value(server, Some(&value))
-            .await
             .expect("the lookup runs")
             .expect("the window exists")
             .id(),
@@ -1108,7 +1018,6 @@ async fn a_process_inside_tmux_can_find_where_it_is() {
     );
     assert_eq!(
         Session::from_env_value(server, Some(&value))
-            .await
             .expect("the lookup runs")
             .expect("the session exists")
             .id(),
@@ -1118,53 +1027,45 @@ async fn a_process_inside_tmux_can_find_where_it_is() {
     // A pane that has gone is absent rather than an error: the value can
     // outlive what it names.
     let gone = pane.id().clone();
-    window.kill().await.expect("the window is killed");
+    window.kill().expect("the window is killed");
     assert!(
         Pane::from_env_value(server, Some(gone.as_ref()))
-            .await
             .expect("the lookup runs")
             .is_none(),
     );
 
     // Not being inside tmux at all is a different thing, and says so.
     assert!(
-        Pane::from_env_value(server, None::<&str>).await.is_err(),
+        Pane::from_env_value(server, None::<&str>).is_err(),
         "an absent TMUX_PANE is a configuration error, not an empty result",
     );
-    assert!(
-        Pane::from_env_value(server, Some("not-a-pane-id"))
-            .await
-            .is_err(),
-    );
+    assert!(Pane::from_env_value(server, Some("not-a-pane-id")).is_err(),);
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn linked_sessions_survive_a_session_name_that_looks_like_a_list() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn linked_sessions_survive_a_session_name_that_looks_like_a_list() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
-    let first = server.new_session("first").await.expect("first session");
+    let first = server.new_session("first").expect("first session");
     // tmux reports `#{window_linked_sessions_list}` as comma-separated names,
     // so this name makes that field read exactly like two more sessions.
     // Reading the winlink rows instead is what survives it.
     let awkward = server
         .new_session("has,comma")
-        .await
         .expect("a session whose name holds a comma");
     let window = first
         .active_window()
-        .await
         .expect("active window")
         .expect("a session has a window");
 
     window
         .link_to(&awkward, None)
-        .await
         .expect("the window links into both");
 
-    let linked = window.linked_sessions().await.expect("linked sessions");
+    let linked = window.linked_sessions().expect("linked sessions");
     let mut names: Vec<String> = linked
         .iter()
         .map(|session| String::from_utf8_lossy(session.name().as_bytes()).into_owned())
@@ -1177,36 +1078,28 @@ async fn linked_sessions_survive_a_session_name_that_looks_like_a_list() {
         "two sessions, not the three the name list would suggest",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn navigation_reports_nowhere_to_go_as_absence_not_failure() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn navigation_reports_nowhere_to_go_as_absence_not_failure() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("moving").await.expect("session");
+    let session = server.new_session("moving").expect("session");
 
     // tmux reports "no next window" as a command failure, but a session
     // holding one window has no next window and never will. Treating that as
     // an error would make a caller read stderr to tell it from tmux breaking.
-    assert!(session.next_window().await.expect("no failure").is_none());
-    assert!(
-        session
-            .previous_window()
-            .await
-            .expect("no failure")
-            .is_none()
-    );
-    assert!(session.last_window().await.expect("no failure").is_none());
+    assert!(session.next_window().expect("no failure").is_none());
+    assert!(session.previous_window().expect("no failure").is_none());
+    assert!(session.last_window().expect("no failure").is_none());
 
     let second = session
         .new_window(NewWindowOptions::new("second"))
-        .await
         .expect("second window");
 
     let moved = session
         .next_window()
-        .await
         .expect("no failure")
         .expect("there is somewhere to go now");
     assert_eq!(
@@ -1218,51 +1111,45 @@ async fn navigation_reports_nowhere_to_go_as_absence_not_failure() {
     // Back where it started, which is what `last-window` means.
     let back = session
         .last_window()
-        .await
         .expect("no failure")
         .expect("a previous window exists");
     assert_ne!(back.id(), second.id());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn a_point_lookup_picks_the_link_the_window_is_current_through() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn a_point_lookup_picks_the_link_the_window_is_current_through() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let server = guard.server();
 
     // The same window, linked into two sessions, current in only one of them.
     // Activity belongs to the link rather than to the window.
-    let alpha = server.new_session("alpha").await.expect("alpha");
+    let alpha = server.new_session("alpha").expect("alpha");
     let target = alpha
         .active_window()
-        .await
         .expect("active window")
         .expect("a session has a window");
     let target_id = target.id().clone();
     alpha
         .new_window(NewWindowOptions::new("other"))
-        .await
         .expect("a second window in alpha");
 
-    let beta = server.new_session("beta").await.expect("beta");
-    target.link_to(&beta, Some(5)).await.expect("link");
+    let beta = server.new_session("beta").expect("beta");
+    target.link_to(&beta, Some(5)).expect("link");
 
     // Make it current in beta and not in alpha. tmux lists alpha's row first,
     // because it lists by session name, so "the first row" would be the
     // inactive link and would depend on what the sessions are called.
     server
         .cmd(Command::new("select-window").arg("-t").arg("alpha:1"))
-        .await
         .expect("alpha selects its other window");
     server
         .cmd(Command::new("select-window").arg("-t").arg("beta:5"))
-        .await
         .expect("beta selects the linked window");
 
     let found = server
         .window_by_id(&target_id)
-        .await
         .expect("lookup")
         .expect("the window exists");
 
@@ -1277,7 +1164,7 @@ async fn a_point_lookup_picks_the_link_the_window_is_current_through() {
         "so the handle is bound to the session the window is current in",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 /// Every public type prints, and the ones holding paths do not print them.
@@ -1317,8 +1204,8 @@ fn public_types_are_printable_without_disclosing_paths() {
     }
 }
 
-#[tokio::test]
-async fn handle_equality_and_hashing_separate_two_servers() {
+#[test]
+fn handle_equality_and_hashing_separate_two_servers() {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -1328,16 +1215,16 @@ async fn handle_equality_and_hashing_separate_two_servers() {
         hasher.finish()
     }
 
-    let first = TestServer::builder().start().await.expect("tmux starts");
-    let second = TestServer::builder().start().await.expect("tmux starts");
+    let first = TestServer::builder().start().expect("tmux starts");
+    let second = TestServer::builder().start().expect("tmux starts");
 
     // The same name on two servers, which is what makes the ids collide: each
     // server issues them from zero, so both sessions are `$0`.
-    new_session(first.server(), "work").await;
-    new_session(second.server(), "work").await;
+    new_session(first.server(), "work");
+    new_session(second.server(), "work");
 
-    let left = first.server().sessions().await.expect("one session");
-    let right = second.server().sessions().await.expect("one session");
+    let left = first.server().sessions().expect("one session");
+    let right = second.server().sessions().expect("one session");
     let (left, right) = (&left[0], &right[0]);
     assert_eq!(
         left.id(),
@@ -1350,20 +1237,20 @@ async fn handle_equality_and_hashing_separate_two_servers() {
 
     // Two handles to one object stay equal, and hash alike, so either can key
     // a map.
-    let again = first.server().sessions().await.expect("one session");
+    let again = first.server().sessions().expect("one session");
     assert_eq!(left, &again[0]);
     assert_eq!(digest(left), digest(&again[0]));
 
-    let windows = first.server().windows().await.expect("one window");
-    let other_windows = second.server().windows().await.expect("one window");
+    let windows = first.server().windows().expect("one window");
+    let other_windows = second.server().windows().expect("one window");
     assert_ne!(&windows[0], &other_windows[0]);
     assert_ne!(digest(&windows[0]), digest(&other_windows[0]));
 
-    let panes = first.server().panes().await.expect("one pane");
-    let other_panes = second.server().panes().await.expect("one pane");
+    let panes = first.server().panes().expect("one pane");
+    let other_panes = second.server().panes().expect("one pane");
     assert_ne!(&panes[0], &other_panes[0]);
     assert_ne!(digest(&panes[0]), digest(&other_panes[0]));
 
-    first.shutdown().await.expect("first server stops");
-    second.shutdown().await.expect("second server stops");
+    first.shutdown().expect("first server stops");
+    second.shutdown().expect("second server stops");
 }

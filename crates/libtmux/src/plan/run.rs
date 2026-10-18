@@ -351,12 +351,12 @@ impl Plan {
     /// [`crate::ControlModeErrorKind::BlockingCommand`] before anything is
     /// sent, as [`Self::run_over_control_mode`] does.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// The effect can be partial: steps already dispatched stay done, and the
-    /// [`PlanResult`] naming them, with the ids of what they created, is lost
-    /// with the future. A retry runs the whole plan again.
-    pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
+    /// The effect can be partial: steps already dispatched stay done. Cancellation can
+    /// prevent a [`PlanResult`] from being returned, including the IDs of created
+    /// resources. A retry runs the whole plan again.
+    pub fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         #[cfg(feature = "control-mode")]
@@ -364,7 +364,7 @@ impl Plan {
             self.refuse_pause_over_control_mode()?;
         }
         self.validate_option_scopes()?;
-        self.validate_layouts(server).await?;
+        self.validate_layouts(server)?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -375,7 +375,6 @@ impl Plan {
         for step in steps {
             let (result, marked_creation) = self
                 .dispatch(server, &step, &bound)
-                .await
                 .map_err(|error| after_plan_effect(error, effect_seen))?;
             dispatches += 1;
 
@@ -440,7 +439,7 @@ impl Plan {
     }
 
     /// Send one invocation, sharing it when the step carries several.
-    async fn dispatch(
+    fn dispatch(
         &self,
         server: &Server,
         step: &Step,
@@ -458,13 +457,13 @@ impl Plan {
         };
 
         let result = match commands.next() {
-            None => server.cmd(first).await?,
+            None => server.cmd(first)?,
             Some(second) => {
                 let mut chain = CommandChain::new(first).then(second);
                 for command in commands {
                     chain = chain.then(command);
                 }
-                server.chain(chain).await?
+                server.chain(chain)?
             }
         };
         Ok((result, marked))
@@ -512,8 +511,8 @@ impl Plan {
     /// them. Checked here, alongside `validate_option_scopes`, rather than
     /// in `render`, which has no server to check a preset's version floor
     /// against. Before the first command either way.
-    async fn validate_layouts(&self, server: &Server) -> Result<(), Error> {
-        server.validate_layouts(layouts(self.steps())).await
+    fn validate_layouts(&self, server: &Server) -> Result<(), Error> {
+        server.validate_layouts(layouts(self.steps()))
     }
 
     /// Lower one invocation's operations into commands.
@@ -777,13 +776,13 @@ impl Plan {
         Ok(())
     }
 
-    async fn validate_control_layouts(
+    fn validate_control_layouts(
         &self,
         sender: &crate::control::ControlSender,
     ) -> Result<(), Error> {
         let pending = crate::layout::prepare(layouts(self.steps()))?;
         if !pending.is_empty() {
-            let block = sender.send(crate::layout::version_command()).await?;
+            let block = sender.send(crate::layout::version_command())?;
             if let Some(error) = block.refusal_for("display-message") {
                 return Err(error);
             }
@@ -832,18 +831,18 @@ impl Plan {
     /// holds the next command instead, so the pause would report done before
     /// it was.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// The effect can be partial, as for [`Self::run`]: steps already sent
-    /// stay done, and the result naming them is lost with the future.
-    pub async fn run_over_control_mode(
+    /// The effect can be partial, as for [`Self::run`]: steps already sent stay done.
+    /// Cancellation can prevent the result naming them from being returned.
+    pub fn run_over_control_mode(
         &self,
         sender: &crate::control::ControlSender,
     ) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.refuse_pause_over_control_mode()?;
-        self.validate_control_layouts(sender).await?;
+        self.validate_control_layouts(sender)?;
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());
@@ -867,7 +866,6 @@ impl Plan {
             let sensitive_input = command.summary().sensitive_argument_count() > 0;
             let block = sender
                 .send(command)
-                .await
                 .map_err(|error| after_plan_effect(error, effect_seen))?;
             dispatches += 1;
 
@@ -936,309 +934,5 @@ fn after_plan_effect(error: Error, effect_seen: bool) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::os::unix::process::ExitStatusExt as _;
-    use std::process::ExitStatus;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-    use crate::PaneId;
-    use crate::command::{CommandRequest, CommandResult, ProcessStatus};
-    use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
-    use crate::plan::{CapturePane, NewSession, SendKeys};
-
-    #[derive(Clone, Copy)]
-    enum SecondOutcome {
-        DispatchError,
-        Refused,
-    }
-
-    struct SequentialExecutor {
-        calls: AtomicUsize,
-        second: SecondOutcome,
-    }
-
-    impl Executor for SequentialExecutor {
-        fn execute(&self, request: CommandRequest) -> DispatchFuture {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            let second = self.second;
-            DispatchFuture::new(async move {
-                if call == 0 {
-                    return Ok(CommandResult::new(
-                        request.request_id(),
-                        request.summary().clone(),
-                        ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
-                        Vec::new(),
-                        Vec::new(),
-                    ));
-                }
-
-                match second {
-                    SecondOutcome::DispatchError => Err(Error::Overloaded {
-                        request_id: request.request_id().get(),
-                        command: request.summary().clone(),
-                        in_flight: 1,
-                    }),
-                    SecondOutcome::Refused => Ok(CommandResult::new(
-                        request.request_id(),
-                        request.summary().clone(),
-                        ProcessStatus::from_exit_status(ExitStatus::from_raw(256)),
-                        Vec::new(),
-                        b"second operation refused".to_vec(),
-                    )),
-                }
-            })
-        }
-
-        fn shutdown(&self) -> ShutdownFuture {
-            ShutdownFuture::new(async { Ok(()) })
-        }
-    }
-
-    fn two_step_plan(first_read_only: bool) -> Plan {
-        let pane: PaneId = "%1".parse().expect("a pane id");
-        let mut plan = Plan::new();
-        if first_read_only {
-            plan.add(CapturePane::new(pane.clone()));
-        } else {
-            plan.add(SendKeys::new(pane.clone()).text("first"));
-        }
-        plan.add(SendKeys::new(pane).text("second"));
-        plan
-    }
-
-    struct CreationOutputExecutor {
-        calls: AtomicUsize,
-        stdout: &'static [u8],
-    }
-
-    impl Executor for CreationOutputExecutor {
-        fn execute(&self, request: CommandRequest) -> DispatchFuture {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            let stdout = if call == 0 {
-                self.stdout.to_vec()
-            } else {
-                Vec::new()
-            };
-            DispatchFuture::new(async move {
-                Ok(CommandResult::new(
-                    request.request_id(),
-                    request.summary().clone(),
-                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
-                    stdout,
-                    Vec::new(),
-                ))
-            })
-        }
-
-        fn shutdown(&self) -> ShutdownFuture {
-            ShutdownFuture::new(async { Ok(()) })
-        }
-    }
-
-    #[test]
-    fn creation_binding_rejects_a_wrong_scope_without_partial_state() {
-        let mut plan = Plan::new();
-        plan.add(NewSession::new("work"));
-        let step = Planner::Sequential
-            .steps(&plan)
-            .into_iter()
-            .next()
-            .expect("one plan step");
-        let mut bound = HashMap::new();
-
-        let error = bind(
-            &mut bound,
-            plan.steps(),
-            &step,
-            b"$1 %2 sentinel-binding-output\n",
-        )
-        .expect_err("the second and third ids have the wrong scopes");
-
-        assert_eq!(error.kind(), crate::ErrorKind::Decode);
-        assert!(bound.is_empty(), "a failed decode binds nothing");
-        let diagnostic = format!("{error:?} {error}");
-        assert!(!diagnostic.contains("sentinel-binding-output"));
-    }
-
-    #[tokio::test]
-    async fn malformed_creation_output_stops_before_a_dependent_operation() {
-        for stdout in [
-            b"$1 %2 @3\n".as_slice(),
-            b"$1 @2 sentinel-binding-output\n".as_slice(),
-            b"$1 @2 %3".as_slice(),
-        ] {
-            let executor = Arc::new(CreationOutputExecutor {
-                calls: AtomicUsize::new(0),
-                stdout,
-            });
-            let server = Server::from_executor_for_test(executor.clone());
-            let mut plan = Plan::new();
-            let session = plan.add(NewSession::new("work"));
-            plan.add(SendKeys::new(session.pane()).text("do-not-send"));
-
-            let outcome = plan.run(&server, Planner::Sequential).await;
-
-            assert_eq!(
-                executor.calls.load(Ordering::SeqCst),
-                1,
-                "the dependent operation must not be dispatched",
-            );
-            let error = outcome.expect_err("malformed creation output fails the run");
-            assert_eq!(error.kind(), crate::ErrorKind::PartialEffect);
-            assert!(!error.is_transient());
-            let diagnostic = format!("{error:?} {error}");
-            assert!(!diagnostic.contains("sentinel-binding-output"));
-        }
-    }
-
-    #[tokio::test]
-    async fn a_later_dispatch_error_follows_the_first_mutating_plan_effect() {
-        let executor = Arc::new(SequentialExecutor {
-            calls: AtomicUsize::new(0),
-            second: SecondOutcome::DispatchError,
-        });
-        let server = Server::from_executor_for_test(executor.clone());
-
-        let error = two_step_plan(false)
-            .run(&server, Planner::Sequential)
-            .await
-            .expect_err("the second dispatch fails");
-
-        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
-        assert!(
-            matches!(
-                &error,
-                Error::AfterEffect { operation: "plan", source }
-                    if source.kind() == crate::ErrorKind::Refused && source.is_transient()
-            ),
-            "{error:?}",
-        );
-        assert!(!error.is_transient());
-    }
-
-    #[tokio::test]
-    async fn a_dispatch_error_after_only_reads_keeps_its_retryability() {
-        let executor = Arc::new(SequentialExecutor {
-            calls: AtomicUsize::new(0),
-            second: SecondOutcome::DispatchError,
-        });
-        let server = Server::from_executor_for_test(executor.clone());
-
-        let error = two_step_plan(true)
-            .run(&server, Planner::Sequential)
-            .await
-            .expect_err("the second dispatch fails");
-
-        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
-        assert_eq!(error.kind(), crate::ErrorKind::Refused);
-        assert!(error.is_transient());
-        assert!(!matches!(error, Error::AfterEffect { .. }));
-    }
-
-    #[tokio::test]
-    async fn a_later_refusal_remains_plan_result_data_after_a_mutation() {
-        let executor = Arc::new(SequentialExecutor {
-            calls: AtomicUsize::new(0),
-            second: SecondOutcome::Refused,
-        });
-        let server = Server::from_executor_for_test(executor.clone());
-
-        let result = two_step_plan(false)
-            .run(&server, Planner::Sequential)
-            .await
-            .expect("tmux refusals remain inspectable plan data");
-
-        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
-        assert!(!result.is_complete());
-        assert_eq!(result.operations()[0].outcome(), Outcome::Complete);
-        assert_eq!(result.operations()[1].outcome(), Outcome::Failed);
-        assert!(result.steps()[1].refusal().is_some());
-    }
-
-    #[tokio::test]
-    async fn a_refusal_after_only_reads_remains_plan_result_data() {
-        let executor = Arc::new(SequentialExecutor {
-            calls: AtomicUsize::new(0),
-            second: SecondOutcome::Refused,
-        });
-        let server = Server::from_executor_for_test(executor.clone());
-
-        let result = two_step_plan(true)
-            .run(&server, Planner::Sequential)
-            .await
-            .expect("nothing changed before the refusal");
-
-        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
-        assert!(!result.is_complete());
-        assert!(result.steps()[1].refusal().is_some());
-    }
-
-    #[test]
-    fn raw_plan_output_is_absent_from_debug() {
-        let secret = b"sentinel-plan-output";
-        let pane: PaneId = "%1".parse().expect("a pane id");
-        let mut plan = Plan::new();
-        plan.add(CapturePane::new(pane));
-        let step = Planner::Sequential
-            .steps(&plan)
-            .into_iter()
-            .next()
-            .expect("one plan step");
-        let reported = StepOutcome {
-            step,
-            outcomes: vec![Outcome::Failed],
-            attribution: Attribution::PerCommand,
-            command: "capture-pane",
-            sensitive_input: true,
-            stdout: secret.to_vec(),
-            stderr: secret.to_vec(),
-        };
-        let result = PlanResult {
-            operations: vec![OperationReport {
-                index: 0,
-                kind: OperationKind::CapturePane,
-                outcome: Outcome::Failed,
-                attribution: Some(Attribution::PerCommand),
-                value: None,
-            }],
-            steps: vec![reported.clone()],
-            bound: HashMap::new(),
-            dispatches: 1,
-        };
-        let exposed = format!("{:?}", secret.to_vec());
-
-        for diagnostic in [format!("{reported:?}"), format!("{result:?}")] {
-            assert!(!diagnostic.contains(&exposed), "{diagnostic}");
-        }
-    }
-
-    #[test]
-    fn sensitive_refusal_withholds_tmux_output() {
-        let secret = "sentinel-plan-secret";
-        let pane: PaneId = "%1".parse().expect("a pane id");
-        let mut plan = Plan::new();
-        plan.add(CapturePane::new(pane));
-        let step = Planner::Sequential
-            .steps(&plan)
-            .into_iter()
-            .next()
-            .expect("one plan step");
-        let reported = StepOutcome {
-            step,
-            outcomes: vec![Outcome::Failed],
-            attribution: Attribution::PerCommand,
-            command: "set-option",
-            sensitive_input: true,
-            stdout: Vec::new(),
-            stderr: format!("bad value: {secret}\n").into_bytes(),
-        };
-
-        assert!(String::from_utf8_lossy(reported.stderr()).contains(secret));
-        let refusal = reported.refusal().expect("the invocation failed");
-        assert!(matches!(&refusal, Error::CommandFailed { .. }));
-        let diagnostic = format!("{refusal:?} {refusal}");
-        assert!(!diagnostic.contains(secret), "{diagnostic}");
-    }
-}
+#[path = "run/sync_tests.rs"]
+mod tests;

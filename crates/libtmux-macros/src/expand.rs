@@ -67,7 +67,7 @@ fn resolve_core_path(override_path: Option<Path>, span: Span) -> syn::Result<Tok
     if let Some(path) = override_path {
         return Ok(quote!(#path));
     }
-    match crate_name("libtmux") {
+    match crate_name("libtmux").or_else(|_| crate_name("libtmux-tokio")) {
         // `Itself`: compiling `libtmux` itself, not an integration test.
         // `extern crate self as libtmux` is what makes `::libtmux` resolve here too.
         Ok(FoundCrate::Itself) => Ok(quote!(::libtmux)),
@@ -79,7 +79,7 @@ fn resolve_core_path(override_path: Option<Path>, span: Span) -> syn::Result<Tok
         // crate's dev-dependencies, and one of them is `libtmux`.
         Err(_) => Err(syn::Error::new(
             span,
-            "could not locate the `libtmux` package; use `#[filterable(crate = \"path::to::libtmux\")]` to provide it explicitly",
+            "could not locate `libtmux` or `libtmux-tokio`; use `#[filterable(crate = \"path::to::libtmux\")]` to provide it explicitly",
         )),
     }
 }

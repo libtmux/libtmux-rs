@@ -10,18 +10,15 @@ use libtmux::{Error, ErrorKind, NewWindowOptions, ScopeError, SplitDirection, Sp
 #[derive(Debug)]
 struct OperationFailure(Rc<()>);
 
-#[tokio::test]
-async fn cleanup_failure_retains_the_owned_operation_error() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn cleanup_failure_retains_the_owned_operation_error() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let witness = Rc::new(());
-    let result = guard
-        .server()
-        .with_session("scope-errors", async |session| {
-            session.clone().kill().await.expect("session is killed");
-            Err::<(), _>(OperationFailure(Rc::clone(&witness)))
-        })
-        .await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    let result = guard.server().with_session("scope-errors", |session| {
+        session.clone().kill().expect("session is killed");
+        Err::<(), _>(OperationFailure(Rc::clone(&witness)))
+    });
+    guard.shutdown().expect("tmux fixture shuts down");
     assert_eq!(
         Rc::strong_count(&witness),
         2,
@@ -42,76 +39,68 @@ fn assert_combined(error: ScopeError<(), OperationFailure>, witness: &Rc<()>) {
     assert!(matches!(cleanup, Error::AfterEffect { source, .. } if source.is_object_gone()));
 }
 
-#[tokio::test]
-async fn window_and_pane_scopes_preserve_both_errors() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard.session("scopes").await.expect("session");
+#[test]
+fn window_and_pane_scopes_preserve_both_errors() {
+    let guard = TestServer::builder().start().expect("tmux starts");
+    let session = guard.session("scopes").expect("session");
     let witness = Rc::new(());
     let error = session
         .with_window(
             NewWindowOptions::new("temporary").command("sleep 300"),
-            async |window| {
-                window.clone().kill().await.expect("window is killed");
+            |window| {
+                window.clone().kill().expect("window is killed");
                 Err::<(), _>(OperationFailure(Rc::clone(&witness)))
             },
         )
-        .await
         .expect_err("operation and cleanup fail");
     assert_combined(error, &witness);
 
     let window = session
         .active_window()
-        .await
         .expect("window lookup")
         .expect("window");
     let error = window
         .with_pane(
             SplitOptions::new(SplitDirection::Below).command("sleep 300"),
-            async |pane| {
-                pane.clone().kill().await.expect("pane is killed");
+            |pane| {
+                pane.clone().kill().expect("pane is killed");
                 Err::<(), _>(OperationFailure(Rc::clone(&witness)))
             },
         )
-        .await
         .expect_err("operation and cleanup fail");
     assert_combined(error, &witness);
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn creation_failure_does_not_run_the_operation_or_adopt_an_existing_session() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let original = guard.session("existing").await.expect("session");
+#[test]
+fn creation_failure_does_not_run_the_operation_or_adopt_an_existing_session() {
+    let guard = TestServer::builder().start().expect("tmux starts");
+    let original = guard.session("existing").expect("session");
     let called = std::cell::Cell::new(false);
     let error = guard
         .server()
-        .with_session("existing", async |_session| {
+        .with_session("existing", |_session| {
             called.set(true);
             Ok::<(), OperationFailure>(())
         })
-        .await
         .expect_err("the existing session cannot be created twice");
     assert!(matches!(error, ScopeError::Creation(_)));
     assert!(!called.get());
-    assert_eq!(
-        guard.server().sessions().await.expect("sessions"),
-        [original]
-    );
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    assert_eq!(guard.server().sessions().expect("sessions"), [original]);
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn cleanup_failure_after_success_retains_the_computed_value() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+#[test]
+fn cleanup_failure_after_success_retains_the_computed_value() {
+    let guard = TestServer::builder().start().expect("tmux starts");
     let error = guard
         .server()
-        .with_session("cleanup", async |session| {
-            session.clone().kill().await.expect("session is killed");
+        .with_session("cleanup", |session| {
+            session.clone().kill().expect("session is killed");
             // A value the caller could not recompute after the fact, so
             // retaining it is the difference this test exists to check.
             Ok::<u32, OperationFailure>(42)
         })
-        .await
         .expect_err("cleanup fails");
     let ScopeError::Cleanup { value, cleanup } = error else {
         panic!("cleanup failed after the operation succeeded");
@@ -119,23 +108,22 @@ async fn cleanup_failure_after_success_retains_the_computed_value() {
     assert_eq!(value, 42, "the operation's own result must survive");
     assert_eq!(cleanup.kind(), ErrorKind::PartialEffect);
     assert!(matches!(cleanup, Error::AfterEffect { .. }));
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
-#[tokio::test]
-async fn combined_errors_keep_typed_sources_and_show_operation_details() {
+#[test]
+fn combined_errors_keep_typed_sources_and_show_operation_details() {
     use std::error::Error as _;
 
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().expect("tmux starts");
     let error = guard
         .server()
-        .with_session("visible-cause", async |session| {
-            session.clone().kill().await.expect("session is killed");
+        .with_session("visible-cause", |session| {
+            session.clone().kill().expect("session is killed");
             Err::<(), _>(std::io::Error::other("operation-secret"))
         })
-        .await
         .expect_err("operation and cleanup fail");
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
     // `std::io::Error` is `Debug` and `Display`, so both surface the cause a
     // caller propagating `ScopeError` with `?` would otherwise lose.
     assert!(format!("{error:?}").contains("operation-secret"));

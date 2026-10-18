@@ -1,33 +1,20 @@
-use std::any::Any;
 use std::collections::{HashMap, hash_map::Entry};
 use std::ffi::OsString;
-use std::fmt;
-use std::future::Future;
-use std::io;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::pin::Pin;
+use std::io::{self, Read};
+use std::os::unix::net::UnixStream;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::task::{Context, Poll};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::{Child, ChildStderr, ChildStdout};
-use tokio::sync::{Notify, OwnedSemaphorePermit, oneshot, watch};
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
+use crate::{CancellationToken, Error};
 
-use crate::limits::{DispatchLimits, OutputLimits};
-
-#[cfg(feature = "tracing")]
-use tracing::instrument::{Instrument as _, WithSubscriber as _};
-
-use crate::Error;
+mod parked;
 use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatus, RequestId};
 use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, ShutdownFuture};
 use crate::internal::process::{
-    LaunchContext, ProcessAdmission, ProcessGroupGuard, validate_request,
+    LaunchContext, ProcessAdmission, ProcessChild, lock, output_pair, validate_request,
 };
+use crate::limits::{DispatchLimits, OutputLimits};
 
 #[derive(Clone)]
 pub(crate) struct SubprocessExecutor {
@@ -40,173 +27,116 @@ struct Configuration {
     launch: LaunchContext,
     timeout: Duration,
     output_limits: OutputLimits,
-    #[cfg(feature = "test-support")]
-    synchronous_reap_on_supervisor_drop: bool,
-    #[cfg(test)]
-    hooks: TestHooks,
 }
 
 struct Shared {
     lifecycle: Mutex<Lifecycle>,
-    empty: Notify,
-    /// How many dispatches may hold a tmux client process at once.
-    ///
-    /// Each dispatch is a process, two pipes, and two reader tasks. Without a
-    /// ceiling a caller's own fan-out becomes the machine's problem, and tmux
-    /// serializes on the far side regardless, so the extra clients buy
-    /// queueing rather than throughput.
+    empty: Condvar,
     admission: ProcessAdmission,
+    wait_admission: ProcessAdmission,
 }
 
 struct Lifecycle {
     accepting: bool,
-    entries: HashMap<RequestId, watch::Sender<bool>>,
+    entries: HashMap<RequestId, CancellationToken>,
+    cleanup_failure: Option<(u64, CommandSummary, io::ErrorKind, String)>,
 }
 
-#[derive(Clone)]
 struct RequestContext {
     request_id: RequestId,
     command: CommandSummary,
     timeout: Duration,
     deadline: Option<Instant>,
 }
-
 impl RequestContext {
     fn request_id(&self) -> u64 {
         self.request_id.get()
     }
-}
 
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ReaderFailure {
-    Error,
-    #[cfg(feature = "tracing")]
-    Panic,
-}
-
-#[cfg(test)]
-#[derive(Clone, Default)]
-pub(crate) struct TestHooks {
-    after_reservation_reached: Option<Arc<std::sync::Barrier>>,
-    after_reservation_release: Option<Arc<std::sync::Barrier>>,
-    after_spawn_reached: Option<Arc<std::sync::Barrier>>,
-    after_spawn_release: Option<Arc<std::sync::Barrier>>,
-    spawned_pid: Option<Arc<std::sync::atomic::AtomicU32>>,
-    reader_failure: Option<ReaderFailure>,
-    reader_failure_release: Option<Arc<Notify>>,
-    wait_failure_release: Option<Arc<Notify>>,
-    supervisor_failure_reached: Option<Arc<Notify>>,
-    supervisor_failure_release: Option<Arc<Notify>>,
+    fn check(&self, token: &CancellationToken, shutdown: &CancellationToken) -> Result<(), Error> {
+        if shutdown.is_cancelled() {
+            Err(Error::executor_shutdown(
+                self.request_id(),
+                self.command.clone(),
+            ))
+        } else if token.is_cancelled() {
+            Err(Error::cancelled(self.request_id(), self.command.clone()))
+        } else if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            Err(Error::timeout(
+                self.request_id(),
+                self.command.clone(),
+                self.timeout,
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl SubprocessExecutor {
-    /// Wait for room to run, or say the server is full.
-    async fn acquire_permit(
-        &self,
-        context: &RequestContext,
-    ) -> Result<OwnedSemaphorePermit, Error> {
-        self.shared
-            .admission
-            .acquire(context.request_id, &context.command, context.deadline)
-            .await
-    }
-
-    /// Replace how many dispatches may run at once.
-    pub(crate) fn with_dispatch_limits(mut self, limits: DispatchLimits) -> Self {
-        self.shared = Arc::new(Shared {
-            lifecycle: Mutex::new(Lifecycle {
-                accepting: true,
-                entries: HashMap::new(),
-            }),
-            empty: Notify::new(),
-            admission: ProcessAdmission::new(limits.max_in_flight, limits.acquire_timeout),
-        });
-        self
-    }
-
-    /// Replace the byte budgets each dispatch's output is read under.
-    pub(crate) fn with_output_limits(mut self, limits: OutputLimits) -> Self {
-        Arc::make_mut(&mut self.configuration).output_limits = limits;
-        self
-    }
-
     pub(crate) fn new(executable: impl Into<OsString>, timeout: Duration) -> Self {
         Self {
             configuration: Arc::new(Configuration {
                 launch: LaunchContext::new(executable),
                 timeout,
                 output_limits: OutputLimits::default(),
-                #[cfg(feature = "test-support")]
-                synchronous_reap_on_supervisor_drop: false,
-                #[cfg(test)]
-                hooks: TestHooks::default(),
             }),
-            shared: Arc::new(Shared {
-                lifecycle: Mutex::new(Lifecycle {
-                    accepting: true,
-                    entries: HashMap::new(),
-                }),
-                empty: Notify::new(),
-                admission: ProcessAdmission::new(DispatchLimits::DEFAULT_IN_FLIGHT, None),
-            }),
+            shared: Self::shared(DispatchLimits::default()),
         }
     }
 
+    fn shared(limits: DispatchLimits) -> Arc<Shared> {
+        Arc::new(Shared {
+            lifecycle: Mutex::new(Lifecycle {
+                accepting: true,
+                entries: HashMap::new(),
+                cleanup_failure: None,
+            }),
+            empty: Condvar::new(),
+            admission: ProcessAdmission::new(limits.max_in_flight, limits.acquire_timeout),
+            wait_admission: ProcessAdmission::new(limits.max_wait_clients, None),
+        })
+    }
+
+    pub(crate) fn with_dispatch_limits(mut self, limits: DispatchLimits) -> Self {
+        self.shared = Self::shared(limits);
+        self
+    }
+    pub(crate) fn with_output_limits(mut self, limits: OutputLimits) -> Self {
+        Arc::make_mut(&mut self.configuration).output_limits = limits;
+        self
+    }
+    pub(crate) fn with_launch_context(mut self, launch: LaunchContext) -> Self {
+        Arc::make_mut(&mut self.configuration).launch = launch;
+        self
+    }
+    #[cfg(feature = "test-support")]
+    pub(crate) fn with_synchronous_reap_on_supervisor_drop(self, _enabled: bool) -> Self {
+        // Blocking dispatch always reaps its process before returning.
+        self
+    }
     #[cfg(test)]
     pub(crate) fn with_environment(
         mut self,
         key: impl Into<OsString>,
         value: impl Into<OsString>,
     ) -> Self {
-        let mut configuration = (*self.configuration).clone();
-        configuration.launch = configuration.launch.with_environment(key, value);
-        self.configuration = Arc::new(configuration);
+        let configuration = Arc::make_mut(&mut self.configuration);
+        configuration.launch = configuration.launch.clone().with_environment(key, value);
         self
     }
-
-    pub(crate) fn with_launch_context(mut self, launch: LaunchContext) -> Self {
-        let mut configuration = (*self.configuration).clone();
-        configuration.launch = launch;
-        self.configuration = Arc::new(configuration);
-        self
-    }
-
-    #[cfg(feature = "test-support")]
-    pub(crate) fn with_synchronous_reap_on_supervisor_drop(mut self, enabled: bool) -> Self {
-        let mut configuration = (*self.configuration).clone();
-        configuration.synchronous_reap_on_supervisor_drop = enabled;
-        self.configuration = Arc::new(configuration);
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_test_hooks(mut self, hooks: TestHooks) -> Self {
-        let mut configuration = (*self.configuration).clone();
-        configuration.hooks = hooks;
-        self.configuration = Arc::new(configuration);
-        self
-    }
-
     #[cfg(test)]
     pub(crate) fn active_request_count(&self) -> usize {
-        lock_lifecycle(&self.shared).entries.len()
+        lock(&self.shared.lifecycle).entries.len()
     }
 
-    #[cfg(test)]
-    fn is_accepting(&self) -> bool {
-        lock_lifecycle(&self.shared).accepting
-    }
-
-    #[allow(
-        clippy::too_many_lines,
-        reason = "admission, spawn, and supervisor handoff form one atomic lifecycle sequence"
-    )]
-    async fn run(self, request: CommandRequest) -> Result<CommandResult, Error> {
-        let request_id = request.request_id();
-        validate_request(&self.configuration.launch, &request)?;
+    fn run(&self, request: &CommandRequest) -> Result<CommandResult, Error> {
+        validate_request(&self.configuration.launch, request)?;
         let context = RequestContext {
-            request_id,
+            request_id: request.request_id(),
             command: request.summary().clone(),
             timeout: self.configuration.timeout,
             deadline: if request.is_unbounded() {
@@ -216,810 +146,289 @@ impl SubprocessExecutor {
             },
         };
         trace_requested(&context);
+        let result = self.run_inner(request, &context);
+        trace_finished(&context, &result);
+        result
+    }
 
-        // A request with no deadline is parked on a tmux channel rather than
-        // working, and holds its client until something signals or unlocks
-        // that channel -- which takes a dispatch of its own. Counting it
-        // against the ceiling would let enough parked clients block the very
-        // commands that release them.
-        let permit = if request.is_unbounded() {
-            None
-        } else {
-            match self.acquire_permit(&context).await {
-                Ok(permit) => Some(permit),
-                Err(error) => {
-                    trace_failed(&context, &error);
-                    return Err(error);
-                }
-            }
-        };
-
-        let (cancellation_sender, cancellation_receiver) = watch::channel(false);
-        let admission_error = {
-            let mut lifecycle = lock_lifecycle(&self.shared);
-            if lifecycle.accepting {
-                match lifecycle.entries.entry(context.request_id) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(cancellation_sender.clone());
-                        None
-                    }
-                    Entry::Occupied(_) => Some(Error::duplicate_request(
-                        context.request_id(),
-                        context.command.clone(),
-                    )),
-                }
-            } else {
-                Some(Error::executor_shutdown(
-                    context.request_id(),
-                    context.command.clone(),
-                ))
-            }
-        };
-        if let Some(error) = admission_error {
-            trace_failed(&context, &error);
-            return Err(error);
-        }
-        let registry = RegistryGuard::new(Arc::clone(&self.shared), context.request_id);
-
-        #[cfg(test)]
-        wait_at_barriers(
-            self.configuration.hooks.after_reservation_reached.as_ref(),
-            self.configuration.hooks.after_reservation_release.as_ref(),
-        );
-
-        if context
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            drop(registry);
-            let error = Error::timeout(
+    fn run_inner(
+        &self,
+        request: &CommandRequest,
+        context: &RequestContext,
+    ) -> Result<CommandResult, Error> {
+        let token = request.cancellation_token();
+        if token.is_cancelled() {
+            return Err(Error::cancelled(
                 context.request_id(),
                 context.command.clone(),
-                context.timeout,
-            );
-            trace_failed(&context, &error);
-            return Err(error);
+            ));
         }
-
+        // A parked wait-for client must leave room for the command that releases it.
+        let _permit = if request.is_unbounded() {
+            self.shared.wait_admission.acquire(
+                context.request_id,
+                &context.command,
+                Some(Instant::now()),
+                token,
+            )?
+        } else {
+            self.shared.admission.acquire(
+                context.request_id,
+                &context.command,
+                context.deadline,
+                token,
+            )?
+        };
+        let (_registry, cancelled) = self.register(context)?;
+        let check = || context.check(token, &cancelled);
+        check()?;
+        let io_error =
+            |source| Error::wait_child(context.request_id(), context.command.clone(), source);
+        let (stdout, child_stdout) = output_pair().map_err(io_error)?;
+        let (stderr, child_stderr) = output_pair().map_err(io_error)?;
         let mut process = self.configuration.launch.command(request.argv());
         process
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = match process.spawn() {
-            Ok(child) => child,
-            Err(source) => {
-                drop(registry);
-                let executable_not_found = (source.kind() == io::ErrorKind::NotFound
+            .stdout(child_stdout)
+            .stderr(child_stderr);
+        let mut child =
+            ProcessChild::spawn(&self.configuration.launch, &mut process).map_err(|source| {
+                let missing = (source.kind() == io::ErrorKind::NotFound
                     && self
                         .configuration
                         .launch
                         .current_dir()
                         .is_none_or(std::path::Path::is_dir))
                     || self.configuration.launch.executable_missing_from_path();
-                let error = Error::spawn(
+                Error::spawn(
                     context.request_id(),
                     context.command.clone(),
                     source,
-                    executable_not_found,
-                );
-                trace_failed(&context, &error);
-                return Err(error);
-            }
+                    missing,
+                )
+            })?;
+        drop(process);
+        let stdout = OutputReader::new(
+            stdout,
+            "stdout",
+            self.configuration.output_limits.stdout_bytes(),
+        );
+        let stderr = OutputReader::new(
+            stderr,
+            "stderr",
+            self.configuration.output_limits.stderr_bytes(),
+        );
+        let (output, status) = if request.is_unbounded() {
+            parked::collect(
+                &mut child,
+                [stdout, stderr],
+                context,
+                token,
+                &cancelled,
+                check,
+            )
+        } else {
+            let output = collect_bounded(&mut child, [stdout, stderr], context, check);
+            // Kill descendants while the unreaped leader still pins the process-group ID.
+            (output, child.finish())
         };
+        let status = status.map_err(|source| {
+            let mut lifecycle = lock(&self.shared.lifecycle);
+            lifecycle.cleanup_failure.get_or_insert_with(|| {
+                (
+                    context.request_id(),
+                    context.command.clone(),
+                    source.kind(),
+                    source.to_string(),
+                )
+            });
+            io_error(source)
+        })?;
+        let (stdout, stderr) = output?;
+        Ok(CommandResult::new(
+            context.request_id,
+            context.command.clone(),
+            ProcessStatus::from_exit_status(status),
+            stdout,
+            stderr,
+        ))
+    }
 
-        #[cfg(test)]
-        if let (Some(spawned_pid), Some(child_id)) =
-            (&self.configuration.hooks.spawned_pid, child.id())
-        {
-            spawned_pid.store(child_id, std::sync::atomic::Ordering::SeqCst);
+    fn register(
+        &self,
+        context: &RequestContext,
+    ) -> Result<(RegistryGuard, CancellationToken), Error> {
+        let cancelled = CancellationToken::new();
+        let mut lifecycle = lock(&self.shared.lifecycle);
+        if !lifecycle.accepting {
+            return Err(Error::executor_shutdown(
+                context.request_id(),
+                context.command.clone(),
+            ));
         }
+        match lifecycle.entries.entry(context.request_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(cancelled.clone());
+            }
+            Entry::Occupied(_) => {
+                return Err(Error::duplicate_request(
+                    context.request_id(),
+                    context.command.clone(),
+                ));
+            }
+        }
+        Ok((
+            RegistryGuard {
+                shared: Arc::clone(&self.shared),
+                request_id: context.request_id,
+            },
+            cancelled,
+        ))
+    }
+}
 
-        #[cfg(test)]
-        wait_at_barriers(
-            self.configuration.hooks.after_spawn_reached.as_ref(),
-            self.configuration.hooks.after_spawn_release.as_ref(),
-        );
-
-        let process_group = ProcessGroupGuard::new(child.id());
-        let readers = ReaderTasks::spawn(
-            child.stdout.take(),
-            child.stderr.take(),
-            self.configuration.output_limits,
-            #[cfg(test)]
-            &self.configuration.hooks,
-        );
-        let caller_cancellation = CancellationGuard::new(cancellation_sender);
-        let (result_sender, result_receiver) = oneshot::channel();
-
-        let ownership = ChildOwnership {
-            process_group,
-            child,
-            readers,
-            #[cfg(feature = "test-support")]
-            synchronous_reap_on_drop: self.configuration.synchronous_reap_on_supervisor_drop,
-            _permit: permit,
-            registry,
+fn collect_bounded(
+    child: &mut ProcessChild,
+    [mut stdout, mut stderr]: [OutputReader; 2],
+    context: &RequestContext,
+    check: impl Fn() -> Result<(), Error>,
+) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    loop {
+        check()?;
+        // One bounded read per stream prevents a noisy stream starving the other.
+        let progress = match (stdout.read(context), stderr.read(context)) {
+            (Ok(left), Ok(right)) => left || right,
+            (Err(error), _) | (_, Err(error)) => return Err(error),
         };
-        let supervisor = supervise_outer(
-            ownership,
-            cancellation_receiver,
-            context.clone(),
-            result_sender,
-            #[cfg(test)]
-            self.configuration.hooks.clone(),
-        );
-        #[cfg(feature = "tracing")]
-        tokio::spawn(supervisor.in_current_span().with_current_subscriber());
-        #[cfg(not(feature = "tracing"))]
-        tokio::spawn(supervisor);
-
-        await_result(result_receiver, caller_cancellation, context).await
+        let exited = child.exited().map_err(|source| {
+            Error::wait_child(context.request_id(), context.command.clone(), source)
+        })?;
+        if exited && stdout.eof && stderr.eof {
+            return Ok((stdout.bytes, stderr.bytes));
+        }
+        if !progress {
+            let pause = context
+                .deadline
+                .map_or(Duration::from_millis(1), |deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(1))
+                });
+            std::thread::sleep(pause);
+        }
     }
 }
 
 impl Executor for SubprocessExecutor {
     fn execute(&self, request: CommandRequest) -> DispatchFuture {
-        DispatchSpan::new(&request, "subprocess").run(self.clone().run(request))
+        let executor = self.clone();
+        DispatchSpan::new(&request, "subprocess").run(move || executor.run(&request))
     }
-
     fn shutdown(&self) -> ShutdownFuture {
         let shared = Arc::clone(&self.shared);
-        ShutdownFuture::new(async move {
-            {
-                let mut lifecycle = lock_lifecycle(&shared);
-                lifecycle.accepting = false;
-                for sender in lifecycle.entries.values() {
-                    let _ = sender.send(true);
-                }
-            }
+        ShutdownFuture::new(move || {
             shared.admission.close();
-
-            loop {
-                let notified = shared.empty.notified();
-                if lock_lifecycle(&shared).entries.is_empty() {
-                    return Ok(());
-                }
-                notified.await;
+            shared.wait_admission.close();
+            let tokens = {
+                let mut lifecycle = lock(&shared.lifecycle);
+                lifecycle.accepting = false;
+                lifecycle.entries.values().cloned().collect::<Vec<_>>()
+            };
+            for token in tokens {
+                token.cancel();
+            }
+            let mut lifecycle = lock(&shared.lifecycle);
+            while !lifecycle.entries.is_empty() {
+                lifecycle = shared
+                    .empty
+                    .wait(lifecycle)
+                    .unwrap_or_else(PoisonError::into_inner);
+            }
+            match &lifecycle.cleanup_failure {
+                Some((request_id, command, kind, message)) => Err(Error::wait_child(
+                    *request_id,
+                    command.clone(),
+                    io::Error::new(*kind, message.clone()),
+                )),
+                None => Ok(()),
             }
         })
     }
 }
 
-async fn await_result(
-    receiver: oneshot::Receiver<Result<CommandResult, Error>>,
-    mut cancellation: CancellationGuard,
-    context: RequestContext,
-) -> Result<CommandResult, Error> {
-    match receiver.await {
-        Ok(result) => {
-            cancellation.disarm();
-            result
-        }
-        Err(_) => Err(Error::supervisor_lost(
-            context.request_id(),
-            context.command,
-        )),
-    }
-}
-
-struct ChildOwnership {
-    // This guard must drop before `child`; the unreaped leader anchors the PGID.
-    process_group: ProcessGroupGuard,
-    child: Child,
-    readers: ReaderTasks,
-    #[cfg(feature = "test-support")]
-    synchronous_reap_on_drop: bool,
-    // Admission follows the process and readers into supervisor cleanup, and
-    // a parked client holds none.
-    _permit: Option<OwnedSemaphorePermit>,
-    // This must remain last so registry removal follows child and reader cleanup.
-    #[allow(
-        dead_code,
-        reason = "RAII removal must run after process and reader cleanup"
-    )]
-    registry: RegistryGuard,
-}
-
-impl Drop for ChildOwnership {
-    fn drop(&mut self) {
-        #[cfg(feature = "test-support")]
-        if self.synchronous_reap_on_drop && self.process_group.is_armed() {
-            self.readers.abort();
-            self.process_group.signal();
-            let _ = self.child.start_kill();
-            loop {
-                match self.child.try_wait() {
-                    Ok(Some(_)) => {
-                        self.process_group.disarm();
-                        break;
-                    }
-                    Ok(None) => {
-                        std::thread::yield_now();
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                        std::thread::yield_now();
-                    }
-                    Err(error) if error.raw_os_error() == Some(ErrnoValue::child()) => {
-                        self.process_group.disarm();
-                        break;
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-    }
-}
-
-async fn supervise_outer(
-    mut ownership: ChildOwnership,
-    mut cancellation: watch::Receiver<bool>,
-    context: RequestContext,
-    result_sender: oneshot::Sender<Result<CommandResult, Error>>,
-    #[cfg(test)] hooks: TestHooks,
-) {
-    let outcome = {
-        let inner = supervise_inner(
-            &mut ownership.child,
-            &mut ownership.readers,
-            &mut ownership.process_group,
-            &mut cancellation,
-            &context,
-            #[cfg(test)]
-            &hooks,
-        );
-        CatchUnwindFuture::new(inner).await
-    };
-
-    let result = match outcome {
-        Ok(InnerOutcome::Complete {
-            status,
-            stdout,
-            stderr,
-        }) => Ok(CommandResult::new(
-            context.request_id,
-            context.command.clone(),
-            status,
-            stdout,
-            stderr,
-        )),
-        Ok(InnerOutcome::Failed(error)) => {
-            match cleanup_child(
-                &mut ownership.child,
-                &mut ownership.readers,
-                &mut ownership.process_group,
-                &context,
-            )
-            .await
-            {
-                Ok(()) => Err(error),
-                Err(wait_error) => Err(wait_error),
-            }
-        }
-        Err(()) => {
-            let cleanup = cleanup_child(
-                &mut ownership.child,
-                &mut ownership.readers,
-                &mut ownership.process_group,
-                &context,
-            )
-            .await;
-            match cleanup {
-                Ok(()) => Err(Error::supervisor_lost(
-                    context.request_id(),
-                    context.command.clone(),
-                )),
-                Err(wait_error) => Err(wait_error),
-            }
-        }
-    };
-
-    drop(ownership);
-    trace_finished(&context, &result);
-    let _ = result_sender.send(result);
-}
-
-async fn supervise_inner(
-    child: &mut Child,
-    readers: &mut ReaderTasks,
-    process_group: &mut ProcessGroupGuard,
-    cancellation: &mut watch::Receiver<bool>,
-    context: &RequestContext,
-    #[cfg(test)] hooks: &TestHooks,
-) -> InnerOutcome {
-    #[cfg(test)]
-    inject_supervisor_failure(hooks).await;
-
-    #[cfg(test)]
-    if let Some(source) = inject_wait_failure(hooks).await {
-        return InnerOutcome::Failed(Error::wait_child(
-            context.request_id(),
-            context.command.clone(),
-            source,
-        ));
-    }
-
-    let deadline = context.deadline;
-    let (stdout, stderr) = match drain_readers(readers, cancellation, deadline, context).await {
-        Ok(streams) => streams,
-        Err(error) => return InnerOutcome::Failed(error),
-    };
-
-    let wait_result = loop {
-        let outcome = tokio::select! {
-            result = child.wait() => Some(result),
-            () = cancelled(cancellation) => None,
-            () = deadline_elapsed(deadline) => {
-                return InnerOutcome::Failed(Error::timeout(
-                    context.request_id(),
-                    context.command.clone(),
-                    context.timeout,
-                ));
-            }
-        };
-        match outcome {
-            Some(Err(source)) if source.kind() == io::ErrorKind::Interrupted => {}
-            outcome => break outcome,
-        }
-    };
-
-    match wait_result {
-        Some(Ok(status)) => {
-            process_group.disarm();
-            InnerOutcome::Complete {
-                status: ProcessStatus::from_exit_status(status),
-                stdout,
-                stderr,
-            }
-        }
-        Some(Err(source)) => {
-            if source.raw_os_error() == Some(ErrnoValue::child()) {
-                process_group.disarm();
-            }
-            InnerOutcome::Failed(Error::wait_child(
-                context.request_id(),
-                context.command.clone(),
-                source,
-            ))
-        }
-        None => InnerOutcome::Failed(Error::executor_shutdown(
-            context.request_id(),
-            context.command.clone(),
-        )),
-    }
-}
-
-enum InnerOutcome {
-    Complete {
-        status: ProcessStatus,
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
-    },
-    Failed(Error),
-}
-
-async fn drain_readers(
-    readers: &mut ReaderTasks,
-    cancellation: &mut watch::Receiver<bool>,
-    deadline: Option<Instant>,
-    context: &RequestContext,
-) -> Result<(Vec<u8>, Vec<u8>), Error> {
-    let mut stdout = None;
-    let mut stderr = None;
-
-    while stdout.is_none() || stderr.is_none() {
-        let stdout_reader = &mut readers.stdout;
-        let stderr_reader = &mut readers.stderr;
-        tokio::select! {
-            result = wait_reader(stdout_reader), if stdout.is_none() => {
-                *stdout_reader = None;
-                stdout = Some(map_reader_result(result, "stdout", context)?);
-            }
-            result = wait_reader(stderr_reader), if stderr.is_none() => {
-                *stderr_reader = None;
-                stderr = Some(map_reader_result(result, "stderr", context)?);
-            }
-            () = cancelled(cancellation) => {
-                return Err(Error::executor_shutdown(
-                    context.request_id(),
-                    context.command.clone(),
-                ));
-            }
-            () = deadline_elapsed(deadline) => {
-                return Err(Error::timeout(
-                    context.request_id(),
-                    context.command.clone(),
-                    context.timeout,
-                ));
-            }
-        }
-    }
-
-    let stdout = stdout.ok_or_else(|| {
-        Error::read_output(
-            context.request_id(),
-            context.command.clone(),
-            "stdout",
-            io::ErrorKind::Other,
-        )
-    })?;
-    let stderr = stderr.ok_or_else(|| {
-        Error::read_output(
-            context.request_id(),
-            context.command.clone(),
-            "stderr",
-            io::ErrorKind::Other,
-        )
-    })?;
-    Ok((stdout, stderr))
-}
-
-async fn deadline_elapsed(deadline: Option<Instant>) {
-    if let Some(deadline) = deadline {
-        tokio::time::sleep_until(deadline).await;
-    } else {
-        std::future::pending::<()>().await;
-    }
-}
-
-async fn wait_reader(
-    reader: &mut Option<JoinHandle<Result<Vec<u8>, io::Error>>>,
-) -> Result<Result<Vec<u8>, io::Error>, tokio::task::JoinError> {
-    match reader.as_mut() {
-        Some(reader) => reader.await,
-        None => Ok(Err(io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "output reader is unavailable",
-        ))),
-    }
-}
-
-fn map_reader_result(
-    result: Result<Result<Vec<u8>, io::Error>, tokio::task::JoinError>,
-    stream: &'static str,
-    context: &RequestContext,
-) -> Result<Vec<u8>, Error> {
-    match result {
-        Ok(Ok(bytes)) => Ok(bytes),
-        // A budget overrun is a decision the caller can act on -- ask tmux for
-        // less, or raise the budget -- so it is not folded into the generic
-        // "the pipe failed" case.
-        Ok(Err(source))
-            if source
-                .get_ref()
-                .is_some_and(|inner| inner.downcast_ref::<OutputTooLarge>().is_some()) =>
-        {
-            let limit = source
-                .get_ref()
-                .and_then(|inner| inner.downcast_ref::<OutputTooLarge>())
-                .map_or(0, |exceeded| exceeded.limit);
-            Err(Error::OutputLimitExceeded {
-                request_id: context.request_id(),
-                command: context.command.clone(),
-                stream,
-                limit,
-            })
-        }
-        Ok(Err(source)) => Err(Error::read_output(
-            context.request_id(),
-            context.command.clone(),
-            stream,
-            source.kind(),
-        )),
-        Err(_) => Err(Error::read_output(
-            context.request_id(),
-            context.command.clone(),
-            stream,
-            io::ErrorKind::Other,
-        )),
-    }
-}
-
-async fn cleanup_child(
-    child: &mut Child,
-    readers: &mut ReaderTasks,
-    process_group: &mut ProcessGroupGuard,
-    context: &RequestContext,
-) -> Result<(), Error> {
-    readers.abort_and_join().await;
-    process_group.signal();
-    let _ = child.start_kill();
-    loop {
-        match child.wait().await {
-            Ok(_) => {
-                process_group.disarm();
-                return Ok(());
-            }
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            Err(source) => {
-                if source.raw_os_error() == Some(ErrnoValue::child()) {
-                    process_group.disarm();
-                }
-                return Err(Error::wait_child(
-                    context.request_id(),
-                    context.command.clone(),
-                    source,
-                ));
-            }
-        }
-    }
-}
-
-async fn cancelled(receiver: &mut watch::Receiver<bool>) {
-    loop {
-        if *receiver.borrow() {
-            return;
-        }
-        if receiver.changed().await.is_err() {
-            return;
-        }
-    }
-}
-
-struct ReaderTasks {
-    stdout: Option<JoinHandle<Result<Vec<u8>, io::Error>>>,
-    stderr: Option<JoinHandle<Result<Vec<u8>, io::Error>>>,
-}
-
-impl ReaderTasks {
-    fn spawn(
-        stdout: Option<ChildStdout>,
-        stderr: Option<ChildStderr>,
-        limits: OutputLimits,
-        #[cfg(test)] hooks: &TestHooks,
-    ) -> Self {
-        #[cfg(test)]
-        let stdout = spawn_reader(
-            stdout,
-            limits.max_stdout_bytes,
-            hooks.reader_failure,
-            hooks.reader_failure_release.clone(),
-        );
-        #[cfg(not(test))]
-        let stdout = spawn_reader(stdout, limits.max_stdout_bytes);
-
-        #[cfg(test)]
-        let stderr = spawn_reader(stderr, limits.max_stderr_bytes, None, None);
-        #[cfg(not(test))]
-        let stderr = spawn_reader(stderr, limits.max_stderr_bytes);
-
-        Self {
-            stdout: Some(stdout),
-            stderr: Some(stderr),
-        }
-    }
-
-    async fn abort_and_join(&mut self) {
-        if let Some(reader) = self.stdout.take() {
-            reader.abort();
-            let _ = reader.await;
-        }
-        if let Some(reader) = self.stderr.take() {
-            reader.abort();
-            let _ = reader.await;
-        }
-    }
-
-    #[cfg(feature = "test-support")]
-    fn abort(&self) {
-        if let Some(reader) = &self.stdout {
-            reader.abort();
-        }
-        if let Some(reader) = &self.stderr {
-            reader.abort();
-        }
-    }
-}
-
-#[cfg_attr(
-    test,
-    allow(
-        clippy::panic,
-        reason = "the panic branch exercises JoinError sanitization"
-    )
-)]
-fn spawn_reader<R>(
-    reader: Option<R>,
-    limit: usize,
-    #[cfg(test)] failure: Option<ReaderFailure>,
-    #[cfg(test)] failure_release: Option<Arc<Notify>>,
-) -> JoinHandle<Result<Vec<u8>, io::Error>>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        #[cfg(test)]
-        if let Some(failure) = failure {
-            if let Some(release) = failure_release {
-                release.notified().await;
-            }
-            match failure {
-                ReaderFailure::Error => {
-                    return Err(io::Error::other("injected reader failure"));
-                }
-                #[cfg(feature = "tracing")]
-                ReaderFailure::Panic => panic!("sentinel-reader-panic"),
-            }
-        }
-
-        let Some(reader) = reader else {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "child output pipe is unavailable",
-            ));
-        };
-
-        // Read one byte more than the budget. `read_to_end` on an unbounded
-        // pipe is how a `capture-pane` over a large history, or a `run-shell`
-        // that never stops printing, becomes the process's memory ceiling
-        // rather than tmux's. Taking `limit + 1` distinguishes "exactly at the
-        // budget" from "over it" without a second read.
-        let mut bytes = Vec::new();
-        let overflow = limit.saturating_add(1);
-        let mut bounded = reader.take(overflow as u64);
-        bounded.read_to_end(&mut bytes).await?;
-        if bytes.len() > limit {
-            return Err(io::Error::new(
-                io::ErrorKind::FileTooLarge,
-                OutputTooLarge { limit },
-            ));
-        }
-
-        Ok(bytes)
-    })
-}
-
-/// Marker for a read that ran past its budget.
-///
-/// Carried as the source of an `io::Error` so the executor can tell this from
-/// an ordinary pipe failure and report the budget that was exceeded.
-#[derive(Debug)]
-pub(crate) struct OutputTooLarge {
-    pub(crate) limit: usize,
-}
-
-impl fmt::Display for OutputTooLarge {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "output exceeded the {} byte budget", self.limit)
-    }
-}
-
-impl std::error::Error for OutputTooLarge {}
-
 struct RegistryGuard {
     shared: Arc<Shared>,
     request_id: RequestId,
-    armed: bool,
 }
-
-impl RegistryGuard {
-    fn new(shared: Arc<Shared>, request_id: RequestId) -> Self {
-        Self {
-            shared,
-            request_id,
-            armed: true,
-        }
-    }
-
-    fn remove(&mut self) {
-        if self.armed {
-            lock_lifecycle(&self.shared)
-                .entries
-                .remove(&self.request_id);
-            self.armed = false;
-            self.shared.empty.notify_waiters();
-        }
-    }
-}
-
 impl Drop for RegistryGuard {
     fn drop(&mut self) {
-        self.remove();
+        lock(&self.shared.lifecycle)
+            .entries
+            .remove(&self.request_id);
+        self.shared.empty.notify_all();
     }
 }
 
-struct CancellationGuard {
-    sender: watch::Sender<bool>,
-    armed: bool,
+struct OutputReader {
+    stream: UnixStream,
+    name: &'static str,
+    limit: usize,
+    bytes: Vec<u8>,
+    eof: bool,
 }
-
-impl CancellationGuard {
-    fn new(sender: watch::Sender<bool>) -> Self {
+impl OutputReader {
+    fn new(stream: UnixStream, name: &'static str, limit: usize) -> Self {
         Self {
-            sender,
-            armed: true,
+            stream,
+            name,
+            limit,
+            bytes: Vec::new(),
+            eof: false,
         }
     }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for CancellationGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = self.sender.send(true);
+    fn read(&mut self, context: &RequestContext) -> Result<bool, Error> {
+        if self.eof {
+            return Ok(false);
         }
-    }
-}
-
-struct CatchUnwindFuture<F> {
-    future: Pin<Box<F>>,
-}
-
-impl<F> CatchUnwindFuture<F> {
-    fn new(future: F) -> Self {
-        Self {
-            future: Box::pin(future),
-        }
-    }
-}
-
-impl<F: Future> Future for CatchUnwindFuture<F> {
-    type Output = Result<F::Output, ()>;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        match catch_unwind(AssertUnwindSafe(|| this.future.as_mut().poll(context))) {
-            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
-            Ok(Poll::Pending) => Poll::Pending,
-            Err(payload) => {
-                discard_panic_payload(payload);
-                Poll::Ready(Err(()))
+        let mut buffer = [0; 8192];
+        let remaining = self
+            .limit
+            .saturating_sub(self.bytes.len())
+            .saturating_add(1)
+            .min(buffer.len());
+        match self.stream.read(&mut buffer[..remaining]) {
+            Ok(0) => {
+                self.eof = true;
+                Ok(true)
             }
+            Ok(count) if self.bytes.len().saturating_add(count) > self.limit => {
+                Err(Error::OutputLimitExceeded {
+                    request_id: context.request_id(),
+                    command: context.command.clone(),
+                    stream: self.name,
+                    limit: self.limit,
+                })
+            }
+            Ok(count) => {
+                self.bytes.extend_from_slice(&buffer[..count]);
+                Ok(true)
+            }
+            Err(source)
+                if matches!(
+                    source.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(source) => Err(Error::read_output(
+                context.request_id(),
+                context.command.clone(),
+                self.name,
+                source.kind(),
+            )),
         }
     }
-}
-
-fn discard_panic_payload(_payload: Box<dyn Any + Send>) {}
-
-fn lock_lifecycle(shared: &Shared) -> MutexGuard<'_, Lifecycle> {
-    shared
-        .lifecycle
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-struct ErrnoValue;
-
-impl ErrnoValue {
-    fn child() -> i32 {
-        rustix::io::Errno::CHILD.raw_os_error()
-    }
-}
-
-#[cfg(test)]
-fn wait_at_barriers(
-    reached: Option<&Arc<std::sync::Barrier>>,
-    release: Option<&Arc<std::sync::Barrier>>,
-) {
-    if let Some(reached) = reached {
-        reached.wait();
-    }
-    if let Some(release) = release {
-        release.wait();
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::panic)]
-async fn inject_supervisor_failure(hooks: &TestHooks) {
-    if let Some(release) = &hooks.supervisor_failure_release {
-        if let Some(reached) = &hooks.supervisor_failure_reached {
-            reached.notify_one();
-        }
-        release.notified().await;
-        panic!("sentinel-supervisor-panic");
-    }
-}
-
-#[cfg(test)]
-async fn inject_wait_failure(hooks: &TestHooks) -> Option<io::Error> {
-    let release = hooks.wait_failure_release.as_ref()?;
-    release.notified().await;
-    Some(io::Error::from(io::ErrorKind::Other))
 }
 
 #[cfg(feature = "tracing")]
@@ -1044,9 +453,6 @@ fn trace_failed(context: &RequestContext, error: &Error) {
     );
 }
 
-#[cfg(not(feature = "tracing"))]
-fn trace_failed(_context: &RequestContext, _error: &Error) {}
-
 #[cfg(feature = "tracing")]
 fn trace_finished(context: &RequestContext, result: &Result<CommandResult, Error>) {
     match result {
@@ -1066,4 +472,5 @@ fn trace_finished(context: &RequestContext, result: &Result<CommandResult, Error
 fn trace_finished(_context: &RequestContext, _result: &Result<CommandResult, Error>) {}
 
 #[cfg(test)]
+#[path = "subprocess/sync_tests.rs"]
 mod tests;

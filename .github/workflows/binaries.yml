@@ -42,8 +42,6 @@ jobs:
         target:
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-musl
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
         include:
           # musl, so one Linux binary runs on any distribution's libc.
           - target: x86_64-unknown-linux-musl
@@ -52,13 +50,6 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
             native: true
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            native: true
-          # Cross-built on the arm64 runner, which cannot run it.
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            native: false
     steps:
       - uses: actions/checkout@v7
 

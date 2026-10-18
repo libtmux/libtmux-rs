@@ -11,17 +11,13 @@ use crate::TmuxVersion;
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux::test::TestServer::new()?;
 ///
 /// // Detected once and cached, so asking twice does not run tmux twice.
-/// let capabilities = guard.server().capabilities().await?;
+/// let capabilities = guard.server().capabilities()?;
 /// assert!(!capabilities.tmux_version().raw().is_empty());
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -41,14 +37,10 @@ impl EngineCapabilities {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// let server = libtmux::Server::new()?;
-    /// let capabilities = server.capabilities().await?;
+    /// let capabilities = server.capabilities()?;
     /// assert!(!capabilities.tmux_version().raw().is_empty());
-    /// server.shutdown().await?;
-    /// # Ok::<(), libtmux::Error>(())
-    /// # })?;
+    /// server.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```

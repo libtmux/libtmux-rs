@@ -3780,13 +3780,12 @@ fn projection_test_executable() -> std::ffi::OsString {
 }
 
 #[cfg(feature = "test-support")]
-async fn projection_test_server() -> (TestServer, std::ffi::OsString, Option<std::ffi::OsString>) {
+fn projection_test_server() -> (TestServer, std::ffi::OsString, Option<std::ffi::OsString>) {
     let explicit = std::env::var_os("LIBTMUX_TEST_TMUX");
     let executable = projection_test_executable();
     let guard = TestServer::builder()
         .tmux_executable(executable.clone())
         .start()
-        .await
         .expect("the explicitly selected tmux starts");
     assert!(
         guard.server().tmux_executable() == executable.as_os_str(),
@@ -3796,19 +3795,16 @@ async fn projection_test_server() -> (TestServer, std::ffi::OsString, Option<std
 }
 
 #[cfg(feature = "test-support")]
-async fn projection_run(server: &crate::Server, command: Command) {
-    let result = server
-        .cmd(command)
-        .await
-        .expect("tmux setup command executes");
+fn projection_run(server: &crate::Server, command: Command) {
+    let result = server.cmd(command).expect("tmux setup command executes");
     assert!(result.success(), "tmux setup command succeeds");
     assert!(result.stderr().is_empty(), "tmux setup stderr is empty");
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_tmux_session_listing_hydrates_ordered_named_snapshots() {
-    let (guard, _executable, _explicit) = projection_test_server().await;
+#[test]
+fn real_tmux_session_listing_hydrates_ordered_named_snapshots() {
+    let (guard, _executable, _explicit) = projection_test_server();
     let server = guard.server();
 
     for name in ["alpha", "beta"] {
@@ -3819,19 +3815,16 @@ async fn real_tmux_session_listing_hydrates_ordered_named_snapshots() {
                 .arg("-s")
                 .arg(name)
                 .arg("sleep 120"),
-        )
-        .await;
+        );
     }
 
     let version = server
         .capabilities()
-        .await
         .expect("tmux capabilities are detected")
         .tmux_version();
     let plan = FormatPlan::for_profile(ListProfile::Sessions, version);
     let result = server
         .cmd(Command::new("list-sessions").arg("-F").arg(plan.template()))
-        .await
         .expect("the session listing executes");
     assert!(result.success(), "the session listing succeeds");
 
@@ -3863,15 +3856,12 @@ async fn real_tmux_session_listing_hydrates_ordered_named_snapshots() {
         "a never-attached session reports an absent last-attach time",
     );
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "test-support")]
-async fn projection_stdout(server: &crate::Server, command: Command) -> String {
-    let result = server
-        .cmd(command)
-        .await
-        .expect("tmux scalar query executes");
+fn projection_stdout(server: &crate::Server, command: Command) -> String {
+    let result = server.cmd(command).expect("tmux scalar query executes");
     assert!(result.success(), "tmux scalar query succeeds");
     assert!(result.stderr().is_empty(), "tmux scalar stderr is empty");
     result
@@ -3889,13 +3879,13 @@ fn projection_uses_post_3_6_semantics(version: &TmuxVersion) -> bool {
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
+#[test]
 #[allow(
     clippy::too_many_lines,
     reason = "one isolated fixture proves the repeated-winlink scalar shape end to end"
 )]
-async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_aggregates() {
-    let (guard, executable, explicit) = projection_test_server().await;
+fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_aggregates() {
+    let (guard, executable, explicit) = projection_test_server();
     let server = guard.server();
     if let Some(expected) = explicit {
         assert!(
@@ -3917,8 +3907,7 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
             .arg("-n")
             .arg("repeated")
             .arg("sleep 120"),
-    )
-    .await;
+    );
     projection_run(
         server,
         Command::new("move-window")
@@ -3926,8 +3915,7 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
             .arg("dup:0")
             .arg("-t")
             .arg("dup:1"),
-    )
-    .await;
+    );
     projection_run(
         server,
         Command::new("new-window")
@@ -3937,8 +3925,7 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
             .arg("-n")
             .arg("unrelated")
             .arg("sleep 120"),
-    )
-    .await;
+    );
     projection_run(
         server,
         Command::new("link-window")
@@ -3946,8 +3933,7 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
             .arg("dup:1")
             .arg("-t")
             .arg("dup:5"),
-    )
-    .await;
+    );
 
     let repeated_session_id = projection_stdout(
         server,
@@ -3957,7 +3943,6 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
             .arg("dup")
             .arg("#{session_id}"),
     )
-    .await
     .trim()
     .parse::<SessionId>()
     .expect("the repeated-link Session ID is valid");
@@ -3969,7 +3954,6 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
             .arg("dup:1")
             .arg("#{window_id}"),
     )
-    .await
     .trim()
     .parse::<WindowId>()
     .expect("the repeated Window ID is valid");
@@ -3981,13 +3965,11 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
             .arg("dup:1.0")
             .arg("#{pane_id}"),
     )
-    .await
     .trim()
     .parse::<PaneId>()
     .expect("the repeated Pane ID is valid");
     let version = server
         .capabilities()
-        .await
         .expect("tmux capabilities are detected")
         .tmux_version();
     let expected_count = if projection_uses_post_3_6_semantics(version) {
@@ -4006,7 +3988,6 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
                 .arg("-F")
                 .arg(window_plan.template()),
         )
-        .await
         .expect("the Window projection listing executes");
     assert!(
         window_result.success(),
@@ -4060,7 +4041,6 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
                 .arg("-F")
                 .arg(pane_plan.template()),
         )
-        .await
         .expect("the Pane projection listing executes");
     assert!(
         pane_result.success(),
@@ -4096,17 +4076,17 @@ async fn real_tmux_compat_projection_repeated_winlinks_preserve_rows_and_raw_agg
         assert_eq!(projection.link_identity.window_id(), &repeated_window_id);
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }
 
 #[cfg(feature = "test-support")]
-#[tokio::test]
+#[test]
 #[allow(
     clippy::too_many_lines,
     reason = "one isolated fixture proves grouped aggregate semantics end to end"
 )]
-async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semantics() {
-    let (guard, executable, explicit) = projection_test_server().await;
+fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semantics() {
+    let (guard, executable, explicit) = projection_test_server();
     let server = guard.server();
     if let Some(expected) = explicit {
         assert!(
@@ -4128,8 +4108,7 @@ async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semanti
             .arg("-n")
             .arg("shared")
             .arg("sleep 120"),
-    )
-    .await;
+    );
     projection_run(
         server,
         Command::new("new-session")
@@ -4138,8 +4117,7 @@ async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semanti
             .arg("group-b")
             .arg("-t")
             .arg("group-a"),
-    )
-    .await;
+    );
 
     let first_session_id = projection_stdout(
         server,
@@ -4149,7 +4127,6 @@ async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semanti
             .arg("group-a")
             .arg("#{session_id}"),
     )
-    .await
     .trim()
     .parse::<SessionId>()
     .expect("the first group Session ID is valid");
@@ -4161,7 +4138,6 @@ async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semanti
             .arg("group-b")
             .arg("#{session_id}"),
     )
-    .await
     .trim()
     .parse::<SessionId>()
     .expect("the second group Session ID is valid");
@@ -4173,13 +4149,11 @@ async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semanti
             .arg("group-a:0")
             .arg("#{window_id}"),
     )
-    .await
     .trim()
     .parse::<WindowId>()
     .expect("the shared Window ID is valid");
     let version = server
         .capabilities()
-        .await
         .expect("tmux capabilities are detected")
         .tmux_version();
     let expected_linked = projection_uses_post_3_6_semantics(version);
@@ -4193,7 +4167,6 @@ async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semanti
                 .arg("-F")
                 .arg(window_plan.template()),
         )
-        .await
         .expect("the grouped Window projection listing executes");
     assert!(result.success(), "the grouped Window listing succeeds");
     assert!(
@@ -4232,5 +4205,5 @@ async fn real_tmux_compat_aggregate_grouped_window_linked_tracks_release_semanti
         assert_eq!(projection.link.window_linked, expected_linked);
     }
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    guard.shutdown().expect("tmux fixture shuts down");
 }

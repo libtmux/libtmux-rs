@@ -253,7 +253,8 @@ macro_rules! impl_handle_traits {
         impl<$($type_parameter),+> $name<$($type_parameter),+> {
             /// Return the field name this handle names.
             #[allow(dead_code, reason = "only snapshot reads ask a handle its name")]
-            pub(crate) const fn field_name(self) -> &'static str {
+            #[doc(hidden)]
+            pub const fn field_name(self) -> &'static str {
                 self.id.field
             }
         }
@@ -295,7 +296,9 @@ impl_handle_traits!(OneRelation<From, To>);
 
 impl<T, V> TextField<T, V> {
     /// Build a handle whose snapshot value is `V`.
-    pub(crate) const fn typed(target: &'static str, field: &'static str) -> Self {
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn typed(target: &'static str, field: &'static str) -> Self {
         Self {
             id: FieldId { target, field },
             marker: PhantomData,

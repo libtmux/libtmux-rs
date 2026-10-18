@@ -1,0 +1,126 @@
+# native Rust source	port	blocking counterpart(s)	canonical SHA-256	adaptation
+src/blocking.rs	native-only	tests/blocking.rs	ace52d4d869a23e08aa9a631d5c4ddc662faa928d058f88c5a56bfdf26679695	Only the native client needs a runtime facade. The base client directly exposes the same blocking operations.
+src/capabilities.rs	generated	src/capabilities.rs	-	The generator translates the canonical operation, example, or regression test.
+src/client.rs	generated	src/client.rs	-	The generator translates the canonical operation, example, or regression test.
+src/command/tests.rs	generated	src/command/tests.rs	-	The generator translates the canonical operation, example, or regression test.
+src/command.rs	generated	src/command.rs	-	The generator translates the canonical operation, example, or regression test.
+src/control/actor.rs	manual	src/control/actor.rs	26939cfeafa8378878dfe65c46d3242b653ccdb5f4f893a26f19e0e2ca522e66	Blocking channels and OS threads preserve control framing, command correlation, bounded queues, cancellation and cleanup.
+src/control/fuzz.rs	manual	src/control/fuzz.rs	f104beae7c4bcf16ff5074e89a754c28df0e79103c558df6f536da79dcc97b5b	Blocking channels and OS threads preserve control framing, command correlation, bounded queues, cancellation and cleanup.
+src/control/lifecycle_tests.rs	manual	src/control/lifecycle_tests.rs	e6f1775731b413d69c715d292dbc5f30b21c833b7ed18ff7ad14ebdbe50ee460	Owned blocking threads preserve connection cleanup. Native explicit_token_cancelling_attach_reaps_the_process_group maps to cancelling_attach_reaps_the_process_group; failed_control_wait_remains_visible_to_repeated_server_shutdown maps to failed_control_cleanup_remains_visible_to_repeated_server_shutdown. The latter uses a real failing signal helper instead of native wait-error injection.
+src/control/protocol.rs	manual	src/control/protocol.rs	e5f20ccd2ab9598c57ebec126b17a561ce6370533f80b935afee35f50277c2ef	Blocking channels and OS threads preserve control framing, command correlation, bounded queues, cancellation and cleanup.
+src/control/tests.rs	manual	src/control/tests.rs	f7eb82e65e6f733fd06f2a1c757ada269ea4cc16644e982f632f8b50d3849342	Blocking channel and thread tests cover the same framing and cancellation boundaries. Native explicit_token_cancellation_before_commit_refuses_the_request maps to cancellation_before_actor_commit_refuses_the_request.
+src/control.rs	manual	src/control.rs	9cd34c940322a2037a8709e9e065f48eacb41b848376be5cd3d224303b7f7b7d	Blocking channels and OS threads preserve control framing, command correlation, bounded queues, cancellation and cleanup.
+src/error/classification.rs	generated	src/error/classification.rs	-	The generator translates the canonical operation, example, or regression test.
+src/error/compat_tests.rs	generated	src/error/compat_tests.rs	-	The generator translates the canonical operation, example, or regression test.
+src/error/refusal.rs	generated	src/error/refusal.rs	-	The generator translates the canonical operation, example, or regression test.
+src/error/scoped.rs	generated	src/error/scoped.rs	-	The generator translates the canonical operation, example, or regression test.
+src/error/tests.rs	generated	src/error/tests.rs	-	The generator translates the canonical operation, example, or regression test.
+src/error.rs	generated	src/error.rs	-	The generator translates the canonical operation, example, or regression test.
+src/formats/fuzz.rs	equal	src/formats/fuzz.rs	-	Runtime-independent code stays byte-for-byte identical.
+src/formats/plan.rs	equal	src/formats/plan.rs	-	Runtime-independent code stays byte-for-byte identical.
+src/formats/row.rs	equal	src/formats/row.rs	-	Runtime-independent code stays byte-for-byte identical.
+src/formats/tests.rs	generated	src/formats/tests.rs	-	The generator translates the canonical operation, example, or regression test.
+src/formats.rs	manual	src/formats.rs	341794aa83f4232b607b57119980b827359abea2d5b4ce6b116ec251196026a5	Base owns TmuxText; both clients retain the same byte-preserving format decoder.
+src/hooks.rs	generated	src/hooks.rs	-	The generator translates the canonical operation, example, or regression test.
+src/internal/control_executor.rs	manual	src/internal/control_executor.rs	52a8629f198c383c4ecaa805ddf7bf581f4de3859f77433e9265485c110e1aaa	The blocking client wires its corresponding runtime-independent and blocking modules.
+src/internal/core.rs	manual	src/internal/core.rs	bfa19afbf3d06bbf99fdeb5e7c07ff8a4768564ae7d57df27e7475ff52b9bde9	Blocking dispatch shares captured configuration, cancellation, request IDs, capability cache and channel wait ledger.
+src/internal/environment.rs	generated	src/internal/environment.rs	-	The generator translates the canonical operation, example, or regression test.
+src/internal/executor.rs	manual	src/internal/executor.rs	ee3612356960f3df2ec61d283d9baf394edddc604c8e782d29aef81e31c09876	Lazy synchronous dispatch closures replace boxed futures; result and diagnostic boundaries remain.
+src/internal/listing.rs	generated	src/internal/listing.rs	-	The generator translates the canonical operation, example, or regression test.
+src/internal/mod.rs	equal	src/internal/mod.rs	-	Runtime-independent code stays byte-for-byte identical.
+src/internal/options.rs	generated	src/internal/options.rs	-	The generator translates the canonical operation, example, or regression test.
+src/internal/process.rs	manual	src/internal/process.rs	1cb1606de34c6be2a0ff1f180d4cbaa3e2963655949b829ef8c78543f7dba085	Standard-library process management uses an absolute group-signal helper and reports cleanup failure.
+src/internal/scoped.rs	manual	src/internal/scoped.rs	6213f91bb9acde5308cf5b29941fdab172c64a8ee69cb3b02e1c17ffeb33c1e9	Owned scope guards run cleanup during return and unwind; explicit cancellation replaces dropped futures.
+src/internal/subprocess/tests.rs	manual	src/internal/subprocess/sync_tests.rs,src/internal/process.rs	89e72f8db9717b73cc9a92988bdc8bb922ad248d615d1d39dcfd393830cb66e0	Blocking tests preserve process budgets and cleanup. Native synchronous_drop_returns_when_signals_are_refused maps to process::tests::drop_returns_when_signals_are_refused; both observe bounded Drop under live-child signal denial and use PIDFD harness cleanup.
+src/internal/subprocess.rs	manual	src/internal/subprocess.rs	69e8e3482cf4bad6230ca6cc889bdeae1da888fc97d80b00c16016e6ceccef4e	Caller-owned blocking process execution preserves deadlines, output budgets, cancellation, admission and reaping.
+src/internal/wait_for.rs	manual	src/internal/wait_for.rs	d73789e72bf43e0ad211b43fc06c8603a8b4567cf091b1e347424828147d41af	A condition variable and resident threads retain queued waits and release abandoned lock grants.
+src/layout.rs	generated	src/layout.rs	-	The generator translates the canonical operation, example, or regression test.
+src/lib.rs	manual	src/lib.rs	54eda2d7d23c3636a296a5f0e57120a605b7089f3c2d8e2521826922df4d7754	Blocking exports and compiled examples retain the public capabilities without a runtime facade.
+src/limits.rs	manual	src/limits.rs	704940f51628a85da610ae5a2ea0e5e708cd773f3eaeb9fccc076f87ac641d39	Both clients expose the same dispatch and control budgets; blocking contracts describe threads instead of tasks.
+src/options/generated.rs	equal	src/options/generated.rs	-	Runtime-independent code stays byte-for-byte identical.
+src/options.rs	generated	src/options.rs	-	The generator translates the canonical operation, example, or regression test.
+src/pane/observe.rs	generated	src/pane/observe.rs	-	The generator translates the canonical operation, example, or regression test.
+src/pane/settings.rs	generated	src/pane/settings.rs	-	The generator translates the canonical operation, example, or regression test.
+src/pane.rs	generated	src/pane.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/ops/options.rs	generated	src/plan/ops/options.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/ops/panes.rs	generated	src/plan/ops/panes.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/ops/sessions.rs	generated	src/plan/ops/sessions.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/ops/timing.rs	generated	src/plan/ops/timing.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/ops/windows.rs	generated	src/plan/ops/windows.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/ops.rs	generated	src/plan/ops.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/planner.rs	generated	src/plan/planner.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/run.rs	generated	src/plan/run.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan/wire.rs	generated	src/plan/wire.rs	-	The generator translates the canonical operation, example, or regression test.
+src/plan.rs	generated	src/plan.rs	-	The generator translates the canonical operation, example, or regression test.
+src/query.rs	manual	src/query.rs	73b1a4959aa2cfa9e7e53536266d5059e7ddfb6df4b026925324276bcb16f77b	The native crate reexports base query types and implements its local ReadField trait for native handles.
+src/server/builder.rs	manual	src/server/builder.rs	5e39a7ddaa32fd608e4a6342c0b7019582720136925ac9949c739b00afd331cc	Construction captures the blocking launch context and cancellation token without starting a runtime.
+src/server/channels.rs	generated	src/server/channels.rs	-	The generator translates the canonical operation, example, or regression test.
+src/server/discovery.rs	generated	src/server/discovery.rs	-	The generator translates the canonical operation, example, or regression test.
+src/server/interactive.rs	generated	src/server/interactive.rs	-	The generator translates the canonical operation, example, or regression test.
+src/server/keys.rs	generated	src/server/keys.rs	-	The generator translates the canonical operation, example, or regression test.
+src/server/settings.rs	generated	src/server/settings.rs	-	The generator translates the canonical operation, example, or regression test.
+src/server.rs	generated	src/server.rs	-	The generator translates the canonical operation, example, or regression test.
+src/session/settings.rs	generated	src/session/settings.rs	-	The generator translates the canonical operation, example, or regression test.
+src/session.rs	generated	src/session.rs	-	The generator translates the canonical operation, example, or regression test.
+src/snapshot/tests.rs	generated	src/snapshot/tests.rs	-	The generator translates the canonical operation, example, or regression test.
+src/snapshot.rs	generated	src/snapshot.rs	-	The generator translates the canonical operation, example, or regression test.
+src/target/tests.rs	generated	src/target/tests.rs	-	The generator translates the canonical operation, example, or regression test.
+src/target.rs	manual	src/target.rs	32ae7ef10beed8d8e8b047db96b1435e8d49138c575caec08b5713cf5810788e	Base owns primitive definitions; the native crate reexports those same public types.
+src/test/containment.rs	equal	src/test/containment.rs	-	Runtime-independent code stays byte-for-byte identical.
+src/test/lifecycle.rs	manual	src/test/lifecycle.rs	1cddb1d71e75773dfdc6edf1a5f8fc74f4ddef697b5ce570e80796c8b06ee9ad	Blocking fixture startup and shutdown preserve owned process containment, readiness deadlines and cleanup diagnostics.
+src/test/tests.rs	manual	src/test/tests.rs	d87eee6a45c5de8487089e089fd54e945c8c39c8639cf03398b3e6b79b8927ae	Blocking fixture startup and shutdown preserve owned process containment, readiness deadlines and cleanup diagnostics.
+src/test.rs	manual	src/test.rs	ae3522f9917ccf6e8b69c577363704e6f636d72015bd1559456ff5b8faf39e52	Blocking fixture startup and shutdown preserve owned process containment, readiness deadlines and cleanup diagnostics.
+src/version.rs	manual	src/version.rs	9f56e1269a8143734c6f8e8ca83f155b8a067a71dcc14dd00d8ae78234dc7f46	Base owns primitive definitions; the native crate reexports those same public types.
+src/window/navigation.rs	generated	src/window/navigation.rs	-	The generator translates the canonical operation, example, or regression test.
+src/window/settings.rs	generated	src/window/settings.rs	-	The generator translates the canonical operation, example, or regression test.
+src/window.rs	generated	src/window.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/blocking.rs	manual	tests/blocking.rs	7d7304d327b0bb7f0ff275d2e076e1cb61b86721084b6bf83887095659096a66	Direct blocking calls cover scripted and multi-server use; nested-runtime refusal applies only to the native runtime facade.
+tests/cancel_safety.rs	manual	tests/cancel_safety.rs	38a1c9d798c11749033bc4bc961c512d74760b28dbc6bb09046994ec25cb0e31	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
+tests/command.rs	generated	tests/command.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/command_budget.rs	generated	tests/command_budget.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/command_chain.rs	generated	tests/command_chain.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/commands.rs	manual	tests/commands.rs	b258d30177f927f7df4a1f9583ac96511c0c0a536deb9e42b8539800764d4ba2	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
+tests/control.rs	manual	tests/control.rs	f58b713f1f77d3080397f2832f74dd7f70b0ac9519a37fb7d801f2fce0dbff10	Blocking channels and OS threads preserve control framing, command correlation, bounded queues, cancellation and cleanup.
+tests/control_correlation.rs	manual	tests/control_correlation.rs	9c1e55ce4ebd53b3dfe95309730715fb568cfa2da4d5bbccb5e5a36983a181fa	Blocking channels and OS threads preserve control framing, command correlation, bounded queues, cancellation and cleanup.
+tests/control_mode_routing.rs	manual	tests/control_mode_routing.rs	0441c001479967c90557472b7314d2f9672f43592d34329af4901d5251b14a83	Blocking channels and OS threads preserve control framing, command correlation, bounded queues, cancellation and cleanup.
+tests/examples_manifest.rs	generated	tests/examples_manifest.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/filter_derive.rs	generated	tests/filter_derive.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/filter_dialect.rs	generated	tests/filter_dialect.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/filter_hierarchy.rs	generated	tests/filter_hierarchy.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/filter_serde.rs	generated	tests/filter_serde.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/filter_tree.rs	generated	tests/filter_tree.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/format_injection.rs	generated	tests/format_injection.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/hierarchy.rs	generated	tests/hierarchy.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/instrumentation.rs	manual	tests/instrumentation.rs	3804cc161443b472eff57b481bf535f3986eb184a3148d15f6b6c83338909e64	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
+tests/limits.rs	manual	tests/limits.rs	ead03b0c38b51f1c4a0d1f511c4d98fca24b87fb1fa8a662c9ab49d884f47806	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
+tests/listing_failures.rs	generated	tests/listing_failures.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/macros_readme.rs	generated	tests/macros_readme.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/mutations.rs	manual	tests/mutations.rs	3cc4ab8eec544b08cd04711b88f39737e3636cdc441ffe0d695cb1ae2031c293	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
+tests/options.rs	generated	tests/options.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/plan.rs	generated	tests/plan.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/plan_schema.rs	generated	tests/plan_schema.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/positional_args.rs	generated	tests/positional_args.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/query.rs	generated	tests/query.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/scoped.rs	generated	tests/scoped.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/server_command.rs	manual	tests/server_command.rs	e6bab0b2ad5a1faa3e17340c060857c24b6aa00c32aef35343749a6331002c06	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
+tests/target.rs	generated	tests/target.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/test_server.rs	manual	tests/test_server.rs	e02ba71098364c007b9a5e77fe99c67ad0f9a5b420ba81768885326a257af286	Blocking fixture startup and shutdown preserve owned process containment, readiness deadlines and cleanup diagnostics.
+tests/tmux_text.rs	generated	tests/tmux_text.rs	-	The generator translates the canonical operation, example, or regression test.
+tests/version.rs	generated	tests/version.rs	-	The generator translates the canonical operation, example, or regression test.
+examples/api_capture.rs	manual	examples/api_capture.rs	cf009b38fbeef9c3fa3c718b5e5b92e01b3451b9862b84f5259ad12515b00c09	The standalone program uses direct blocking calls and the same API assertions and output.
+examples/api_cardinality.rs	manual	examples/api_cardinality.rs	39e5ceb753adb2872f393e8c1ca93f730d0e5d68d6056239e18cf3649f869ca0	The standalone program uses direct blocking calls and the same API assertions and output.
+examples/api_construction.rs	manual	examples/api_construction.rs	4ddfcccf5013e788e163f41191f913ed47c0b8fce33275889eee68eda4ec9b2c	The standalone program uses direct blocking calls and the same API assertions and output.
+examples/api_creation.rs	manual	examples/api_creation.rs	c315b96a9111759c3e74626615af8f9f4c53b03218b293a1b73349459b20738e	The standalone program uses direct blocking calls and the same API assertions and output.
+examples/api_input.rs	manual	examples/api_input.rs	e087c555269c7f3eecaa909aa780fa27ef16ee48f8730fa9c44e3d40d83a81e0	The standalone program uses direct blocking calls and the same API assertions and output.
+examples/api_listings.rs	manual	examples/api_listings.rs	10646cb4effa07f4cf44e249d7732b3f79d803ef96f8c2f36a43d46c162fb95c	The standalone program uses direct blocking calls and the same API assertions and output.
+examples/api_query.rs	manual	examples/api_query.rs	8e79e807caf9974431188b524ac0ff90423092a34cfe95f2f07b53902f2f0aea	The standalone program uses direct blocking calls and the same API assertions and output.
+examples/find.rs	generated	examples/find.rs	-	The generator translates the canonical operation, example, or regression test.
+examples/inspect.rs	generated	examples/inspect.rs	-	The generator translates the canonical operation, example, or regression test.
+examples/matrix.rs	manual	examples/matrix.rs	e65865b215d084e83d13bb12d61cad5d44e172da9243e4e3ed53d48d59d11718	The same workload and state checks run through each blocking transport and planner without a runtime facade.
+examples/orchestrate.rs	generated	examples/orchestrate.rs	-	The generator translates the canonical operation, example, or regression test.
+examples/recover.rs	generated	examples/recover.rs	-	The generator translates the canonical operation, example, or regression test.
+examples/scratch.rs	generated	examples/scratch.rs	-	The generator translates the canonical operation, example, or regression test.
+examples/sweep.rs	generated	examples/sweep.rs	-	The generator translates the canonical operation, example, or regression test.
+examples/watch.rs	manual	examples/watch.rs	c29c1c6bb80ef82763d16fe5dd4e0693b77f148a15894d12868bcf573e1deafb	Both clients own their fixture, bound notification reads, verify the requested rename, and report connection and server cleanup failures.
+benches/hierarchy.rs	manual	benches/hierarchy.rs	5a85110e62b292b3b721af48c38478046ffc11ec4a4e6998daa64cd552637afa	Criterion calls blocking operations directly with the same fixtures, workloads and measured spans.
+benches/waits.rs	manual	benches/waits.rs	9e142d4d0e1095ea6530061434db831e88b2313aff83fbe3738e05a7d218c9c4	Criterion calls blocking operations directly with the same fixtures, workloads and measured spans.

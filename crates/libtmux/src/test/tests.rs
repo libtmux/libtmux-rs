@@ -42,11 +42,9 @@ fn a_timeout_scale_only_ever_widens() {
 }
 
 /// A deadline past the end of the clock is a deadline, not a panic.
-#[tokio::test]
-async fn a_span_longer_than_the_clock_still_answers() {
-    super::retry_until(Duration::MAX, async || true)
-        .await
-        .expect("a condition that already holds");
+#[test]
+fn a_span_longer_than_the_clock_still_answers() {
+    super::retry_until(Duration::MAX, || true).expect("a condition that already holds");
 }
 
 use std::ffi::OsString;
@@ -91,8 +89,8 @@ impl Drop for ChildGuard {
     }
 }
 
-#[tokio::test]
-async fn never_observe_fallback_cleans_an_exited_leaders_group() {
+#[test]
+fn never_observe_fallback_cleans_an_exited_leaders_group() {
     let root = tempfile::tempdir().expect("fake executable directory is created");
     let executable = root.path().join("tmux");
     let pids = root.path().join("pids");
@@ -152,7 +150,6 @@ async fn never_observe_fallback_cleans_an_exited_leaders_group() {
             |_| LeaderObservation::Unavailable,
             Some(Duration::from_millis(50)),
         )
-        .await
         .expect_err("exited fallback leader is rejected");
     assert_eq!(error.kind(), TestServerErrorKind::DaemonExited);
 
@@ -185,7 +182,7 @@ async fn never_observe_fallback_cleans_an_exited_leaders_group() {
 )))]
 #[test]
 fn unavailable_observer_caps_oversized_grace_before_group_cleanup() {
-    for timeout in [Duration::MAX, Duration::from_secs(100 * 365 * 24 * 60 * 60)] {
+    for timeout in [Duration::MAX, Duration::from_hours(100 * 365 * 24)] {
         let root = tempfile::tempdir().expect("fallback process directory is created");
         let pids_path = root.path().join("pids");
         let mut child = ProcessCommand::new("sh");
@@ -495,15 +492,14 @@ fn containment_failure_cannot_rearm_a_reaped_leader_inner() {
     fs::remove_dir_all(directory).expect("test removes the retained root");
 }
 
-#[tokio::test]
-async fn a_retry_deadline_widens_with_the_load_scale() {
+#[test]
+fn a_retry_deadline_widens_with_the_load_scale() {
     // The scale exists so a loaded machine does not fail a healthy fixture.
     // `retry_until` is what a fixture polls tmux through, so a deadline that
     // skipped the scale here would be the one every fixture hit first.
     let base = Duration::from_millis(20);
-    let timeout = super::retry_until(base, || async { false })
-        .await
-        .expect_err("a condition that never holds times out");
+    let timeout =
+        super::retry_until(base, || false).expect_err("a condition that never holds times out");
 
     assert_eq!(
         timeout.waited,

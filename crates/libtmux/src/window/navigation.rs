@@ -18,9 +18,9 @@ impl Window {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
+    pub fn panes(&self) -> Result<Vec<Pane>, Error> {
         let target = self.id().to_string();
-        let projections = listing::panes(&self.core, listing::Scope::Target(&target), None).await?;
+        let projections = listing::panes(&self.core, listing::Scope::Target(&target), None)?;
 
         Ok(projections
             .into_iter()
@@ -39,32 +39,28 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::query::Filterable as _;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("searched").await?;
-    /// let window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("searched")?;
+    /// let window = session.active_window()?.expect("a window");
     ///
     /// let fields = libtmux::Pane::filter_fields();
-    /// let found = window.search_panes(&fields.pane_active.eq(true)).await?;
+    /// let found = window.search_panes(&fields.pane_active.eq(true))?;
     /// assert_eq!(found.len(), 1);
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(feature = "query")]
-    pub async fn search_panes<M: crate::query::Matcher<Pane>>(
+    pub fn search_panes<M: crate::query::Matcher<Pane>>(
         &self,
         matcher: M,
     ) -> Result<Vec<Pane>, Error> {
         use crate::query::QueryIteratorExt as _;
 
-        let all = self.panes().await?;
+        let all = self.panes()?;
         Ok(all.iter().matching(matcher).cloned().collect())
     }
 
@@ -75,8 +71,8 @@ impl Window {
     /// Returns an error when the pane listing fails. A window always has an
     /// active pane, so `Ok(None)` means the window disappeared between the
     /// snapshot and this call.
-    pub async fn active_pane(&self) -> Result<Option<Pane>, Error> {
-        Ok(self.panes().await?.into_iter().find(Pane::is_active))
+    pub fn active_pane(&self) -> Result<Option<Pane>, Error> {
+        Ok(self.panes()?.into_iter().find(Pane::is_active))
     }
 
     /// Move focus one pane in this direction, and report where it landed.
@@ -98,31 +94,27 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{PaneDirection, SplitDirection};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("directions").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("directions")?;
+    /// let window = session.active_window()?.expect("a session has a window");
     ///
     /// // Splitting leaves focus where it was, so the top pane is still active.
-    /// let lower = window.split(SplitDirection::Below).await?;
+    /// let lower = window.split(SplitDirection::Below)?;
     ///
-    /// let moved = window.focus_direction(PaneDirection::Below).await?;
+    /// let moved = window.focus_direction(PaneDirection::Below)?;
     /// assert_eq!(moved.id(), lower.id(), "focus moved down to the new pane");
     ///
     /// // Down again from the bottom wraps rather than failing.
-    /// let wrapped = window.focus_direction(PaneDirection::Below).await?;
+    /// let wrapped = window.focus_direction(PaneDirection::Below)?;
     /// assert_ne!(wrapped.id(), lower.id(), "the edge wraps back to the top");
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn focus_direction(&self, direction: PaneDirection) -> Result<Pane, Error> {
+    pub fn focus_direction(&self, direction: PaneDirection) -> Result<Pane, Error> {
         let target = self.id().to_string();
         listing::mutate(
             &self.core,
@@ -131,11 +123,9 @@ impl Window {
                 .arg(direction.flag())
                 .arg("-t")
                 .arg(&target),
-        )
-        .await?;
+        )?;
 
         self.active_pane()
-            .await
             .map_err(|error| error.after_effect("select-pane"))?
             .ok_or_else(|| {
                 Error::ObjectGone {
@@ -161,32 +151,27 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::{SplitDirection, SplitOptions};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("panes").await?;
-    /// let mut window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("panes")?;
+    /// let mut window = session.active_window()?.expect("a window");
     ///
     /// // One pane, so there is nowhere to go back to and nothing broke.
-    /// assert!(window.last_pane().await?.is_none());
+    /// assert!(window.last_pane()?.is_none());
     ///
-    /// window.split(SplitOptions::new(SplitDirection::Below).select()).await?;
-    /// assert!(window.last_pane().await?.is_some());
+    /// window.split(SplitOptions::new(SplitDirection::Below).select())?;
+    /// assert!(window.last_pane()?.is_some());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn last_pane(&self) -> Result<Option<Pane>, Error> {
+    pub fn last_pane(&self) -> Result<Option<Pane>, Error> {
         let target = self.id().to_string();
         let result = self
             .core
-            .execute(Command::new("last-pane").arg("-t").arg(&target))
-            .await?;
+            .execute(Command::new("last-pane").arg("-t").arg(&target))?;
         if !result.success() {
             let stderr = result.stderr_lossy();
             if crate::error::NO_SUCH_NEIGHBOUR.contains(&stderr.trim_end()) {
@@ -201,7 +186,6 @@ impl Window {
 
         let active = self
             .active_pane()
-            .await
             .map_err(|error| error.after_effect("last-pane"))?;
         active
             .ok_or_else(|| {
@@ -220,15 +204,14 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses a listing.
-    pub async fn linked_sessions(&self) -> Result<Vec<Session>, Error> {
+    pub fn linked_sessions(&self) -> Result<Vec<Session>, Error> {
         // The window id is a sigil and digits, so tmux matches it server-side
         // and returns only the winlink rows that reach this window.
         let links = listing::windows(
             &self.core,
             listing::Scope::Server,
             Some(&self.id().predicate("window_id")),
-        )
-        .await?;
+        )?;
 
         let mut sessions = Vec::with_capacity(links.len());
         let mut seen = HashSet::with_capacity(links.len());
@@ -237,8 +220,7 @@ impl Window {
             if !seen.insert(session.number()) {
                 continue;
             }
-            let infos =
-                listing::sessions(&self.core, Some(&session.predicate("session_id"))).await?;
+            let infos = listing::sessions(&self.core, Some(&session.predicate("session_id")))?;
             // A session that goes away between the two listings is dropped
             // rather than reported half-formed.
             sessions.extend(
@@ -260,8 +242,8 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when the session listing fails.
-    pub async fn session(&self) -> Result<Option<Session>, Error> {
-        let infos = listing::sessions(&self.core, None).await?;
+    pub fn session(&self) -> Result<Option<Session>, Error> {
+        let infos = listing::sessions(&self.core, None)?;
 
         Ok(infos
             .into_iter()
@@ -274,14 +256,13 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when the pane listing fails.
-    pub async fn pane_at(&self, index: u32) -> Result<Option<Pane>, Error> {
+    pub fn pane_at(&self, index: u32) -> Result<Option<Pane>, Error> {
         let target = self.id().to_string();
         let projections = listing::panes(
             &self.core,
             listing::Scope::Target(&target),
             Some(&index.predicate("pane_index")),
-        )
-        .await?;
+        )?;
 
         Ok(projections
             .into_iter()

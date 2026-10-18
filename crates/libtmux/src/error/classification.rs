@@ -31,31 +31,27 @@ impl Error {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::ErrorKind;
     ///
     /// // The shape this exists for: use it if it is there, make it if not.
-    /// let session = match server.session("work").await? {
+    /// let session = match server.session("work")? {
     ///     Some(session) => session,
-    ///     None => server.new_session("work").await?,
+    ///     None => server.new_session("work")?,
     /// };
     ///
     /// // And when an operation races something else removing it. The handle
     /// // is cloned because killing consumes one, which is how the crate
     /// // stops you from using a window you just destroyed.
-    /// let window = session.new_window("doomed").await?;
+    /// let window = session.new_window("doomed")?;
     /// let mut stale = window.clone();
-    /// window.kill().await?;
+    /// window.kill()?;
     ///
-    /// let error = stale.rename("gone").await.expect_err("the window was killed");
+    /// let error = stale.rename("gone").expect_err("the window was killed");
     /// assert_eq!(error.kind(), ErrorKind::ObjectGone);
     /// assert!(error.is_object_gone());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -83,6 +79,7 @@ impl Error {
             | Self::SessionExists { .. }
             | Self::OptionRejected { .. } => ErrorKind::Refused,
             Self::Timeout { .. } => ErrorKind::Timeout,
+            Self::Cancelled { .. } => ErrorKind::Cancelled,
             Self::ExecutableNotFound { .. }
             | Self::InvalidServerConfiguration { .. }
             | Self::RuntimeUnavailable { .. } => ErrorKind::Unreachable,
@@ -190,6 +187,7 @@ impl Error {
             | Self::ServerMismatch { .. }
             | Self::ExecutableNotFound { .. }
             | Self::ExecutorShutdown { .. }
+            | Self::Cancelled { .. }
             | Self::DuplicateRequest { .. }
             | Self::ReadOutput { .. }
             | Self::WaitChild { .. }

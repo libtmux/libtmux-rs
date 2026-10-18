@@ -1,7 +1,7 @@
 //! Report what a tmux server is running.
 //!
 //! ```console
-//! $ cargo run --example inspect
+//! $ cargo run -p libtmux --example inspect
 //! ```
 //!
 //! Reads the default server, or the one named by `$TMUX` when run inside a
@@ -18,20 +18,19 @@ fn show_optional(value: Option<&TmuxText>) -> String {
     value.map_or_else(|| "-".to_owned(), show)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Inside a pane, `$TMUX` names the server this process belongs to.
     // Outside one, fall back to the default socket.
     let server = Server::from_env().or_else(|_| Server::new())?;
 
-    if !server.is_alive().await {
+    if !server.is_alive() {
         println!("no tmux server at {}", server.socket_path().display());
         return Ok(());
     }
 
     // Three tmux commands, not one per object: walking down would cost a
     // command per session and per window.
-    for branch in server.hierarchy().await? {
+    for branch in server.hierarchy()? {
         let session = &branch.session;
         println!(
             "{session} {} ({} windows{})",
@@ -62,6 +61,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    server.shutdown().await?;
+    server.shutdown()?;
     Ok(())
 }

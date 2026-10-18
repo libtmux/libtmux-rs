@@ -1,173 +1,77 @@
-use std::collections::VecDeque;
-use std::time::Duration;
+use std::collections::{VecDeque, hash_map::RandomState};
+use std::hash::BuildHasher as _;
+use std::io::BufReader;
+use std::os::unix::net::UnixStream;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use tokio::io::BufReader;
-use tokio::process::{ChildStdin, ChildStdout};
-use tokio::sync::{mpsc, oneshot, watch};
-use tokio::time::Instant;
-
-use super::protocol::{Line, read_line, read_line_within, write_line};
+use super::channel::{EVENT_QUEUE, ReplyPort, Request, Shared, lock};
+pub(super) use super::channel::{Receiver, Sender};
+use super::protocol::{Line, RawLine, read_raw, write_request};
 use super::{BlockResult, Boundary, Delivery, Event};
-use crate::Error;
 use crate::internal::process::PersistentChild;
-use crate::limits::ControlLimits;
+use crate::{ControlLimits, Error, TmuxText};
 
-/// How many commands may queue before a sender waits.
-const COMMAND_QUEUE: usize = 16;
-
-/// How many events may buffer before the connection stops reading tmux.
-pub(super) const EVENT_QUEUE: usize = 256;
-
-/// How many events may be held while a reply is outstanding.
-///
-/// Reading continues while something is waiting for a reply, because the reply
-/// arrives on the connection that would otherwise pause. That is bounded by
-/// how long a reply takes, and tmux answers most commands at once -- but not
-/// all. `run-shell` without `-b` answers its own block immediately and then
-/// parks the queue for as long as its shell command runs, so the next command
-/// sent is outstanding for that long and this end would hold events for the
-/// duration. A ceiling turns that into a pause rather than a memory leak.
 pub(super) const HELD_WHILE_AWAITING: usize = EVENT_QUEUE * 8;
+// The private unknown-command line remains below this bound for every u64.
+const FENCE_LINE_LIMIT: usize = 80;
 
-/// The public handles backed by one running connection actor.
-pub(super) struct OpenedConnection {
-    pub(super) commands: mpsc::Sender<Request>,
-    pub(super) events: mpsc::Receiver<Delivery>,
-    pub(super) stop: watch::Sender<()>,
-    pub(super) connection: tokio::task::JoinHandle<Result<(), Error>>,
+/// An ordered parse-error callback that cannot run a command alias or hook.
+#[derive(Clone, Debug)]
+pub(super) struct ReplyFence {
+    command: String,
+    output: TmuxText,
 }
 
-/// Take ownership of a control process and wait until tmux has attached it.
-pub(super) async fn open(
-    mut child: PersistentChild,
-    limits: ControlLimits,
-    timeout: Duration,
-) -> Result<OpenedConnection, Error> {
-    let Some(stdin) = child.take_stdin() else {
-        let _ = child.terminate().await;
-        return Err(Error::control_mode_pipes());
-    };
-    let Some(stdout) = child.take_stdout() else {
-        let _ = child.terminate().await;
-        return Err(Error::control_mode_pipes());
-    };
-    let core_stopped = child.stopped();
+impl ReplyFence {
+    fn new() -> Self {
+        static SALT: OnceLock<u64> = OnceLock::new();
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let salt = SALT.get_or_init(|| RandomState::new().hash_one(std::process::id()));
+        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+        Self::named(format!("_lt{salt:016x}{sequence:x}"))
+    }
 
-    let (commands, queue) = mpsc::channel(COMMAND_QUEUE);
-    let (events, received) = mpsc::channel(EVENT_QUEUE);
-    let (stop, stopped) = watch::channel(());
-    let actor = Connection {
-        child,
-        stdin,
-        stdout: BufReader::new(stdout),
-        limits,
-        timeout,
-        line: Vec::new(),
-        commands: queue,
-        events,
-        stopped,
-        core_stopped,
-        awaiting: ReplySlots::default(),
-        pending: VecDeque::new(),
-    };
+    fn named(command: String) -> Self {
+        let output = TmuxText::from(format!("parse error: unknown command: {command}"));
+        Self { command, output }
+    }
 
-    let (ready, mut opened) = oneshot::channel();
-    let mut connection = tokio::spawn(actor.run(ready));
-    tokio::select! {
-        biased;
-        result = &mut opened => {
-            if result.is_err() {
-                return match connection.await {
-                    Ok(Err(error)) => Err(error),
-                    Ok(Ok(())) | Err(_) => Err(Error::control_mode_closed()),
-                };
-            }
-        }
-        result = &mut connection => {
-            return match result {
-                Ok(Err(error)) => Err(error),
-                Ok(Ok(())) | Err(_) => Err(Error::control_mode_closed()),
-            };
+    fn matches(&self, block: &BlockResult) -> bool {
+        !block.succeeded() && block.output() == std::slice::from_ref(&self.output)
+    }
+
+    #[cfg(any(test, feature = "unstable-fuzzing"))]
+    pub(super) fn block(&self) -> BlockResult {
+        BlockResult {
+            number: 0,
+            succeeded: false,
+            output: vec![self.output.clone()],
+            sensitive_input: false,
+            failed_lines: vec![true],
         }
     }
-
-    Ok(OpenedConnection {
-        commands,
-        events: received,
-        stop,
-        connection,
-    })
 }
 
-/// One line waiting for its result blocks.
-#[derive(Debug)]
-pub(super) struct Request {
-    pub(super) line: String,
-    pub(super) deadline: Option<Instant>,
-    pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
-    pub(super) commit: oneshot::Sender<()>,
-    pub(super) boundary: Option<Boundary>,
-    /// Commands on the line: tmux answers each with its own block.
-    pub(super) blocks: usize,
-}
-
-/// A request whose caller can no longer prevent the first write.
-#[derive(Debug)]
-pub(super) struct CommittedRequest {
-    pub(super) line: String,
-    pub(super) deadline: Option<Instant>,
-    pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
-    pub(super) boundary: Option<Boundary>,
-    pub(super) blocks: usize,
-}
-
-impl Request {
-    pub(super) fn commit(self) -> Option<CommittedRequest> {
-        let Self {
-            line,
-            deadline,
-            result,
-            commit,
-            boundary,
-            blocks,
-        } = self;
-        commit.send(()).ok()?;
-        Some(CommittedRequest {
-            line,
-            deadline,
-            result,
-            boundary,
-            blocks,
-        })
-    }
-}
-
-pub(super) fn admit_request(request: Request, pending_events: usize) -> Option<Request> {
-    if pending_events < HELD_WHILE_AWAITING {
-        return Some(request);
-    }
-
-    let _ = request.result.send(Err(Error::control_mode_unread()));
-    None
-}
-
-/// Reply ownership in the order tmux will answer it.
+/// Reply ownership in the order tmux will pass each completion boundary.
 #[derive(Debug)]
 pub(super) enum ReplySlot {
     Live {
-        result: oneshot::Sender<Result<BlockResult, Error>>,
+        result: ReplyPort,
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
-        /// Blocks still to come, one per command on the line.
-        owed: usize,
-        /// The chain's blocks so far, all of them successes.
+        fence: ReplyFence,
         received: Option<BlockResult>,
+        bytes: usize,
     },
-    /// Consume these blocks without giving them to a later caller.
+    /// Consume this request's replies even though nobody can receive them.
     Tombstone {
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
-        owed: usize,
+        fence: ReplyFence,
     },
 }
 
@@ -178,47 +82,39 @@ impl ReplySlot {
         }
     }
 
-    const fn boundary(&self) -> Option<Boundary> {
+    const fn fence(&self) -> &ReplyFence {
         match self {
-            Self::Live { boundary, .. } | Self::Tombstone { boundary, .. } => *boundary,
+            Self::Live { fence, .. } | Self::Tombstone { fence, .. } => fence,
         }
     }
 
-    /// Whether `block` is the last this slot is owed. tmux runs nothing
-    /// after the first command in a chain that fails, so a failure ends it.
-    const fn is_last(&self, block: &BlockResult) -> bool {
-        let (Self::Live { owed, .. } | Self::Tombstone { owed, .. }) = self;
-        *owed <= 1 || !block.succeeded()
+    fn take_boundary(&mut self) -> Option<Boundary> {
+        match self {
+            Self::Live { boundary, .. } | Self::Tombstone { boundary, .. } => boundary.take(),
+        }
     }
 
-    /// Take one block, returning the whole reply once the last one arrives.
-    fn take(&mut self, block: BlockResult) -> Option<BlockResult> {
-        let last = self.is_last(&block);
-        match self {
-            Self::Live { owed, received, .. } => {
-                let block = match received.take() {
-                    Some(earlier) => earlier.followed_by(block),
-                    None => block,
-                };
-                if last {
-                    return Some(block);
-                }
-                *owed -= 1;
-                *received = Some(block);
-                None
+    fn take(&mut self, block: BlockResult, limit: usize) -> Result<(), Error> {
+        if let Self::Live {
+            received, bytes, ..
+        } = self
+        {
+            for line in block.output() {
+                *bytes = bytes.saturating_add(line.as_bytes().len().saturating_add(1));
             }
-            Self::Tombstone { owed, .. } => {
-                if last {
-                    return Some(block);
-                }
-                *owed -= 1;
-                None
+            if *bytes > limit {
+                return Err(Error::control_mode_frame_too_large("reply", limit));
             }
+            *received = Some(match received.take() {
+                Some(earlier) => earlier.followed_by(block),
+                None => block,
+            });
         }
+        Ok(())
     }
 }
 
-/// Ordered reply slots, including blocks whose callers were refused.
+/// Ordered requests, including replies whose callers were refused.
 #[derive(Debug, Default)]
 pub(super) struct ReplySlots {
     pub(super) slots: VecDeque<ReplySlot>,
@@ -227,58 +123,37 @@ pub(super) struct ReplySlots {
 }
 
 impl ReplySlots {
-    #[cfg(test)]
-    pub(super) fn push(
-        &mut self,
-        result: oneshot::Sender<Result<BlockResult, Error>>,
-        deadline: Option<Instant>,
-    ) {
-        self.push_ordered(result, deadline, None, 1);
-    }
-
     #[cfg(any(test, feature = "unstable-fuzzing"))]
-    pub(super) fn push_chain(
-        &mut self,
-        result: oneshot::Sender<Result<BlockResult, Error>>,
-        blocks: usize,
-    ) {
-        self.push_ordered(result, None, None, blocks);
+    pub(super) fn push(&mut self, result: ReplyPort, deadline: Option<Instant>) -> ReplyFence {
+        let fence = ReplyFence::new();
+        self.push_ordered(result, deadline, None, fence.clone());
+        fence
     }
 
     fn push_ordered(
         &mut self,
-        result: oneshot::Sender<Result<BlockResult, Error>>,
+        result: ReplyPort,
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
-        blocks: usize,
+        fence: ReplyFence,
     ) {
         self.earliest = earliest_deadline(self.earliest, deadline);
-        let owed = blocks.max(1);
         if result.is_closed() {
             self.slots.push_back(ReplySlot::Tombstone {
                 deadline,
                 boundary,
-                owed,
+                fence,
             });
         } else {
             self.slots.push_back(ReplySlot::Live {
                 result,
                 deadline,
                 boundary,
-                owed,
+                fence,
                 received: None,
+                bytes: 0,
             });
             self.live += 1;
-        }
-    }
-
-    /// The front slot's boundary, when `block` is the last it is owed.
-    fn boundary_closed_by(&self, block: &BlockResult) -> Option<Boundary> {
-        let front = self.slots.front()?;
-        if front.is_last(block) {
-            front.boundary()
-        } else {
-            None
         }
     }
 
@@ -307,51 +182,76 @@ impl ReplySlots {
             let ReplySlot::Live {
                 deadline,
                 boundary,
-                owed,
+                fence,
                 ..
-            } = *slot
+            } = slot
             else {
                 continue;
             };
-            let ReplySlot::Live { result, .. } = std::mem::replace(
-                slot,
-                ReplySlot::Tombstone {
-                    deadline,
-                    boundary,
-                    owed,
-                },
-            ) else {
-                continue;
+            let tombstone = ReplySlot::Tombstone {
+                deadline: *deadline,
+                boundary: *boundary,
+                fence: fence.clone(),
             };
-            let _ = result.send(Err(Error::control_mode_unread()));
+            if let ReplySlot::Live { result, .. } = std::mem::replace(slot, tombstone) {
+                result.send(Err(Error::control_mode_unread()));
+            }
         }
         self.live = 0;
     }
 
-    pub(super) fn complete(&mut self, block: BlockResult) {
+    pub(super) fn consume(
+        &mut self,
+        block: BlockResult,
+        limit: usize,
+    ) -> Result<Option<Boundary>, Error> {
         let Some(front) = self.slots.front_mut() else {
-            return;
+            return Ok(None);
         };
-        let Some(block) = front.take(block) else {
-            return;
-        };
+        if !front.fence().matches(&block) {
+            let boundary = front.take_boundary();
+            front.take(block, limit)?;
+            return Ok(boundary);
+        }
         let Some(slot) = self.slots.pop_front() else {
-            return;
+            return Ok(None);
         };
         let deadline = slot.deadline();
-        if let ReplySlot::Live { result, .. } = slot {
+        if let ReplySlot::Live {
+            result, received, ..
+        } = slot
+        {
             self.live -= 1;
-            let _ = result.send(Ok(block));
+            let empty = || BlockResult {
+                number: block.number(),
+                succeeded: true,
+                output: Vec::new(),
+                sensitive_input: false,
+                failed_lines: Vec::new(),
+            };
+            result.send(Ok(received.unwrap_or_else(empty)));
         }
         if deadline == self.earliest {
             self.earliest = self.slots.iter().filter_map(ReplySlot::deadline).min();
+        }
+        Ok(None)
+    }
+
+    #[cfg(test)]
+    pub(super) fn complete(&mut self, block: BlockResult) {
+        let fence = self.slots.front().map(|slot| slot.fence().block());
+        self.consume(block, usize::MAX)
+            .expect("unbounded test reply fits");
+        if let Some(fence) = fence {
+            self.consume(fence, usize::MAX)
+                .expect("fence completes request");
         }
     }
 
     fn fail_all(&mut self, mut reason: impl FnMut() -> Error) {
         while let Some(slot) = self.slots.pop_front() {
             if let ReplySlot::Live { result, .. } = slot {
-                let _ = result.send(Err(reason()));
+                result.send(Err(reason()));
             }
         }
         self.live = 0;
@@ -359,498 +259,523 @@ impl ReplySlots {
     }
 }
 
-/// What one turn of the connection loop found to do.
-enum Step {
-    /// The watching half has room for one held event, or has gone.
-    Deliver(bool),
-    Read(Result<Option<Line>, Error>),
-    Send(Option<Request>),
-    /// The watching half asked to stop, or went away.
-    Unwatched {
-        asked: bool,
-    },
-    CoreStopped,
-    TimedOut,
+pub(super) struct OpenedConnection {
+    pub(super) commands: Sender,
+    pub(super) events: Receiver,
 }
 
-enum BlockRead {
-    Complete(BlockResult),
-    Stopped,
+pub(super) fn open(
+    mut child: PersistentChild,
+    limits: ControlLimits,
+    timeout: Duration,
+    cancellation: &crate::CancellationToken,
+) -> Result<OpenedConnection, Error> {
+    let setup = (|| {
+        let stdin = child.take_stdin().ok_or_else(Error::control_mode_pipes)?;
+        let stdout = child.take_stdout().ok_or_else(Error::control_mode_pipes)?;
+        let shared = Shared::new(
+            stdin.try_clone().map_err(Error::control_mode)?,
+            stdout.try_clone().map_err(Error::control_mode)?,
+        );
+        shared.watch_shutdown(&child.shutdown_token());
+        Ok::<_, Error>((stdin, stdout, shared))
+    })();
+    let (stdin, stdout, shared) = match setup {
+        Ok(parts) => parts,
+        Err(error) => {
+            child.terminate()?;
+            return Err(error);
+        }
+    };
+    let cancelled = child.cancelled_error();
+    let weak = Arc::downgrade(&shared);
+    let _attach_cancel = cancellation.on_cancel(move || {
+        if let Some(shared) = weak.upgrade() {
+            shared.interrupt(false);
+        }
+    });
+    let read_shared = Arc::clone(&shared);
+    let reader = match thread::Builder::new()
+        .name("libtmux-control-reader".into())
+        .spawn(move || read_wire(stdout, &read_shared, limits))
+    {
+        Ok(reader) => reader,
+        Err(error) => {
+            child.terminate()?;
+            return Err(Error::control_mode(error));
+        }
+    };
+    let parts = Arc::new(Mutex::new(Some((
+        Connection {
+            child,
+            stdin,
+            shared: Arc::clone(&shared),
+            limits,
+            timeout,
+            opening_deadline: Instant::now().checked_add(timeout),
+            opened: false,
+            frame: None,
+            awaiting: ReplySlots::default(),
+            pending: VecDeque::new(),
+        },
+        reader,
+    ))));
+    let worker_parts = Arc::clone(&parts);
+    let handle = thread::Builder::new()
+        .name("libtmux-control".into())
+        .spawn(move || {
+            let Some((connection, reader)) = lock(&worker_parts).take() else {
+                return Err(Error::control_mode_closed());
+            };
+            connection.run_to_completion(reader)
+        });
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            shared.interrupt(false);
+            if let Some((mut connection, reader)) = lock(&parts).take() {
+                let cleanup = connection.child.terminate();
+                if let Err(panic) = reader.join() {
+                    resume_unwind(panic);
+                }
+                cleanup?;
+            }
+            return Err(Error::control_mode(error));
+        }
+    };
+    let commands = Sender {
+        shared: Arc::clone(&shared),
+    };
+    let mut events = Receiver {
+        shared,
+        connection: Some(handle),
+    };
+    loop {
+        let revision = events.revision();
+        if cancellation.is_cancelled() {
+            events.shutdown()?;
+            return Err(cancelled);
+        }
+        let ready = lock(&events.shared.state).ready;
+        if ready {
+            return Ok(OpenedConnection { commands, events });
+        }
+        if events.finished() {
+            return match events.finish() {
+                Err(error) => Err(error),
+                Ok(()) => Err(Error::control_mode_closed()),
+            };
+        }
+        events.wait(revision, None);
+    }
+}
+
+fn read_wire(stdout: UnixStream, shared: &Shared, limits: ControlLimits) {
+    let result = catch_unwind(AssertUnwindSafe(|| read_lines(stdout, shared, limits)));
+    if let Err(panic) = result {
+        publish_line(shared, Err(Error::control_mode_closed()));
+        resume_unwind(panic);
+    }
+}
+
+fn read_lines(stdout: UnixStream, shared: &Shared, limits: ControlLimits) {
+    let mut stdout = BufReader::new(stdout);
+    let physical_limit = limits.max_line_bytes.max(FENCE_LINE_LIMIT);
+    loop {
+        if lock(&shared.state).reader_stop {
+            return;
+        }
+        let line = read_raw(&mut stdout, physical_limit).map_err(|error| match error {
+            Error::ControlModeFrameTooLarge { frame: "line", .. } => {
+                Error::control_mode_frame_too_large("line", limits.max_line_bytes)
+            }
+            error => error,
+        });
+        let ended = !matches!(line, Ok(Some(_)));
+        if !publish_line(shared, line) || ended {
+            return;
+        }
+    }
+}
+
+fn publish_line(shared: &Shared, line: Result<Option<RawLine>, Error>) -> bool {
+    let mut state = lock(&shared.state);
+    while state.incoming.is_some() && !state.reader_stop {
+        state = shared
+            .changed
+            .wait(state)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    if state.reader_stop {
+        return false;
+    }
+    state.incoming = Some(line);
+    shared.notify(&mut state);
+    true
 }
 
 #[derive(Clone, Copy)]
-enum TerminalError {
+enum Terminal {
     Closed,
-    Frame(&'static str, usize),
     Shutdown,
-    TimedOut,
+    Timeout,
+    Frame(&'static str, usize),
 }
-
-impl TerminalError {
-    fn build(self, child: &PersistentChild) -> Error {
-        match self {
-            Self::Closed => Error::control_mode_closed(),
-            Self::Frame(frame, limit) => Error::control_mode_frame_too_large(frame, limit),
-            Self::Shutdown => child.shutdown_error(),
-            Self::TimedOut => Error::control_mode_timeout(),
-        }
-    }
-}
-
-/// The task that owns the pipes and multiplexes both directions.
-struct Connection {
-    child: PersistentChild,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    /// What one line and one block may accumulate before this gives up.
-    limits: ControlLimits,
-    timeout: Duration,
-    /// Bytes of a line that is not complete yet.
-    ///
-    /// This outlives one read because a cancelled read leaves what it got
-    /// here, and the next read continues from it.
-    line: Vec<u8>,
-    commands: mpsc::Receiver<Request>,
-    events: mpsc::Sender<Delivery>,
-    /// Resolves when the watching half asks to stop, or is dropped.
-    stopped: watch::Receiver<()>,
-    core_stopped: watch::Receiver<bool>,
-    /// Commands whose result block has not arrived yet.
-    ///
-    /// tmux answers in order and blocks do not nest, so the front of this
-    /// queue owns the next block that completes.
-    awaiting: ReplySlots,
-    /// Events tmux has reported that the caller has not taken yet.
-    ///
-    /// The reader puts an event here rather than waiting for the caller to
-    /// have room, because waiting would stop it reading the connection, and
-    /// the connection is where a caller's reply comes from.
-    pending: VecDeque<Delivery>,
-}
-
-impl Connection {
-    async fn run(mut self, mut ready: oneshot::Sender<()>) -> Result<(), Error> {
-        let opening_deadline = Instant::now().checked_add(self.timeout);
-        let (outcome, established) = match self
-            .discard_opening_block(&mut ready, opening_deadline)
-            .await
-        {
-            Ok(true) if ready.send(()).is_ok() => (self.serve().await, true),
-            Ok(_) => (Ok(()), false),
-            Err(error) => (Err(error), false),
-        };
-
-        // Whatever is still waiting will never be answered. It is told why
-        // where the reason is more specific than "closed": a caller who blew
-        // a frame budget can raise it, where one who merely lost the
-        // connection can only reconnect.
-        let reason = match &outcome {
-            Err(Error::ControlModeFrameTooLarge { frame, limit }) => {
-                TerminalError::Frame(frame, *limit)
-            }
+impl Terminal {
+    fn from_outcome(outcome: &Result<(), Error>) -> Self {
+        match outcome {
+            Err(Error::ControlModeFrameTooLarge { frame, limit }) => Self::Frame(frame, *limit),
             Err(Error::ControlMode {
                 kind: crate::ControlModeErrorKind::TimedOut,
                 ..
-            }) => TerminalError::TimedOut,
-            Err(Error::ExecutorShutdown { .. }) => TerminalError::Shutdown,
-            _ => TerminalError::Closed,
-        };
-        let child = &self.child;
-        self.commands.close();
-        self.awaiting.fail_all(|| reason.build(child));
-        while let Ok(request) = self.commands.try_recv() {
-            let _ = request.result.send(Err(reason.build(child)));
+            }) => Self::Timeout,
+            Err(Error::ExecutorShutdown { .. }) => Self::Shutdown,
+            _ => Self::Closed,
         }
-        let drained = if established {
-            self.drain_pending_events().await
-        } else {
-            Ok(())
-        };
-        drop(self.stdin);
-        let cleanup = self.child.terminate().await;
+    }
+    fn error(self, child: &PersistentChild) -> Error {
+        match self {
+            Self::Closed => Error::control_mode_closed(),
+            Self::Shutdown => child.shutdown_error(),
+            Self::Timeout => Error::control_mode_timeout(),
+            Self::Frame(frame, limit) => Error::control_mode_frame_too_large(frame, limit),
+        }
+    }
+}
 
+struct Frame {
+    number: u64,
+    flags: u64,
+    output: Vec<TmuxText>,
+    bytes: usize,
+    deadline: Option<Instant>,
+}
+
+struct Connection {
+    child: PersistentChild,
+    stdin: UnixStream,
+    shared: Arc<Shared>,
+    limits: ControlLimits,
+    timeout: Duration,
+    opening_deadline: Option<Instant>,
+    opened: bool,
+    frame: Option<Frame>,
+    awaiting: ReplySlots,
+    pending: VecDeque<Delivery>,
+}
+
+enum Step {
+    Line(Result<Option<RawLine>, Error>),
+    Send(Request),
+    Stop,
+    CoreStop,
+    TimedOut,
+}
+
+impl Connection {
+    fn run_to_completion(mut self, reader: thread::JoinHandle<()>) -> Result<(), Error> {
+        let outcome = catch_unwind(AssertUnwindSafe(|| self.run()));
+        if outcome.is_err() {
+            self.fail_requests(Terminal::Closed);
+        }
+        self.shared.stop_reader();
+        let cleanup = self.child.terminate();
+        let read_join = reader.join();
+        {
+            let mut state = lock(&self.shared.state);
+            state.finished = true;
+            self.shared.notify(&mut state);
+        }
+        if let Err(panic) = read_join {
+            resume_unwind(panic);
+        }
         match outcome {
-            Err(error) => Err(error),
-            Ok(()) => drained.and(cleanup),
+            Err(panic) => resume_unwind(panic),
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(())) => cleanup,
         }
     }
 
-    async fn serve(&mut self) -> Result<(), Error> {
-        // The connection outlives either half on its own: a caller who only
-        // watches drops the sender, and a caller who only sends drops the
-        // events. It ends when both are gone, when the watcher asks, or when
-        // tmux hangs up.
-        let mut sending = true;
-        let mut watching = true;
+    fn run(&mut self) -> Result<(), Error> {
+        let outcome = self.serve();
+        self.fail_requests(Terminal::from_outcome(&outcome));
+        if self.opened {
+            self.drain_pending();
+        }
+        outcome
+    }
 
-        while sending || watching {
+    fn fail_requests(&mut self, terminal: Terminal) {
+        let requests = {
+            let mut state = lock(&self.shared.state);
+            state.accepting = false;
+            let requests = state.commands.drain(..).collect::<Vec<_>>();
+            self.shared.notify(&mut state);
+            requests
+        };
+        self.awaiting.fail_all(|| terminal.error(&self.child));
+        for request in requests {
+            request.result.send(Err(terminal.error(&self.child)));
+        }
+    }
+
+    fn flush_pending(&mut self, state: &mut super::channel::State) {
+        if !state.receiver_open {
+            self.pending.clear();
+            return;
+        }
+        while state.events.len() < EVENT_QUEUE {
+            let Some(delivery) = self.pending.pop_front() else {
+                break;
+            };
+            state.events.push_back(delivery);
+            self.shared.notify(state);
+        }
+    }
+
+    fn drain_pending(&mut self) {
+        while !self.pending.is_empty() {
+            let shared = Arc::clone(&self.shared);
+            let mut state = lock(&shared.state);
+            if state.stop || !state.receiver_open {
+                return;
+            }
+            self.flush_pending(&mut state);
+            if self.pending.is_empty() {
+                return;
+            }
+            drop(
+                shared
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
+    }
+
+    fn serve(&mut self) -> Result<(), Error> {
+        loop {
             if self.awaiting.has_live() && self.pending.len() >= HELD_WHILE_AWAITING {
                 self.awaiting.refuse_live();
             }
-
-            let held_back = !self.awaiting.has_live() && self.pending.len() >= EVENT_QUEUE;
-            let reply_deadline = self.awaiting.earliest_deadline();
-
-            // Biased: the stop and executor-shutdown signals are checked
-            // before the read, so either wins a race against a pending EOF
-            // instead of the outcome depending on poll order.
-            let step = tokio::select! {
-                biased;
-                asked = self.stopped.changed(), if watching => Step::Unwatched {
-                    asked: asked.is_ok(),
-                },
-                () = cancellation_requested(&mut self.core_stopped) => Step::CoreStopped,
-                line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
-                    if !held_back => Step::Read(line),
-                room = self.events.reserve(), if !self.pending.is_empty() => Step::Deliver(room.is_ok()),
-                request = self.commands.recv(), if sending => Step::Send(request),
-                () = deadline_elapsed(reply_deadline), if self.awaiting.has_slots() => Step::TimedOut,
+            let deadline = if self.opened {
+                earliest_deadline(
+                    self.awaiting.earliest_deadline(),
+                    self.frame.as_ref().and_then(|frame| frame.deadline),
+                )
+            } else {
+                self.opening_deadline
             };
-
-            match step {
-                Step::Read(Err(error)) => return Err(error),
-                // A clean remote close is announced by %exit before EOF.
-                Step::Read(Ok(None)) => return Err(Error::control_mode_closed()),
-                Step::Unwatched { asked: true } => {
-                    return Ok(());
+            let step = {
+                let shared = Arc::clone(&self.shared);
+                let mut state = lock(&shared.state);
+                self.flush_pending(&mut state);
+                if state.core_stopped {
+                    Step::CoreStop
+                } else if state.stop || (state.senders == 0 && !state.receiver_open) {
+                    Step::Stop
+                } else if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
+                    Step::TimedOut
+                } else {
+                    let held_back = if self.opened {
+                        !self.awaiting.has_live() && self.pending.len() >= EVENT_QUEUE
+                    } else {
+                        state.events.len() >= EVENT_QUEUE
+                    };
+                    if !held_back && state.incoming.is_some() {
+                        let line = state.incoming.take();
+                        shared.notify(&mut state);
+                        match line {
+                            Some(line) => Step::Line(line),
+                            None => continue,
+                        }
+                    } else if self.opened && !state.commands.is_empty() && self.frame.is_none() {
+                        let request = state.commands.pop_front();
+                        shared.notify(&mut state);
+                        match request {
+                            Some(request) => Step::Send(request),
+                            None => continue,
+                        }
+                    } else {
+                        let revision = state.revision;
+                        drop(state);
+                        shared.wait(revision, deadline);
+                        continue;
+                    }
                 }
-                Step::CoreStopped => return Err(self.child.shutdown_error()),
+            };
+            match step {
+                Step::Stop => return Ok(()),
+                Step::CoreStop => return Err(self.child.shutdown_error()),
                 Step::TimedOut => return Err(Error::control_mode_timeout()),
-                Step::Read(Ok(Some(line))) => {
-                    if !self.dispatch(line, &mut watching).await? {
+                Step::Line(Err(error)) => return Err(error),
+                Step::Line(Ok(None)) => return Err(Error::control_mode_closed()),
+                Step::Line(Ok(Some(line))) => {
+                    if !self.consume_line(&line)? {
                         return Ok(());
                     }
                 }
-                Step::Send(Some(request)) => {
-                    if request
-                        .deadline
-                        .is_some_and(|deadline| deadline <= Instant::now())
-                    {
-                        let _ = request
-                            .result
-                            .send(Err(Error::control_mode_dispatch_timeout()));
-                        continue;
-                    }
-                    let Some(request) = admit_request(request, self.pending.len()) else {
-                        continue;
-                    };
-                    let Some(request) = request.commit() else {
-                        continue;
-                    };
-                    let write_deadline = earliest_deadline(reply_deadline, request.deadline);
-                    let write = write_line(&mut self.stdin, &request.line);
-                    tokio::pin!(write);
-                    loop {
-                        let result = tokio::select! {
-                            biased;
-                            () = cancellation_requested(&mut self.core_stopped) => {
-                                let _ = request.result.send(Err(self.child.shutdown_error()));
-                                return Err(self.child.shutdown_error());
-                            }
-                            changed = self.stopped.changed(), if watching => {
-                                if changed.is_ok() {
-                                    let _ = request.result.send(Err(Error::control_mode_closed()));
-                                    return Ok(());
-                                }
-                                watching = false;
-                                continue;
-                            }
-                            () = deadline_elapsed(write_deadline) => {
-                                let _ = request.result.send(Err(Error::control_mode_timeout()));
-                                return Err(Error::control_mode_timeout());
-                            }
-                            result = &mut write => result,
-                        };
-                        if let Err(error) = result {
-                            let _ = request.result.send(Err(Error::control_mode_closed()));
-                            return Err(error);
-                        }
-                        break;
-                    }
-                    self.awaiting.push_ordered(
-                        request.result,
-                        request.deadline,
-                        request.boundary,
-                        request.blocks,
-                    );
-                }
-                // The caller took one, so the next one can go.
-                Step::Deliver(true) => {
-                    if let Some(event) = self.pending.pop_front() {
-                        let _ = self.events.try_send(event);
-                    }
-                }
-                // Nobody is watching any more. What is held becomes
-                // unreachable rather than undelivered, and the connection
-                // carries on for whoever is still sending.
-                Step::Deliver(false) => self.pending.clear(),
-                // Every sender is gone, so no further commands can arrive.
-                Step::Send(None) => sending = false,
-                // The watching handle was dropped rather than asked to stop,
-                // which leaves any sender still working.
-                Step::Unwatched { asked: false } => watching = false,
+                Step::Send(request) => self.send(request)?,
             }
         }
+    }
 
+    fn send(&mut self, request: Request) -> Result<(), Error> {
+        if request
+            .deadline
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            request
+                .result
+                .send(Err(Error::control_mode_dispatch_timeout()));
+            return Ok(());
+        }
+        let Some(request) = admit_request(request, self.pending.len()) else {
+            return Ok(());
+        };
+        let Some(request) = request.commit() else {
+            return Ok(());
+        };
+        let fence = ReplyFence::new();
+        let deadline = earliest_deadline(self.awaiting.earliest_deadline(), request.deadline);
+        let written = write_request(&mut self.stdin, &request.line, &fence.command, deadline);
+        if let Err(error) = written {
+            let state = lock(&self.shared.state);
+            let outcome = if state.core_stopped {
+                Err(self.child.shutdown_error())
+            } else if state.stop {
+                Ok(())
+            } else {
+                Err(error)
+            };
+            drop(state);
+            request
+                .result
+                .send(Err(Terminal::from_outcome(&outcome).error(&self.child)));
+            return outcome;
+        }
+        self.awaiting
+            .push_ordered(request.result, request.deadline, request.boundary, fence);
         Ok(())
     }
 
-    /// Consume the block tmux answers an attach with.
-    ///
-    /// tmux writes this once the client is attached, before it has read
-    /// anything from this end, so it replies to nothing. Correlation is by
-    /// arrival order, and leaving this block to the serving loop would hand it
-    /// to the first command's caller as that command's result -- an empty
-    /// success, whatever the command was.
-    async fn discard_opening_block(
-        &mut self,
-        ready: &mut oneshot::Sender<()>,
-        deadline: Option<Instant>,
-    ) -> Result<bool, Error> {
-        loop {
-            let held_back = self.events.capacity() == 0;
-            let line = tokio::select! {
-                biased;
-                () = ready.closed() => return Ok(false),
-                () = cancellation_requested(&mut self.core_stopped) => {
-                    return Err(self.child.shutdown_error());
-                }
-                () = deadline_elapsed(deadline) => {
-                    return Err(Error::control_mode_timeout());
-                }
-                line = read_line(
-                    &mut self.stdout,
-                    &mut self.line,
-                    self.limits.max_line_bytes,
-                ), if !held_back => line?,
-            };
-            match line {
-                Some(Line::BlockStart(number)) => {
-                    return match self.read_opening_block(number, ready, deadline).await? {
-                        Some(true) => Ok(true),
-                        Some(false) => Err(Error::control_mode_closed()),
-                        None => Ok(false),
-                    };
-                }
-                Some(Line::Event(exit @ Event::Exit { .. })) => {
-                    let _ = self.events.try_send(Delivery::Event(exit));
-                    return Err(Error::control_mode_closed());
-                }
-                Some(Line::Event(event)) => {
-                    let _ = self.events.try_send(Delivery::Event(event));
-                }
-                Some(Line::Text(_) | Line::BlockEnd { .. }) => {}
-                None => return Err(Error::control_mode_closed()),
-            }
+    fn report(&mut self, delivery: Delivery) {
+        let mut state = lock(&self.shared.state);
+        if !state.receiver_open {
+            return;
+        }
+        if self.pending.is_empty() && state.events.len() < EVENT_QUEUE {
+            state.events.push_back(delivery);
+            self.shared.notify(&mut state);
+        } else {
+            self.pending.push_back(delivery);
         }
     }
 
-    async fn read_opening_block(
-        &mut self,
-        number: u64,
-        ready: &mut oneshot::Sender<()>,
-        deadline: Option<Instant>,
-    ) -> Result<Option<bool>, Error> {
-        let mut accumulated = 0usize;
-        loop {
-            let line = tokio::select! {
-                biased;
-                () = ready.closed() => return Ok(None),
-                () = cancellation_requested(&mut self.core_stopped) => {
-                    return Err(self.child.shutdown_error());
-                }
-                () = deadline_elapsed(deadline) => {
-                    return Err(Error::control_mode_timeout());
-                }
-                line = read_line_within(
-                    &mut self.stdout,
-                    &mut self.line,
-                    self.limits.max_line_bytes,
-                    Some(number),
-                ) => line?,
-            };
-            match line {
-                Some(Line::BlockEnd {
-                    number: end,
-                    succeeded,
-                }) if end == number => return Ok(Some(succeeded)),
-                Some(Line::Text(text)) => {
-                    accumulated = accumulated.saturating_add(text.as_bytes().len());
-                    if accumulated > self.limits.max_block_bytes {
+    fn finish_frame(&mut self, frame: Frame, succeeded: bool) -> Result<(), Error> {
+        if !self.opened {
+            if !succeeded {
+                return Err(Error::control_mode_closed());
+            }
+            self.opened = true;
+            let mut state = lock(&self.shared.state);
+            state.ready = true;
+            self.shared.notify(&mut state);
+            return Ok(());
+        }
+        let block = BlockResult {
+            number: frame.number,
+            succeeded,
+            failed_lines: vec![!succeeded; frame.output.len()],
+            output: frame.output,
+            sensitive_input: false,
+        };
+        let fence = self
+            .awaiting
+            .slots
+            .front()
+            .is_some_and(|slot| slot.fence().matches(&block));
+        if frame.bytes > self.limits.max_block_bytes && !fence {
+            return Err(Error::control_mode_frame_too_large(
+                "block",
+                self.limits.max_block_bytes,
+            ));
+        }
+        if frame.flags & 1 != 0
+            && let Some(boundary) = self.awaiting.consume(block, self.limits.max_block_bytes)?
+        {
+            self.report(Delivery::Boundary(boundary));
+        }
+        Ok(())
+    }
+
+    fn consume_line(&mut self, line: &RawLine) -> Result<bool, Error> {
+        if let Some(mut frame) = self.frame.take() {
+            match Line::parse_within_block(&line.bytes, frame.number) {
+                Line::BlockEnd { succeeded, .. } => self.finish_frame(frame, succeeded)?,
+                Line::Text(text) => {
+                    let fence = self.opened
+                        && frame.output.is_empty()
+                        && self
+                            .awaiting
+                            .slots
+                            .front()
+                            .is_some_and(|slot| text == slot.fence().output);
+                    if line.wire_bytes > self.limits.max_line_bytes && !fence {
+                        return Err(Error::control_mode_frame_too_large(
+                            "line",
+                            self.limits.max_line_bytes,
+                        ));
+                    }
+                    frame.bytes = frame
+                        .bytes
+                        .saturating_add(text.as_bytes().len().saturating_add(1));
+                    if frame.bytes > self.limits.max_block_bytes && !fence {
                         return Err(Error::control_mode_frame_too_large(
                             "block",
                             self.limits.max_block_bytes,
                         ));
                     }
-                }
-                Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
-                None => return Err(Error::control_mode_closed()),
-            }
-        }
-    }
-
-    /// Deliver every parsed event after terminal work has been released.
-    async fn drain_pending_events(&mut self) -> Result<(), Error> {
-        while let Some(delivery) = self.pending.pop_front() {
-            let permit = tokio::select! {
-                biased;
-                () = cancellation_requested(&mut self.core_stopped) => {
-                    return Err(self.child.shutdown_error());
-                }
-                _ = self.stopped.changed() => return Ok(()),
-                permit = self.events.reserve() => permit,
-            };
-            let Ok(permit) = permit else {
-                return Ok(());
-            };
-            permit.send(delivery);
-        }
-        Ok(())
-    }
-
-    /// Act on one protocol line, reporting whether to keep reading.
-    async fn dispatch(&mut self, line: Line, watching: &mut bool) -> Result<bool, Error> {
-        match line {
-            Line::BlockStart(number) => {
-                let deadline = self.awaiting.block_deadline(self.timeout);
-                match self.read_block(number, deadline, watching).await? {
-                    BlockRead::Complete(block) => {
-                        // tmux queues pane output and command replies in one
-                        // order. Put the private marker after `%end` and
-                        // before reading another line so the receiver sees
-                        // the same boundary without exposing protocol state.
-                        if let Some(boundary) = self.awaiting.boundary_closed_by(&block) {
-                            self.report(Delivery::Boundary(boundary));
-                        }
-                        self.awaiting.complete(block);
-                        Ok(true)
+                    if self.opened {
+                        frame.output.push(text);
                     }
-                    BlockRead::Stopped => Ok(false),
+                    self.frame = Some(frame);
                 }
+                _ => unreachable!("within-block parsing returns only text or a terminator"),
+            }
+            return Ok(true);
+        }
+        if line.wire_bytes > self.limits.max_line_bytes {
+            return Err(Error::control_mode_frame_too_large(
+                "line",
+                self.limits.max_line_bytes,
+            ));
+        }
+        match Line::parse(&line.bytes) {
+            Line::BlockStart { number, flags } => {
+                self.frame = Some(Frame {
+                    number,
+                    flags,
+                    output: Vec::new(),
+                    bytes: 0,
+                    deadline: if self.opened {
+                        self.awaiting.block_deadline(self.timeout)
+                    } else {
+                        self.opening_deadline
+                    },
+                });
             }
             Line::Event(exit @ Event::Exit { .. }) => {
                 self.report(Delivery::Event(exit));
-                Ok(false)
+                if !self.opened {
+                    return Err(Error::control_mode_closed());
+                }
+                return Ok(false);
             }
-            Line::Event(event) => {
-                self.report(Delivery::Event(event));
-                Ok(true)
-            }
-            // A block terminator with no block open, or output outside one.
-            Line::Text(_) | Line::BlockEnd { .. } => Ok(true),
+            Line::Event(event) => self.report(Delivery::Event(event)),
+            Line::Text(_) | Line::BlockEnd { .. } => {}
         }
-    }
-
-    /// Hand an event to the receiver, if one is still listening.
-    ///
-    /// A receiver that has gone away is not a reason to stop: commands may
-    /// still be in flight, and a caller who only sends is a valid caller.
-    fn report(&mut self, delivery: Delivery) {
-        // Anything already held goes first. The channel can drain between one
-        // event and the next, so handing this one straight over while older
-        // ones wait would deliver them out of order, and a pane's output is a
-        // byte stream where that reads exactly like loss.
-        if !self.pending.is_empty() {
-            self.pending.push_back(delivery);
-            return;
-        }
-
-        // Never `send().await`: this runs on the task that reads the
-        // connection, so waiting here stops the reads that a reply arrives on.
-        //
-        // Anything but a full channel is finished with here. A receiver that
-        // has gone away is not a reason to stop, because commands may still be
-        // in flight and a caller who only sends is a valid caller.
-        let Err(mpsc::error::TrySendError::Full(delivery)) = self.events.try_send(delivery) else {
-            return;
-        };
-
-        self.pending.push_back(delivery);
-    }
-
-    /// Read to the end of a block that has already begun.
-    async fn read_block(
-        &mut self,
-        number: u64,
-        deadline: Option<Instant>,
-        watching: &mut bool,
-    ) -> Result<BlockRead, Error> {
-        let mut output = Vec::new();
-        let mut accumulated = 0usize;
-        loop {
-            let line = tokio::select! {
-                biased;
-                () = cancellation_requested(&mut self.core_stopped) => {
-                    return Err(self.child.shutdown_error());
-                }
-                changed = self.stopped.changed(), if *watching => {
-                    if changed.is_ok() {
-                        return Ok(BlockRead::Stopped);
-                    }
-                    *watching = false;
-                    continue;
-                }
-                () = deadline_elapsed(deadline) => {
-                    return Err(Error::control_mode_timeout());
-                }
-                line = read_line_within(
-                    &mut self.stdout,
-                    &mut self.line,
-                    self.limits.max_line_bytes,
-                    Some(number),
-                ) => line?,
-            };
-            match line {
-                Some(Line::BlockEnd {
-                    number: end,
-                    succeeded,
-                }) if end == number => {
-                    return Ok(BlockRead::Complete(BlockResult {
-                        number,
-                        succeeded,
-                        output,
-                        sensitive_input: false,
-                        chained: 0,
-                    }));
-                }
-                Some(Line::Text(text)) => {
-                    // A block whose `%end` never arrives grows without bound,
-                    // and unlike a line it can do so one valid line at a time.
-                    accumulated = accumulated.saturating_add(text.as_bytes().len());
-                    if accumulated > self.limits.max_block_bytes {
-                        return Err(Error::control_mode_frame_too_large(
-                            "block",
-                            self.limits.max_block_bytes,
-                        ));
-                    }
-                    output.push(text);
-                }
-                // Inside a block every other line is output, so once one is
-                // open its reply never waits on a caller draining events.
-                // Only once it is open: the `%begin` that opens it is read by
-                // the loop above, which does report events.
-                Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
-                None => return Err(Error::control_mode_closed()),
-            }
-        }
-    }
-}
-
-async fn cancellation_requested(stopped: &mut watch::Receiver<bool>) {
-    loop {
-        if *stopped.borrow() {
-            return;
-        }
-        if stopped.changed().await.is_err() {
-            return;
-        }
-    }
-}
-
-pub(super) async fn deadline_elapsed(deadline: Option<Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
-        None => std::future::pending().await,
+        Ok(true)
     }
 }
 
@@ -859,5 +784,14 @@ fn earliest_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<In
         (Some(left), Some(right)) => Some(left.min(right)),
         (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
         (None, None) => None,
+    }
+}
+
+pub(super) fn admit_request(request: Request, pending_events: usize) -> Option<Request> {
+    if pending_events < HELD_WHILE_AWAITING {
+        Some(request)
+    } else {
+        request.result.send(Err(Error::control_mode_unread()));
+        None
     }
 }

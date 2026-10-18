@@ -24,9 +24,9 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the listing.
-    pub async fn option_names(&self) -> Result<Vec<String>, Error> {
+    pub fn option_names(&self) -> Result<Vec<String>, Error> {
         let target = self.id().to_string();
-        options::names(&self.core, options::Scope::Window(&target)).await
+        options::names(&self.core, options::Scope::Window(&target))
     }
 
     /// Read every option set at this window, decoded by its declared kind.
@@ -52,25 +52,21 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("opts").await?;
-    /// let window = session.new_window("w").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("opts")?;
+    /// let window = session.new_window("w")?;
     ///
-    /// window.set_option("main-pane-width", "99").await?;
-    /// let options = window.options().await?;
+    /// window.set_option("main-pane-width", "99")?;
+    /// let options = window.options()?;
     /// assert!(options.contains_key("main-pane-width"));
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
+    pub fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
         let target = self.id().to_string();
-        options::typed_all(&self.core, options::Scope::Window(&target)).await
+        options::typed_all(&self.core, options::Scope::Window(&target))
     }
 
     /// Set one option to text, unchecked.
@@ -85,7 +81,7 @@ impl Window {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+    pub fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
             &self.core,
@@ -94,7 +90,6 @@ impl Window {
             value,
             false,
         )
-        .await
     }
 
     /// Set one option to a typed value, checked before it is sent.
@@ -116,17 +111,13 @@ impl Window {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(window: &libtmux::Window) -> Result<(), libtmux::Error> {
-    /// window.set_typed_option("synchronize-panes", true).await?;
-    /// window.set_typed_option("main-pane-width", "50%").await?;
+    /// #  fn example(window: &libtmux::Window) -> Result<(), libtmux::Error> {
+    /// window.set_typed_option("synchronize-panes", true)?;
+    /// window.set_typed_option("main-pane-width", "50%")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_typed_option(
-        &self,
-        name: &str,
-        value: impl Into<OptionValue>,
-    ) -> Result<(), Error> {
+    pub fn set_typed_option(&self, name: &str, value: impl Into<OptionValue>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set_typed(
             &self.core,
@@ -134,7 +125,6 @@ impl Window {
             name,
             value.into(),
         )
-        .await
     }
 
     /// Append to one option rather than replacing it.
@@ -145,7 +135,7 @@ impl Window {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
+    pub fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
             &self.core,
@@ -154,7 +144,6 @@ impl Window {
             value,
             true,
         )
-        .await
     }
 
     /// Remove one option, restoring whatever it inherits.
@@ -165,9 +154,9 @@ impl Window {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
+    pub fn unset_option(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::unset(&self.core, options::Scope::Window(&target), name).await
+        options::unset(&self.core, options::Scope::Window(&target), name)
     }
 
     /// Set one hook to a tmux command.
@@ -182,9 +171,9 @@ impl Window {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
+    pub fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::set_hook(&self.core, options::Scope::Window(&target), name, command).await
+        options::set_hook(&self.core, options::Scope::Window(&target), name, command)
     }
 
     /// Remove one hook.
@@ -195,9 +184,9 @@ impl Window {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
-    pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
+    pub fn unset_hook(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
-        options::unset_hook(&self.core, options::Scope::Window(&target), name).await
+        options::unset_hook(&self.core, options::Scope::Window(&target), name)
     }
 
     /// Write a whole hook at once.
@@ -218,7 +207,7 @@ impl Window {
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
     /// Under [`ReplaceMode::Replace`] the clear and the entries are one
     /// invocation, so a drop leaves the hook as it was or fully written,
@@ -231,14 +220,12 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use std::collections::BTreeMap;
     /// use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
-    /// let window = session.active_window().await?.expect("a window");
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("hooked")?;
+    /// let window = session.active_window()?.expect("a window");
     ///
     /// let mut entries = BTreeMap::new();
     /// entries.insert(0, TmuxText::from(b"display-message first".to_vec()));
@@ -246,19 +233,17 @@ impl Window {
     ///
     /// window
     ///     .set_hooks("pane-died", &IndexedHooks::from(entries), ReplaceMode::Replace)
-    ///     .await?;
+    ///     ?;
     ///
-    /// let written = window.hook("pane-died").await?.expect("the hook is set");
+    /// let written = window.hook("pane-died")?.expect("the hook is set");
     /// assert_eq!(written.len(), 2);
     /// assert!(written.get(1).is_none(), "the gap is kept");
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn set_hooks(
+    pub fn set_hooks(
         &self,
         name: &str,
         hooks: &IndexedHooks,
@@ -272,7 +257,6 @@ impl Window {
             hooks,
             replace,
         )
-        .await
     }
 
     /// Read one hook's commands, or `None` when it holds nothing.
@@ -293,25 +277,21 @@ impl Window {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
-    /// let window = session.new_window("w").await?;
+    /// let guard = libtmux::test::TestServer::new()?;
+    /// let session = guard.server().new_session("hooked")?;
+    /// let window = session.new_window("w")?;
     ///
-    /// assert!(window.hook("pane-died").await?.is_none());
-    /// window.set_hook("pane-died", "display-message rang").await?;
-    /// assert!(window.hook("pane-died").await?.is_some());
+    /// assert!(window.hook("pane-died")?.is_none());
+    /// window.set_hook("pane-died", "display-message rang")?;
+    /// assert!(window.hook("pane-died")?.is_some());
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
+    pub fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
         let target = self.id().to_string();
-        options::hook(&self.core, options::Scope::Window(&target), name).await
+        options::hook(&self.core, options::Scope::Window(&target), name)
     }
 
     /// Read one option, decoded according to what tmux declares about it.
@@ -329,8 +309,8 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
+    pub fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
         let target = self.id().to_string();
-        options::get_typed(&self.core, options::Scope::Window(&target), name).await
+        options::get_typed(&self.core, options::Scope::Window(&target), name)
     }
 }

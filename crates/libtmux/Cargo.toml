@@ -4,13 +4,13 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Async typed tmux client and object model (alpha)"
+description = "Blocking typed tmux client with a standard-library default (alpha)"
 documentation = "https://docs.rs/libtmux"
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
-keywords = ["tmux", "terminal", "multiplexer", "async", "tokio"]
-categories = ["api-bindings", "asynchronous", "os::unix-apis"]
+keywords = ["tmux", "terminal", "multiplexer", "blocking"]
+categories = ["api-bindings", "os::unix-apis"]
 include = [
     "/assets/*",
     "/Cargo.toml",
@@ -21,6 +21,7 @@ include = [
     "/docs/findings.md",
     "/docs/migration.md",
     "/docs/parity.md",
+    "/docs/packages.md",
     "/benches/**/*.rs",
     "/examples/**/*.rs",
     "/examples/api/*.json",
@@ -87,7 +88,7 @@ required-features = ["control-mode", "test-support"]
 
 [[example]]
 name = "matrix"
-required-features = ["plan", "control-mode", "blocking", "test-support", "query"]
+required-features = ["plan", "control-mode", "test-support", "query"]
 
 # Only for `unique_name`, so the jobs and their channels cannot collide with
 # another run on the same server. The waiting it demonstrates needs no feature.
@@ -120,20 +121,17 @@ name = "filter_serde"
 path = "tests/filter_serde.rs"
 
 [features]
-# The only feature on by default. Filtering is what most callers reach for
-# after listing something, and it is the one capability whose absence changes
-# how code is written rather than what it can reach. A caller that only drives
-# tmux turns it off and drops the regex engine with it.
-default = ["query"]
+# Ordinary blocking operations need no crate dependencies.
+# Filtering and serialization remain opt-in.
+default = []
 # Everything a caller might reach for, so a preset replaces remembering the
 # list. `test-support` is deliberately absent: it belongs to a dev-dependency,
 # not to a build of the library.
-full = ["blocking", "control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
+full = ["control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
 # Exposes internal parsers to a fuzzer. Not a supported API, not in
 # `full`, and nothing but `fuzz/` turns it on.
 unstable-fuzzing = ["control-mode", "query", "serde"]
-blocking = ["tokio/rt"]
-control-mode = ["dep:futures-core", "tokio/io-util", "tokio/process", "tokio/sync"]
+control-mode = []
 # The derive writes `impl Filterable`, which does not exist without `query`.
 derive = ["dep:libtmux-macros", "query"]
 # Recording tmux work before doing it. No new dependencies: it is opt-in
@@ -144,21 +142,18 @@ query = ["dep:caseless", "dep:regex"]
 # generation part of the ordinary serialization feature.
 schema = ["dep:schemars", "dep:serde_json", "serde"]
 serde = ["dep:serde"]
-test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
+test-support = ["dep:tempfile", "dep:rustix", "rustix/fs", "rustix/net"]
 tracing = ["dep:tracing"]
 
 [dependencies]
 caseless = { version = "0.2", optional = true }
-futures-core = { version = "0.3", optional = true }
 libtmux-macros = { workspace = true, optional = true }
 regex = { version = "1.13", optional = true }
-rustix = { version = "1.1.4", features = ["process"] }
+rustix = { version = "1.1.4", features = ["process"], optional = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
-thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 tracing = { version = "0.1.36", optional = true }
 
 [dev-dependencies]

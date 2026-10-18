@@ -1,14 +1,13 @@
 //! Find panes running a given command, without listing everything by hand.
 //!
 //! ```console
-//! $ cargo run --example find -- nvim
+//! $ cargo run -p libtmux --features query --example find -- nvim
 //! ```
 
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::{Pane, Server};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wanted = std::env::args().nth(1).unwrap_or_else(|| "sh".to_owned());
     let server = Server::from_env().or_else(|_| Server::new())?;
 
@@ -17,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fields = Pane::filter_fields();
     let running = fields.pane_current_command.eq(wanted.as_str());
 
-    let panes = server.panes().await?;
+    let panes = server.panes()?;
     let found = panes.iter().matching(&running).count();
     for pane in panes.iter().matching(&running) {
         println!("{} in window {}", pane.id(), pane.window_id());
@@ -45,10 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  {command}");
         }
         if let Some(command) = commands.first() {
-            println!("\n  cargo run --example find --features query -- {command}");
+            println!(
+                "\n  cargo run -p {} --example find --features query -- {command}",
+                env!("CARGO_PKG_NAME")
+            );
         }
     }
 
-    server.shutdown().await?;
+    server.shutdown()?;
     Ok(())
 }

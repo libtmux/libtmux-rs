@@ -1,32 +1,45 @@
-use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use crate::{CancellationToken, Error, ScopeError};
 
-use crate::{Error, ScopeError};
-
-#[cfg(feature = "tracing")]
-use tracing::instrument::WithSubscriber as _;
-
-pub(crate) async fn run<R, T, E, Create, Cleanup, CleanupFuture, Operation>(
+pub(crate) fn run<R, T, E, Create, Cleanup, Operation>(
+    cancellation: &CancellationToken,
     operation_name: &'static str,
     create: Create,
     cleanup: Cleanup,
     operation: Operation,
 ) -> Result<T, ScopeError<T, E>>
 where
-    R: Clone + Send + 'static,
-    Create: Future<Output = Result<R, Error>> + Send + 'static,
-    Cleanup: FnOnce(R) -> CleanupFuture + Send + 'static,
-    CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
-    Operation: AsyncFnOnce(&R) -> Result<T, E>,
+    R: Clone,
+    Create: FnOnce() -> Result<R, Error>,
+    Cleanup: FnOnce(R) -> Result<(), Error>,
+    Operation: FnOnce(&R) -> Result<T, E>,
 {
-    let (created, cleanup) = acquire(create, cleanup)
-        .await
-        .map_err(ScopeError::Creation)?;
-    let outcome = operation(&created).await;
+    if cancellation.is_cancelled() {
+        return Err(ScopeError::Cancelled { cleanup: None });
+    }
+    let created = create().map_err(|error| {
+        if matches!(error, Error::Cancelled { .. }) {
+            ScopeError::Cancelled { cleanup: None }
+        } else {
+            ScopeError::Creation(error)
+        }
+    })?;
+    let cleanup = ScopeCleanup {
+        resource: Some(created.clone()),
+        cleanup: Some(cleanup),
+    };
+    if cancellation.is_cancelled() {
+        return Err(ScopeError::Cancelled {
+            cleanup: cleanup
+                .finish()
+                .err()
+                .map(|error| error.after_effect(operation_name)),
+        });
+    }
+    let outcome = operation(&created);
 
-    match (outcome, cleanup.finish().await) {
+    match (outcome, cleanup.finish()) {
         (outcome, Ok(())) => outcome.map_err(ScopeError::Operation),
         (Ok(value), Err(error)) => Err(ScopeError::Cleanup {
             value,
@@ -39,113 +52,56 @@ where
     }
 }
 
-async fn acquire<R, Create, Cleanup, CleanupFuture>(
-    create: Create,
-    cleanup: Cleanup,
-) -> Result<(R, ScopeCleanup), Error>
-where
-    R: Clone + Send + 'static,
-    Create: Future<Output = Result<R, Error>> + Send + 'static,
-    Cleanup: FnOnce(R) -> CleanupFuture + Send + 'static,
-    CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
-{
-    let (handoff, receive) = oneshot::channel();
-    let supervisor = async move {
-        let outcome = create.await.map(|created| {
-            let cleanup = ScopeCleanup::new(cleanup(created.clone()));
-            (created, cleanup)
-        });
-        let _ = handoff.send(outcome);
-    };
-    #[cfg(feature = "tracing")]
-    let supervisor = tokio::spawn(supervisor.with_current_subscriber());
-    #[cfg(not(feature = "tracing"))]
-    let supervisor = tokio::spawn(supervisor);
+struct ScopeCleanup<R, Cleanup: FnOnce(R) -> Result<(), Error>> {
+    resource: Option<R>,
+    cleanup: Option<Cleanup>,
+}
 
-    match receive.await {
-        Ok(outcome) => outcome,
-        Err(_) => match supervisor.await {
-            Err(error) => std::panic::resume_unwind(error.into_panic()),
-            Ok(()) => unreachable!("the creation supervisor ended without a handoff"),
-        },
+impl<R, Cleanup: FnOnce(R) -> Result<(), Error>> ScopeCleanup<R, Cleanup> {
+    fn finish(mut self) -> Result<(), Error> {
+        match (self.resource.take(), self.cleanup.take()) {
+            (Some(resource), Some(cleanup)) => cleanup(resource),
+            _ => Ok(()),
+        }
     }
 }
 
-struct ScopeCleanup {
-    release: oneshot::Sender<()>,
-    outcome: oneshot::Receiver<Result<(), Error>>,
-    #[cfg(feature = "tracing")]
-    observed: oneshot::Sender<()>,
-    supervisor: JoinHandle<()>,
-}
-
-impl ScopeCleanup {
-    fn new(cleanup: impl Future<Output = Result<(), Error>> + Send + 'static) -> Self {
-        let (release, released) = oneshot::channel();
-        let (outcome_sender, outcome) = oneshot::channel();
-        #[cfg(feature = "tracing")]
-        let (observed, observation) = oneshot::channel();
-        let supervisor = async move {
-            let _ = released.await;
-            let outcome = cleanup.await;
-
-            #[cfg(feature = "tracing")]
-            let failure = outcome.as_ref().err().map(ToString::to_string);
-            #[cfg(feature = "tracing")]
-            let delivered = outcome_sender.send(outcome).is_ok();
-            #[cfg(not(feature = "tracing"))]
-            let _ = outcome_sender.send(outcome);
-
-            #[cfg(feature = "tracing")]
-            if let Some(error) = failure {
-                let acknowledged = delivered && observation.await.is_ok();
-                if !acknowledged {
-                    trace_cleanup_failure(&error);
-                }
-            }
+impl<R, Cleanup: FnOnce(R) -> Result<(), Error>> Drop for ScopeCleanup<R, Cleanup> {
+    fn drop(&mut self) {
+        let (Some(resource), Some(cleanup)) = (self.resource.take(), self.cleanup.take()) else {
+            return;
         };
-        #[cfg(feature = "tracing")]
-        let supervisor = tokio::spawn(supervisor.with_current_subscriber());
-        #[cfg(not(feature = "tracing"))]
-        let supervisor = tokio::spawn(supervisor);
-
-        Self {
-            release,
-            outcome,
-            #[cfg(feature = "tracing")]
-            observed,
-            supervisor,
-        }
-    }
-
-    async fn finish(self) -> Result<(), Error> {
-        let _ = self.release.send(());
-        match self.outcome.await {
-            Ok(outcome) => {
+        let unwinding = std::thread::panicking();
+        match catch_unwind(AssertUnwindSafe(|| cleanup(resource))) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => trace_cleanup_failure(&error),
+            Err(payload) if !unwinding => resume_unwind(payload),
+            // A cleanup panic must not replace the operation's panic or abort
+            // the process by unwinding twice on the same thread.
+            Err(_) => {
                 #[cfg(feature = "tracing")]
-                let _ = self.observed.send(());
-                outcome
+                tracing::debug!("scoped operation cleanup panicked during unwinding");
             }
-            Err(_) => match self.supervisor.await {
-                Err(error) => std::panic::resume_unwind(error.into_panic()),
-                Ok(()) => unreachable!("the cleanup supervisor ended without an outcome"),
-            },
         }
     }
 }
 
-#[cfg(feature = "tracing")]
 fn trace_cleanup_failure(error: &impl std::fmt::Display) {
+    #[cfg(feature = "tracing")]
     tracing::debug!(error = %error, "scoped operation cleanup failed");
+    #[cfg(not(feature = "tracing"))]
+    let _ = error;
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
+    use std::rc::Rc;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
-
-    use tokio::sync::Notify;
 
     use crate::{Command, Error, ErrorKind, ObjectKind, ScopeError};
 
@@ -158,32 +114,101 @@ mod tests {
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-    #[derive(Clone)]
-    struct Resource {
-        cleaned: Arc<Notify>,
+    #[test]
+    fn cancellation_before_creation_does_not_create_a_resource() {
+        let token = crate::CancellationToken::new();
+        token.cancel();
+        let created = Cell::new(false);
+        let outcome = super::run(
+            &token,
+            "with-pane",
+            || {
+                created.set(true);
+                Ok::<_, Error>(())
+            },
+            |()| panic!("no resource to clean"),
+            |()| -> Result<(), Error> { panic!("the callback must not run") },
+        );
+        assert!(matches!(
+            outcome,
+            Err(ScopeError::Cancelled { cleanup: None })
+        ));
+        assert!(!created.get());
     }
 
-    #[tokio::test]
-    async fn cleanup_failure_after_a_successful_operation_marks_the_effect() {
-        let error = super::run(
+    #[test]
+    fn cancellation_during_creation_cleans_the_created_resource() {
+        let token = crate::CancellationToken::new();
+        let during_creation = token.clone();
+        let cleaned = Cell::new(0);
+        let outcome = super::run(
+            &token,
             "with-pane",
-            async {
-                Ok::<_, Error>(Resource {
-                    cleaned: Arc::new(Notify::new()),
+            move || {
+                during_creation.cancel();
+                Ok::<_, Error>(())
+            },
+            |()| {
+                cleaned.set(cleaned.get() + 1);
+                Ok(())
+            },
+            |()| -> Result<(), Error> { panic!("the callback must not run") },
+        );
+        assert!(matches!(
+            outcome,
+            Err(ScopeError::Cancelled { cleanup: None })
+        ));
+        assert_eq!(cleaned.get(), 1);
+    }
+
+    #[test]
+    fn cancellation_retains_a_cleanup_failure_after_creation() {
+        let token = crate::CancellationToken::new();
+        let during_creation = token.clone();
+        let outcome = super::run(
+            &token,
+            "with-pane",
+            move || {
+                during_creation.cancel();
+                Ok::<_, Error>(())
+            },
+            |()| {
+                Err(Error::Overloaded {
+                    request_id: 10,
+                    command: Command::new("kill-pane").summary(),
+                    in_flight: 1,
                 })
             },
-            |_resource: Resource| async {
+            |()| -> Result<(), Error> { panic!("the callback must not run") },
+        );
+        let Err(ScopeError::Cancelled {
+            cleanup: Some(cleanup),
+        }) = outcome
+        else {
+            panic!("cancellation retains cleanup failure");
+        };
+        assert!(matches!(cleanup,
+            Error::AfterEffect { operation: "with-pane", source }
+                if matches!(*source, Error::Overloaded { .. })
+        ));
+    }
+
+    #[test]
+    fn cleanup_failure_after_a_successful_operation_marks_the_effect() {
+        let error = super::run(
+            &crate::CancellationToken::new(),
+            "with-pane",
+            || Ok::<_, Error>(()),
+            |()| {
                 Err(Error::Overloaded {
                     request_id: 9,
                     command: Command::new("kill-pane").summary(),
                     in_flight: 1,
                 })
             },
-            async |_resource: &Resource| Ok::<_, Error>(()),
+            |()| Ok::<_, Error>(()),
         )
-        .await
         .expect_err("cleanup fails after the scoped operation succeeded");
-
         let ScopeError::Cleanup {
             value: (),
             cleanup: error,
@@ -192,42 +217,33 @@ mod tests {
             panic!("cleanup failed after the operation succeeded");
         };
         assert_eq!(error.kind(), ErrorKind::PartialEffect);
-        assert!(
-            matches!(
-                error,
-                Error::AfterEffect { operation: "with-pane", source }
-                    if source.kind() == ErrorKind::Refused && source.is_transient()
-            ),
-            "cleanup keeps its diagnostic source",
-        );
+        assert!(matches!(error,
+            Error::AfterEffect { operation: "with-pane", source }
+                if source.kind() == ErrorKind::Refused && source.is_transient()
+        ));
     }
 
-    #[tokio::test]
-    async fn cleanup_failure_owns_the_replay_boundary_when_the_operation_also_fails() {
+    #[test]
+    fn cleanup_failure_owns_the_replay_boundary_when_the_operation_also_fails() {
         let error = super::run(
+            &crate::CancellationToken::new(),
             "with-window",
-            async {
-                Ok::<_, Error>(Resource {
-                    cleaned: Arc::new(Notify::new()),
-                })
-            },
-            |_resource: Resource| async {
+            || Ok::<_, Error>(()),
+            |()| {
                 Err(Error::Overloaded {
                     request_id: 10,
                     command: Command::new("kill-window").summary(),
                     in_flight: 1,
                 })
             },
-            async |_resource: &Resource| {
+            |()| {
                 Err::<(), Error>(Error::ObjectGone {
                     kind: ObjectKind::Window,
                     id: String::from("@1"),
                 })
             },
         )
-        .await
         .expect_err("both operation and cleanup fail");
-
         let ScopeError::OperationAndCleanup { operation, cleanup } = error else {
             panic!("operation and cleanup both failed");
         };
@@ -238,25 +254,128 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(
-            cleanup,
+        assert!(matches!(cleanup,
             Error::AfterEffect { operation: "with-window", source }
                 if matches!(*source, Error::Overloaded { .. })
         ));
     }
 
+    #[test]
+    fn a_borrowed_operation_can_keep_non_send_state_and_results() {
+        let value = Rc::new(Cell::new(0));
+        let result = super::run(
+            &crate::CancellationToken::new(),
+            "with-pane",
+            || Ok::<_, Error>(()),
+            |()| Ok(()),
+            |()| {
+                value.set(4);
+                Ok::<_, Rc<str>>(Rc::clone(&value))
+            },
+        )
+        .expect("a non-Send result");
+        assert!(Rc::ptr_eq(&result, &value));
+        assert_eq!(result.get(), 4);
+    }
+
+    #[test]
+    fn an_operation_panic_retains_its_payload_and_cleans_exactly_once() {
+        let calls = Cell::new(0);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = super::run(
+                &crate::CancellationToken::new(),
+                "with-pane",
+                || Ok::<_, Error>(()),
+                |()| {
+                    calls.set(calls.get() + 1);
+                    Ok(())
+                },
+                |()| -> Result<(), Error> { panic_any(812_u32) },
+            );
+        }));
+        assert_eq!(
+            *outcome
+                .expect_err("the body panics")
+                .downcast::<u32>()
+                .expect("original payload"),
+            812
+        );
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn a_cleanup_panic_during_unwinding_does_not_replace_the_operation_panic() {
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = super::run(
+                &crate::CancellationToken::new(),
+                "with-pane",
+                || Ok::<_, Error>(()),
+                |()| -> Result<(), Error> { panic_any("cleanup") },
+                |()| -> Result<(), Error> { panic_any("operation") },
+            );
+        }));
+        assert_eq!(
+            *outcome
+                .expect_err("the body panics")
+                .downcast::<&str>()
+                .expect("original payload"),
+            "operation"
+        );
+    }
+
+    #[test]
+    fn detaching_a_calling_thread_during_creation_retains_cleanup() {
+        let (started, creation_started) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let (cleaned, cleanup_done) = mpsc::channel();
+        let operation_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&operation_calls);
+        let thread = std::thread::spawn(move || {
+            let _ = super::run(
+                &crate::CancellationToken::new(),
+                "with-session",
+                move || {
+                    started.send(()).expect("creation observed");
+                    released
+                        .recv_timeout(TEST_TIMEOUT)
+                        .expect("creation released");
+                    Ok::<_, Error>(())
+                },
+                move |()| {
+                    cleaned.send(()).expect("cleanup observed");
+                    Ok(())
+                },
+                move |()| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, Error>(())
+                },
+            );
+        });
+        creation_started
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("creation starts");
+        drop(thread);
+        release.send(()).expect("creation continues");
+        cleanup_done
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("detached call cleans up");
+        assert_eq!(
+            operation_calls.load(Ordering::SeqCst),
+            1,
+            "detaching a native thread does not cancel a synchronous callback"
+        );
+    }
+
     #[cfg(feature = "tracing")]
     #[derive(Clone, Default)]
     struct CleanupFailures {
-        seen: Arc<Notify>,
-        count: Arc<std::sync::atomic::AtomicUsize>,
+        count: Arc<AtomicUsize>,
     }
 
     #[cfg(feature = "tracing")]
     impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CleanupFailures {
         fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
             struct Message(bool);
-
             impl tracing::field::Visit for Message {
                 fn record_debug(
                     &mut self,
@@ -270,132 +389,57 @@ mod tests {
                     }
                 }
             }
-
             let mut message = Message(false);
             event.record(&mut message);
             if message.0 {
                 self.count.fetch_add(1, Ordering::Relaxed);
-                self.seen.notify_one();
             }
         }
     }
 
-    #[tokio::test]
-    async fn cancellation_during_creation_cleans_the_created_resource() {
-        let creation_started = Arc::new(Notify::new());
-        let creation_release = Arc::new(Notify::new());
-        let cleaned = Arc::new(Notify::new());
-        let operation_polled = Arc::new(AtomicBool::new(false));
-
-        let scope = tokio::spawn(super::run(
-            "with-session",
-            {
-                let creation_started = Arc::clone(&creation_started);
-                let creation_release = Arc::clone(&creation_release);
-                let cleaned = Arc::clone(&cleaned);
-                async move {
-                    creation_started.notify_one();
-                    creation_release.notified().await;
-                    Ok::<_, Error>(Resource { cleaned })
-                }
-            },
-            |resource: Resource| async move {
-                resource.cleaned.notify_one();
-                Ok(())
-            },
-            {
-                let operation_polled = Arc::clone(&operation_polled);
-                async move |_resource: &Resource| {
-                    operation_polled.store(true, Ordering::Relaxed);
-                    Ok::<(), Error>(())
-                }
-            },
-        ));
-
-        tokio::time::timeout(TEST_TIMEOUT, creation_started.notified())
-            .await
-            .expect("creation starts");
-        scope.abort();
-        assert!(scope.await.expect_err("scope is aborted").is_cancelled());
-
-        creation_release.notify_one();
-        tokio::time::timeout(TEST_TIMEOUT, cleaned.notified())
-            .await
-            .expect("the owned creation supervisor cleans up");
-        assert!(!operation_polled.load(Ordering::Relaxed));
-    }
-
     #[cfg(feature = "tracing")]
-    #[tokio::test]
-    async fn cancellation_during_cleanup_records_a_cleanup_failure() {
-        let cleanup_started = Arc::new(Notify::new());
-        let cleanup_release = Arc::new(Notify::new());
+    #[test]
+    fn an_observed_cleanup_failure_is_not_traced() {
         let failures = CleanupFailures::default();
         let subscriber = tracing_subscriber::registry().with(failures.clone());
         let _guard = tracing::subscriber::set_default(subscriber);
-
-        let mut scope = Box::pin(super::run(
-            "with-window",
-            async {
-                Ok::<_, Error>(Resource {
-                    cleaned: Arc::new(Notify::new()),
-                })
-            },
-            {
-                let cleanup_started = Arc::clone(&cleanup_started);
-                let cleanup_release = Arc::clone(&cleanup_release);
-                move |_resource: Resource| async move {
-                    cleanup_started.notify_one();
-                    cleanup_release.notified().await;
-                    Err(Error::ObjectGone {
-                        kind: ObjectKind::Session,
-                        id: String::from("$detached"),
-                    })
-                }
-            },
-            async |_resource: &Resource| Ok::<(), Error>(()),
-        ));
-
-        tokio::select! {
-            outcome = &mut scope => {
-                let _ = outcome;
-                panic!("cleanup must remain pending")
-            }
-            () = cleanup_started.notified() => {}
-        }
-        drop(scope);
-        cleanup_release.notify_one();
-
-        tokio::time::timeout(TEST_TIMEOUT, failures.seen.notified())
-            .await
-            .expect("the detached cleanup failure is traced");
-    }
-
-    #[cfg(feature = "tracing")]
-    #[tokio::test]
-    async fn an_observed_cleanup_failure_is_not_traced() {
-        let failures = CleanupFailures::default();
-        let subscriber = tracing_subscriber::registry().with(failures.clone());
-        let _guard = tracing::subscriber::set_default(subscriber);
-
         let outcome = super::run(
+            &crate::CancellationToken::new(),
             "with-pane",
-            async {
-                Ok::<_, Error>(Resource {
-                    cleaned: Arc::new(Notify::new()),
-                })
-            },
-            |_resource: Resource| async {
+            || Ok::<_, Error>(()),
+            |()| {
                 Err(Error::ObjectGone {
                     kind: ObjectKind::Session,
                     id: String::from("$observed"),
                 })
             },
-            async |_resource: &Resource| Ok::<(), Error>(()),
-        )
-        .await;
-
+            |()| Ok::<_, Error>(()),
+        );
         assert!(outcome.is_err());
         assert_eq!(failures.count.load(Ordering::Relaxed), 0);
+    }
+
+    #[cfg(feature = "tracing")]
+    #[test]
+    fn an_unobserved_cleanup_failure_during_unwinding_is_traced_once() {
+        let failures = CleanupFailures::default();
+        let subscriber = tracing_subscriber::registry().with(failures.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = super::run(
+                &crate::CancellationToken::new(),
+                "with-pane",
+                || Ok::<_, Error>(()),
+                |()| {
+                    Err(Error::ObjectGone {
+                        kind: ObjectKind::Session,
+                        id: String::from("$unobserved"),
+                    })
+                },
+                |()| -> Result<(), Error> { panic_any("operation") },
+            );
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(failures.count.load(Ordering::Relaxed), 1);
     }
 }

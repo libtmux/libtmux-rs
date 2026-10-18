@@ -992,7 +992,6 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tempfile",
- "thiserror",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -1009,6 +1008,38 @@ dependencies = [
  "quote",
  "syn 3.0.3",
  "trybuild",
+]
+
+[[package]]
+name = "libtmux-sync-client"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "sha2",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "libtmux-tokio"
+version = "0.1.0-alpha.15"
+dependencies = [
+ "criterion",
+ "futures-core",
+ "jsonschema",
+ "libtmux",
+ "libtmux-macros",
+ "rustix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1792,7 +1823,7 @@ version = "0.1.0-alpha.16"
 dependencies = [
  "getrandom 0.4.3",
  "jsonschema",
- "libtmux",
+ "libtmux-tokio",
  "regex",
  "rmcp",
  "rustix",
@@ -1811,7 +1842,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
- "libtmux",
+ "libtmux-tokio",
  "nix",
  "regex",
  "rustix",

@@ -1,45 +1,42 @@
+use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
+use std::io;
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-
-#[cfg(feature = "control-mode")]
-use std::io;
-#[cfg(feature = "control-mode")]
-use std::process::Stdio;
-#[cfg(feature = "control-mode")]
-use std::sync::{Mutex, MutexGuard};
-
-use rustix::process::{Pid, Signal, kill_process_group};
-use tokio::process::Command as TokioCommand;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::time::Instant;
-
-#[cfg(feature = "control-mode")]
-use tokio::process::{Child, ChildStdin, ChildStdout};
-#[cfg(feature = "control-mode")]
-use tokio::sync::{Notify, watch};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::Error;
 use crate::command::{CommandRequest, CommandSummary, RequestId};
-#[cfg(feature = "control-mode")]
-use crate::limits::ControlClientLimits;
 
 #[derive(Clone)]
 pub(crate) struct LaunchContext {
     executable: OsString,
     current_dir: Option<PathBuf>,
     environment: Vec<(OsString, Option<OsString>)>,
+    group_signal_helper: PathBuf,
 }
 
 impl LaunchContext {
+    pub(crate) fn with_group_signal_helper(mut self, path: PathBuf) -> Self {
+        self.group_signal_helper = path;
+        self
+    }
+    pub(crate) fn group_signal_helper(&self) -> &Path {
+        &self.group_signal_helper
+    }
+
     pub(crate) fn new(executable: impl Into<OsString>) -> Self {
         Self {
             executable: executable.into(),
             current_dir: None,
             environment: Vec::new(),
+            group_signal_helper: PathBuf::from("/usr/bin/kill"),
         }
     }
 
@@ -62,9 +59,9 @@ impl LaunchContext {
         self
     }
 
-    pub(crate) fn command(&self, arguments: &[OsString]) -> TokioCommand {
-        let mut command = TokioCommand::new(&self.executable);
-        command.args(arguments).kill_on_drop(true).process_group(0);
+    pub(crate) fn command(&self, arguments: &[OsString]) -> Command {
+        let mut command = Command::new(&self.executable);
+        command.args(arguments).process_group(0);
         if let Some(current_dir) = &self.current_dir {
             command.current_dir(current_dir);
         }
@@ -193,343 +190,354 @@ pub(crate) fn validate_request(
 
 #[derive(Clone)]
 pub(crate) struct ProcessAdmission {
-    permits: Arc<Semaphore>,
+    shared: Arc<Admission>,
     limit: usize,
     acquire_timeout: Option<Duration>,
 }
-
+struct Admission {
+    state: Mutex<AdmissionState>,
+    changed: Condvar,
+}
+struct AdmissionState {
+    closed: bool,
+    active: usize,
+    next: u64,
+    waiting: VecDeque<u64>,
+}
+pub(crate) struct OwnedSemaphorePermit(Arc<Admission>);
+impl Drop for OwnedSemaphorePermit {
+    fn drop(&mut self) {
+        let mut state = lock(&self.0.state);
+        state.active -= 1;
+        self.0.changed.notify_all();
+    }
+}
 impl ProcessAdmission {
     pub(crate) fn new(limit: usize, acquire_timeout: Option<Duration>) -> Self {
         Self {
-            permits: Arc::new(Semaphore::new(limit)),
-            limit,
+            shared: Arc::new(Admission {
+                state: Mutex::new(AdmissionState {
+                    closed: false,
+                    active: 0,
+                    next: 0,
+                    waiting: VecDeque::new(),
+                }),
+                changed: Condvar::new(),
+            }),
+            limit: limit.max(1),
             acquire_timeout,
         }
     }
-
-    pub(crate) async fn acquire(
+    pub(crate) fn acquire(
         &self,
         request_id: RequestId,
         command: &CommandSummary,
         deadline: Option<Instant>,
+        token: &crate::CancellationToken,
     ) -> Result<OwnedSemaphorePermit, Error> {
-        let deadline = match (
-            deadline,
-            self.acquire_timeout
-                .and_then(|timeout| Instant::now().checked_add(timeout)),
-        ) {
+        let shared = Arc::clone(&self.shared);
+        let _registration = token.on_cancel(move || {
+            let _guard = lock(&shared.state);
+            shared.changed.notify_all();
+        });
+        let queue_deadline = self
+            .acquire_timeout
+            .and_then(|limit| Instant::now().checked_add(limit));
+        let deadline = match (deadline, queue_deadline) {
             (Some(left), Some(right)) => Some(left.min(right)),
-            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-            (None, None) => None,
+            (left, right) => left.or(right),
         };
-        let acquired = match deadline {
-            Some(deadline) => {
-                match tokio::time::timeout_at(deadline, Arc::clone(&self.permits).acquire_owned())
-                    .await
-                {
-                    Ok(acquired) => acquired,
-                    Err(_) => {
-                        return Err(Error::Overloaded {
-                            request_id: request_id.get(),
-                            command: command.clone(),
-                            in_flight: self.limit,
-                        });
+        let mut state = lock(&self.shared.state);
+        let ticket = state.next;
+        state.next = state.next.wrapping_add(1);
+        state.waiting.push_back(ticket);
+        loop {
+            let failure = if token.is_cancelled() {
+                Some(Error::cancelled(request_id.get(), command.clone()))
+            } else if state.closed {
+                Some(Error::executor_shutdown(request_id.get(), command.clone()))
+            } else if state.active < self.limit && state.waiting.front() == Some(&ticket) {
+                state.waiting.pop_front();
+                state.active += 1;
+                self.shared.changed.notify_all();
+                return Ok(OwnedSemaphorePermit(Arc::clone(&self.shared)));
+            } else if deadline.is_some_and(|end| Instant::now() >= end) {
+                Some(Error::Overloaded {
+                    request_id: request_id.get(),
+                    command: command.clone(),
+                    in_flight: self.limit,
+                })
+            } else {
+                None
+            };
+            if let Some(error) = failure {
+                state.waiting.retain(|item| *item != ticket);
+                self.shared.changed.notify_all();
+                return Err(error);
+            }
+            state = if let Some(end) = deadline {
+                self.shared
+                    .changed
+                    .wait_timeout(state, end.saturating_duration_since(Instant::now()))
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
+            } else {
+                self.shared
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(PoisonError::into_inner)
+            };
+        }
+    }
+    pub(crate) fn close(&self) {
+        lock(&self.shared.state).closed = true;
+        self.shared.changed.notify_all();
+    }
+}
+
+/// Owns the process group until its original leader has been reaped.
+pub(crate) struct ProcessChild {
+    child: Child,
+    helper: PathBuf,
+    reaped: bool,
+    retired_error: Option<io::ErrorKind>,
+    #[cfg(test)]
+    denied_signals: Option<io::ErrorKind>,
+    #[cfg(test)]
+    denied_helper_kill: Option<io::ErrorKind>,
+}
+impl ProcessChild {
+    pub(crate) fn spawn(launch: &LaunchContext, command: &mut Command) -> io::Result<Self> {
+        let helper = launch.group_signal_helper();
+        if !helper.is_absolute() || !runnable_file(helper) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "an absolute executable group-signal helper is required",
+            ));
+        }
+        Ok(Self {
+            child: command.spawn()?,
+            helper: helper.to_path_buf(),
+            reaped: false,
+            retired_error: None,
+            #[cfg(test)]
+            denied_signals: None,
+            #[cfg(test)]
+            denied_helper_kill: None,
+        })
+    }
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn id(&self) -> u32 {
+        self.child.id()
+    }
+    /// Linux procfs observes exit without releasing the PID used as the group ID.
+    pub(crate) fn exited(&mut self) -> io::Result<bool> {
+        let observation = (|| {
+            let stat = std::fs::read(format!("/proc/{}/stat", self.child.id()))?;
+            let end = stat
+                .iter()
+                .rposition(|byte| *byte == b')')
+                .ok_or_else(|| io::Error::other("invalid process status"))?;
+            match stat.get(end + 2) {
+                Some(b'Z' | b'X') => Ok(true),
+                Some(_) => Ok(false),
+                None => Err(io::Error::other("missing process state")),
+            }
+        })();
+        self.observe_exit(observation)
+    }
+
+    fn observe_exit(&mut self, observation: io::Result<bool>) -> io::Result<bool> {
+        if observation.is_err() {
+            // An absent proc entry can mean another reaper released this PID.
+            // Probe ownership once before any numeric group or child signal.
+            loop {
+                match self.child.try_wait() {
+                    Ok(None) => break,
+                    Ok(Some(_)) => {
+                        self.reaped = true;
+                        self.retired_error = Some(io::ErrorKind::Other);
+                        break;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => {
+                        self.retired_error = Some(error.kind());
+                        break;
                     }
                 }
             }
-            None => Arc::clone(&self.permits).acquire_owned().await,
-        };
-        acquired.map_err(|_| Error::executor_shutdown(request_id.get(), command.clone()))
-    }
-
-    pub(crate) fn close(&self) {
-        self.permits.close();
-    }
-}
-
-pub(crate) struct ProcessGroupGuard {
-    process_group: Option<Pid>,
-    armed: bool,
-}
-
-impl ProcessGroupGuard {
-    pub(crate) fn new(child_id: Option<u32>) -> Self {
-        let process_group = child_id
-            .and_then(|value| i32::try_from(value).ok())
-            .and_then(Pid::from_raw);
-        Self {
-            process_group,
-            armed: true,
         }
+        observation
     }
-
-    #[cfg(feature = "test-support")]
-    pub(crate) const fn is_armed(&self) -> bool {
-        self.armed
-    }
-
-    pub(crate) fn signal(&self) {
-        if self.armed {
-            if let Some(process_group) = self.process_group {
-                let _ = kill_process_group(process_group, Signal::KILL);
-            }
+    pub(crate) fn finish(&mut self) -> io::Result<ExitStatus> {
+        if let Some(kind) = self.retired_error {
+            return Err(io::Error::new(
+                kind,
+                "process ownership was lost before group cleanup; descendants may remain",
+            ));
         }
-    }
-
-    pub(crate) fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for ProcessGroupGuard {
-    fn drop(&mut self) {
-        self.signal();
-    }
-}
-
-#[cfg(feature = "control-mode")]
-#[derive(Clone)]
-pub(crate) struct PersistentClients {
-    shared: Arc<PersistentShared>,
-    admission: ProcessAdmission,
-}
-
-#[cfg(feature = "control-mode")]
-struct PersistentShared {
-    lifecycle: Mutex<PersistentLifecycle>,
-    stopped: watch::Sender<bool>,
-    empty: Notify,
-}
-
-#[cfg(feature = "control-mode")]
-struct PersistentLifecycle {
-    accepting: bool,
-    active: usize,
-}
-
-#[cfg(feature = "control-mode")]
-impl PersistentClients {
-    pub(crate) fn new(limits: ControlClientLimits) -> Self {
-        let (stopped, _) = watch::channel(false);
-        Self {
-            shared: Arc::new(PersistentShared {
-                lifecycle: Mutex::new(PersistentLifecycle {
-                    accepting: true,
-                    active: 0,
-                }),
-                stopped,
-                empty: Notify::new(),
-            }),
-            admission: ProcessAdmission::new(limits.max_clients, limits.acquire_timeout),
+        if self.reaped {
+            return self.child.wait();
         }
-    }
-
-    pub(crate) async fn reserve(
-        &self,
-        request_id: RequestId,
-        command: CommandSummary,
-        deadline: Option<Instant>,
-    ) -> Result<PersistentReservation, Error> {
-        let permit = self
-            .admission
-            .acquire(request_id, &command, deadline)
-            .await?;
-        let stopped = {
-            let mut lifecycle = lock_persistent(&self.shared);
-            if !lifecycle.accepting {
-                return Err(Error::executor_shutdown(request_id.get(), command));
-            }
-            lifecycle.active += 1;
-            self.shared.stopped.subscribe()
-        };
-
-        Ok(PersistentReservation {
-            stopped,
-            registration: PersistentRegistration {
-                shared: Arc::clone(&self.shared),
-                _permit: permit,
-            },
-        })
-    }
-
-    pub(crate) async fn shutdown(&self) {
+        let signalled = self.signal_group();
+        let killed = self.kill_child();
+        let waited = reap_after_signal(&mut self.child, killed.is_err());
+        // ECHILD means an external reaper has released the numeric process ID.
+        if matches!(waited, Ok(Some(_)))
+            || waited
+                .as_ref()
+                .is_err_and(|error| error.raw_os_error() == Some(10))
         {
-            let mut lifecycle = lock_persistent(&self.shared);
-            lifecycle.accepting = false;
-            self.shared.stopped.send_replace(true);
+            self.reaped = true;
         }
-        self.admission.close();
+        if let Some(error) = cleanup_error(&[
+            (
+                "process-group signal",
+                signalled.err().map(|error| error.kind()),
+            ),
+            (
+                "direct-child signal",
+                killed.err().map(|error| error.kind()),
+            ),
+            ("child wait", waited.as_ref().err().map(io::Error::kind)),
+        ]) {
+            return Err(error);
+        }
+        waited?.ok_or_else(|| io::Error::other("child remains alive after failed termination"))
+    }
 
-        loop {
-            let notified = self.shared.empty.notified();
-            if lock_persistent(&self.shared).active == 0 {
-                return;
-            }
-            notified.await;
+    fn signal_group(&self) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(kind) = self.denied_signals {
+            return Err(kind.into());
         }
+        signal_group(
+            &self.helper,
+            self.child.id(),
+            #[cfg(test)]
+            self.denied_helper_kill,
+        )
+    }
+
+    fn kill_child(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(kind) = self.denied_signals {
+            return Err(kind.into());
+        }
+        retry_signal(|| self.child.kill())
     }
 }
-
-#[cfg(feature = "control-mode")]
-pub(crate) struct PersistentReservation {
-    stopped: watch::Receiver<bool>,
-    registration: PersistentRegistration,
-}
-
-#[cfg(feature = "control-mode")]
-struct PersistentRegistration {
-    shared: Arc<PersistentShared>,
-    _permit: OwnedSemaphorePermit,
-}
-
-#[cfg(feature = "control-mode")]
-impl Drop for PersistentRegistration {
+impl Drop for ProcessChild {
     fn drop(&mut self) {
-        let mut lifecycle = lock_persistent(&self.shared);
-        lifecycle.active -= 1;
-        let empty = lifecycle.active == 0;
-        drop(lifecycle);
-        if empty {
-            self.shared.empty.notify_waiters();
+        if !self.reaped && self.retired_error.is_none() {
+            let _ = self.finish();
         }
     }
 }
 
-/// Removes this control client's pid from the shared owned set on drop.
-///
-/// Lives on [`PersistentChild`] rather than on either half a caller splits
-/// it into ([`crate::control::ControlSender`], [`crate::control::ControlEvents`]):
-/// either can be dropped while the other keeps the connection, and the
-/// underlying `Child` -- what this pid actually names -- lives exactly as
-/// long as `PersistentChild` does.
-#[cfg(feature = "control-mode")]
-struct ControlClientPidGuard {
-    pids: Arc<Mutex<std::collections::HashSet<u32>>>,
+fn retry_signal(mut signal: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    loop {
+        match signal() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.raw_os_error() == Some(3) => return Ok(()),
+            result => return result,
+        }
+    }
+}
+
+fn cleanup_error(stages: &[(&str, Option<io::ErrorKind>)]) -> Option<io::Error> {
+    let failures: Vec<_> = stages
+        .iter()
+        .filter_map(|(stage, kind)| kind.map(|kind| (*stage, kind)))
+        .collect();
+    let (_, kind) = failures.first()?;
+    let message = failures
+        .iter()
+        .map(|(stage, kind)| format!("{stage}: {kind:?}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(io::Error::new(*kind, message))
+}
+
+fn reap_after_signal(child: &mut Child, signal_failed: bool) -> io::Result<Option<ExitStatus>> {
+    loop {
+        let result = if signal_failed {
+            child.try_wait()
+        } else {
+            child.wait().map(Some)
+        };
+        match result {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
+}
+
+fn signal_group(
+    helper: &Path,
     pid: u32,
-}
-
-#[cfg(feature = "control-mode")]
-impl Drop for ControlClientPidGuard {
-    fn drop(&mut self) {
-        self.pids
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.pid);
-    }
-}
-
-#[cfg(feature = "control-mode")]
-pub(crate) struct PersistentChild {
-    // The group guard must drop while the unreaped leader still anchors its PGID.
-    process_group: ProcessGroupGuard,
-    child: Child,
-    stopped: watch::Receiver<bool>,
-    request_id: RequestId,
-    command: CommandSummary,
-    // Admission remains active until process cleanup has finished.
-    _registration: PersistentRegistration,
-    // Removes this pid from the owned set once dropped; its ordering
-    // relative to the other fields does not matter, since nothing here reads
-    // it back.
-    _pid_guard: Option<ControlClientPidGuard>,
-}
-
-#[cfg(feature = "control-mode")]
-impl PersistentChild {
-    pub(crate) fn spawn(
-        launch: &LaunchContext,
-        request: &CommandRequest,
-        reservation: PersistentReservation,
-        control_client_pids: Arc<Mutex<std::collections::HashSet<u32>>>,
-    ) -> Result<Self, Error> {
-        validate_request(launch, request)?;
-        let mut command = launch.command(request.argv());
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let child = command.spawn().map_err(|source| {
-            // The same test the subprocess path applies, so a missing tmux is
-            // `ExecutableNotFound` whichever path meets it first. Anything else
-            // stays a control-mode failure.
-            let executable_not_found = (source.kind() == io::ErrorKind::NotFound
-                && launch.current_dir().is_none_or(Path::is_dir))
-                || launch.executable_missing_from_path();
-            if executable_not_found {
-                Error::spawn(
-                    request.request_id().get(),
-                    request.summary().clone(),
-                    source,
-                    true,
-                )
-            } else {
-                Error::control_mode(source)
-            }
-        })?;
-        let process_group = ProcessGroupGuard::new(child.id());
-        // `child.id()` is `None` only once the child has already been
-        // reaped, which cannot be true immediately after `spawn` returns.
-        let pid_guard = child.id().map(|pid| {
-            control_client_pids
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(pid);
-            ControlClientPidGuard {
-                pids: control_client_pids,
-                pid,
-            }
-        });
-
-        Ok(Self {
-            process_group,
-            child,
-            stopped: reservation.stopped,
-            request_id: request.request_id(),
-            command: request.summary().clone(),
-            _registration: reservation.registration,
-            _pid_guard: pid_guard,
-        })
-    }
-
-    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
-    }
-
-    pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.child.stdout.take()
-    }
-
-    pub(crate) fn stopped(&self) -> watch::Receiver<bool> {
-        self.stopped.clone()
-    }
-
-    pub(crate) fn shutdown_error(&self) -> Error {
-        Error::executor_shutdown(self.request_id.get(), self.command.clone())
-    }
-
-    pub(crate) async fn terminate(&mut self) -> Result<(), Error> {
-        self.process_group.signal();
-        let _ = self.child.start_kill();
-        loop {
-            match self.child.wait().await {
-                Ok(_) => {
-                    self.process_group.disarm();
-                    return Ok(());
-                }
-                Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-                Err(source) => return Err(Error::control_mode(source)),
+    #[cfg(test)] denied_helper_kill: Option<io::ErrorKind>,
+) -> io::Result<()> {
+    let mut command = Command::new(helper);
+    command
+        .args([
+            OsString::from("-KILL"),
+            OsString::from("--"),
+            OsString::from(format!("-{pid}")),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn()?;
+    let timeout = Duration::from_secs(2);
+    #[cfg(test)]
+    let timeout = if denied_helper_kill.is_some() {
+        Duration::from_millis(20)
+    } else {
+        timeout
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err(io::Error::other("process-group signal helper failed")),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(1)),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+            Ok(None) => {
+                #[cfg(test)]
+                let killed = match denied_helper_kill {
+                    Some(kind) => Err(kind.into()),
+                    None => retry_signal(|| child.kill()),
+                };
+                #[cfg(not(test))]
+                let killed = retry_signal(|| child.kill());
+                let waited = reap_after_signal(&mut child, killed.is_err());
+                return Err(cleanup_error(&[
+                    ("helper signal", killed.err().map(|error| error.kind())),
+                    ("helper wait", waited.err().map(|error| error.kind())),
+                    ("helper deadline", Some(io::ErrorKind::TimedOut)),
+                ])
+                .unwrap_or_else(|| io::Error::from(io::ErrorKind::TimedOut)));
             }
         }
     }
 }
 
-#[cfg(feature = "control-mode")]
-fn lock_persistent(shared: &PersistentShared) -> MutexGuard<'_, PersistentLifecycle> {
-    shared
-        .lifecycle
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+pub(crate) fn output_pair() -> io::Result<(UnixStream, Stdio)> {
+    let (parent, child) = UnixStream::pair()?;
+    parent.set_nonblocking(true)?;
+    Ok((parent, Stdio::from(OwnedFd::from(child))))
 }
+
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(feature = "control-mode")]
+mod persistent;
+#[cfg(feature = "control-mode")]
+pub(crate) use persistent::{PersistentChild, PersistentClients};
 
 #[cfg(test)]
 mod tests {
@@ -539,6 +547,198 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::LaunchContext;
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn signals_refused_return_without_waiting_for_a_live_child() {
+        use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
+        use std::time::Duration;
+
+        let launch = LaunchContext::new("/bin/sleep");
+        let mut command = launch.command(&["30".into()]);
+        let mut child = super::ProcessChild::spawn(&launch, &mut command).expect("child starts");
+        let pid = Pid::from_raw(i32::try_from(child.child.id()).expect("PID fits")).expect("PID");
+        let owned = pidfd_open(pid, PidfdFlags::empty()).expect("owned PIDFD");
+        child.denied_signals = Some(std::io::ErrorKind::PermissionDenied);
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = child.finish();
+            send.send((child, result))
+                .expect("test receives cleanup result");
+        });
+        let observed = recv.recv_timeout(Duration::from_millis(150));
+        let returned = observed.is_ok();
+        let (mut child, result) = if let Ok(pair) = observed {
+            pair
+        } else {
+            pidfd_send_signal(&owned, Signal::KILL).expect("harness kills owned child");
+            recv.recv_timeout(Duration::from_secs(2))
+                .expect("killed child releases wait")
+        };
+        let still_alive = child.child.try_wait().expect("child state").is_none();
+        child.denied_signals = None;
+        child.finish().expect("harness reaps owned child");
+        worker.join().expect("worker joins");
+        assert!(
+            returned,
+            "known signal errors must not wait for a live child"
+        );
+        assert!(
+            still_alive,
+            "injection must refuse effects, not report a fake signal success"
+        );
+        let error = result.expect_err("both denied signals are reported");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let detail = error.to_string();
+        assert!(detail.contains("process-group signal: PermissionDenied"));
+        assert!(detail.contains("direct-child signal: PermissionDenied"));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn drop_returns_when_signals_are_refused() {
+        use rustix::process::{
+            Pid, PidfdFlags, Signal, WaitOptions, pidfd_open, pidfd_send_signal, waitpid,
+        };
+        use std::time::Duration;
+
+        let launch = LaunchContext::new("/bin/sleep");
+        let mut command = launch.command(&["30".into()]);
+        let mut child = super::ProcessChild::spawn(&launch, &mut command).expect("child starts");
+        let pid = Pid::from_raw(i32::try_from(child.child.id()).expect("PID fits")).expect("PID");
+        let owned = pidfd_open(pid, PidfdFlags::empty()).expect("owned PIDFD");
+        child.denied_signals = Some(std::io::ErrorKind::PermissionDenied);
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            drop(child);
+            send.send(()).expect("test observes completed Drop");
+        });
+        let returned = recv.recv_timeout(Duration::from_millis(150)).is_ok();
+        pidfd_send_signal(&owned, Signal::KILL).expect("harness kills owned child");
+        worker.join().expect("worker joins after harness cleanup");
+        match waitpid(Some(pid), WaitOptions::empty()) {
+            Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => {}
+            other => panic!("harness reaps owned child: {other:?}"),
+        }
+        assert!(returned, "Drop must not wait after known signal failures");
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn helper_signal_failure_does_not_wait_for_a_live_helper() {
+        use rustix::process::{
+            Pid, PidfdFlags, Signal, WaitOptions, pidfd_open, pidfd_send_signal, waitpid,
+        };
+        use std::time::{Duration, Instant};
+
+        let directory = tempfile::tempdir().expect("fixture directory");
+        let helper = directory.path().join("helper");
+        let pid_file = directory.path().join("helper.pid");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec /bin/sleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .expect("helper script written");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700))
+            .expect("helper executable");
+        let launch = LaunchContext::new("/bin/sleep").with_group_signal_helper(helper);
+        let mut command = launch.command(&["30".into()]);
+        let mut child = super::ProcessChild::spawn(&launch, &mut command).expect("child starts");
+        child.denied_helper_kill = Some(std::io::ErrorKind::PermissionDenied);
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = child.finish();
+            send.send(result).expect("test receives helper failure");
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let helper_pid = loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_file)
+                && let Ok(value) = text.parse::<i32>()
+            {
+                break Pid::from_raw(value).expect("helper PID");
+            }
+            assert!(Instant::now() < deadline, "helper publishes PID");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let owned = pidfd_open(helper_pid, PidfdFlags::empty()).expect("helper PIDFD");
+        let observed = recv.recv_timeout(Duration::from_millis(150));
+        let returned = observed.is_ok();
+        pidfd_send_signal(&owned, Signal::KILL).expect("harness kills owned helper");
+        let result = match observed {
+            Ok(result) => {
+                waitpid(Some(helper_pid), WaitOptions::empty())
+                    .expect("harness reaps abandoned helper");
+                result
+            }
+            Err(_) => recv
+                .recv_timeout(Duration::from_secs(2))
+                .expect("killed helper releases wait"),
+        };
+        worker.join().expect("worker joins");
+        assert!(
+            returned,
+            "known helper kill failure must not enter a blocking wait"
+        );
+        let error = result.expect_err("helper signal failure remains visible");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("process-group signal"));
+    }
+
+    #[test]
+    fn lost_exit_observation_retires_cleanup_after_reaping() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let helper = root.path().join("kill");
+        std::fs::write(
+            &helper,
+            b"#!/bin/sh\nprintf called > \"$(dirname \"$0\")/called\"\n",
+        )
+        .expect("helper written");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700))
+            .expect("helper executable");
+        let launch = LaunchContext::new("/bin/sh").with_group_signal_helper(helper);
+        let mut command = launch.command(&["-c".into(), "exit 0".into()]);
+        let mut child = super::ProcessChild::spawn(&launch, &mut command).expect("child starts");
+        child
+            .child
+            .wait()
+            .expect("simulate another owner reaping the leader");
+        let observation =
+            std::io::Error::new(std::io::ErrorKind::NotFound, "proc entry disappeared");
+        assert!(child.observe_exit(Err(observation)).is_err());
+        for _ in 0..2 {
+            assert!(
+                child
+                    .finish()
+                    .expect_err("cleanup cannot be proven")
+                    .to_string()
+                    .contains("ownership was lost")
+            );
+        }
+        drop(child);
+        assert!(
+            !root.path().join("called").exists(),
+            "retired ownership never invokes numeric cleanup"
+        );
+    }
+
+    #[test]
+    fn failed_exit_observation_still_cleans_up_an_owned_running_child() {
+        let launch = LaunchContext::new("/bin/sh");
+        let mut command = launch.command(&["-c".into(), "exec sleep 30".into()]);
+        let mut child = super::ProcessChild::spawn(&launch, &mut command).expect("child starts");
+        let observation =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "procfs inaccessible");
+        assert!(child.observe_exit(Err(observation)).is_err());
+        assert!(
+            child.retired_error.is_none(),
+            "nonblocking ownership probe sees a running child"
+        );
+        child.finish().expect("owned group is signalled and reaped");
+        assert!(child.reaped);
+    }
 
     fn executable(path: &Path) {
         std::fs::write(path, b"#!/bin/sh\nexit 0\n").expect("fixture executable is written");

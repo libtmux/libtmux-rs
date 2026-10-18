@@ -1,102 +1,76 @@
-//! React to what a tmux server does, as it does it.
+//! Send commands while another thread watches the same tmux connection.
 //!
 //! ```console
-//! $ cargo run --example watch --features control-mode,test-support
+//! $ cargo run -p libtmux --example watch --features control-mode,test-support
 //! ```
-//!
-//! Every other API in this crate spawns a tmux process per command. Control
-//! mode opens one connection and keeps it: commands go down it and tmux
-//! reports what happens on the server as it happens.
 
 #![allow(clippy::print_stdout, reason = "an example")]
 
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
+use libtmux::Command;
 use libtmux::control::{ControlMode, Event};
-use libtmux::test::unique_name;
-use libtmux::{Command, Server};
+use libtmux::test::TestServer;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // An example must not watch whatever server the reader happens to be
-    // using, so this one gets a socket of its own under a root this workspace
-    // owns.
-    let root = std::path::Path::new("/tmp/libtmux-rs-dev");
-    std::fs::create_dir_all(root)?;
-    let socket = root.join(format!("{}.sock", unique_name("libtmux-watch")));
-    let server = Server::builder().socket_path(&socket).build()?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new()?;
+    let session = guard.session("watched")?;
+    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())?.split();
+    println!("one connection to {}", guard.socket_path().display());
 
-    let session = server.new_session(unique_name("watched").as_str()).await?;
-    let (commands, mut events) = ControlMode::attach(&server, session.id()).await?.split();
-    println!("one connection to {}", socket.display());
-
-    // The watcher gets its own task. Sending and watching are separate
-    // handles precisely so neither has to wait for the other, and a loop that
-    // only reads is the shape that keeps the connection moving.
-    let watcher = tokio::spawn(async move {
-        let mut seen = Vec::new();
-        while let Some(event) = events.next_event().await {
-            match event? {
-                Event::WindowAdded { window } => {
-                    println!("  <- window {window} appeared");
-                    seen.push(window.to_string());
+    let (finished, received) = mpsc::sync_channel(1);
+    let watcher = thread::spawn(move || {
+        let outcome = (|| {
+            let mut seen = Vec::new();
+            while let Some(event) = events.next_event_timeout(Duration::from_secs(10))? {
+                match event {
+                    Event::WindowAdded { window } => {
+                        println!("  <- window {window} appeared");
+                        seen.push(window.to_string());
+                    }
+                    Event::WindowRenamed { window, name } if name.as_bytes() == b"renamed" => {
+                        println!("  <- window {window} is now {}", name.to_string_lossy());
+                        seen.push(window.to_string());
+                    }
+                    Event::Exit { .. } => break,
+                    _ => continue,
                 }
-                Event::WindowRenamed { window, name } => {
-                    println!("  <- window {window} is now {}", name.to_string_lossy());
-                    seen.push(window.to_string());
+                if seen.len() == 2 {
+                    break;
                 }
-                Event::Exit { .. } => break,
-                // tmux reports far more than this; an event nobody matched is
-                // still worth counting rather than dropping silently.
-                _ => continue,
             }
-            if seen.len() == 2 {
-                break;
-            }
-        }
-        Ok::<_, libtmux::Error>((seen, events))
+            Ok::<_, libtmux::Error>((seen, events))
+        })();
+        let _ = finished.send(outcome);
     });
 
-    // Meanwhile, drive the server down the same connection. These spawn no
-    // processes: they are lines on the socket the watcher is reading.
-    println!("  -> new-window   (a line on that connection, not a process)");
-    commands
-        .send(Command::new("new-window").arg("-d").arg("-n").arg("built"))
-        .await?;
-    println!("  -> rename-window");
-    commands
-        .send(
+    let outcome = (|| -> Result<_, Box<dyn std::error::Error>> {
+        println!("  -> new-window");
+        commands.send(Command::new("new-window").arg("-d").arg("-n").arg("built"))?;
+        println!("  -> rename-window");
+        commands.send(
             Command::new("rename-window")
                 .arg("-t")
                 .arg("built")
                 .arg("renamed"),
-        )
-        .await?;
+        )?;
+        let (seen, events) = received.recv_timeout(Duration::from_secs(10))??;
+        events.shutdown()?;
+        if seen.len() != 2 {
+            return Err(std::io::Error::other("connection ended before the window events").into());
+        }
+        println!("{} events arrived on the same connection", seen.len());
+        Ok(())
+    })();
 
-    // The watcher's own `event?` can end this early -- a connection error is
-    // as reachable here as tmux exiting cleanly. Collecting its outcome
-    // first, rather than propagating it immediately with `?`, means the
-    // teardown below still runs on that path instead of leaking the
-    // throwaway server and its socket file.
-    let outcome: Result<usize, Box<dyn std::error::Error>> = async {
-        let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await???;
-        println!(
-            "{} events arrived while those commands were being sent, on the same socket",
-            seen.len()
-        );
-        drop(commands);
-        events.shutdown().await?;
-        Ok(seen.len())
+    drop(commands);
+    let cleanup = guard.shutdown();
+    if let Err(panic) = watcher.join() {
+        std::panic::resume_unwind(panic);
     }
-    .await;
-
-    server.kill().await?;
-    server.shutdown().await?;
-
-    // tmux does not unlink its socket when the server exits, so whatever named
-    // one owns removing it.
-    std::fs::remove_file(&socket)?;
-
     outcome?;
+    cleanup?;
     Ok(())
 }

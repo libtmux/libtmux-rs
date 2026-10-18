@@ -39,28 +39,27 @@ impl Pane {
     /// error when tmux could not be read, or an error when the control-mode
     /// connection cannot be opened.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing is left held: a dropped call closes the connection it opened,
-    /// and the mutes it set end with that connection.
+    /// If cancellation interrupts setup, the connection is closed and its pane mutes
+    /// end with it. Once returned, the stream stays open until shutdown or drop.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn watch(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
-    /// let mut output = pane.stream_output().await?;
+    /// #  fn watch(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+    /// let mut output = pane.stream_output()?;
     ///
-    /// while let Some(chunk) = output.next_chunk().await {
+    /// while let Some(chunk) = output.next_chunk() {
     ///     println!("{} bytes", chunk.len());
     /// }
     ///
-    /// output.shutdown().await
+    /// output.shutdown()
     /// # }
     /// ```
     #[cfg(feature = "control-mode")]
-    pub async fn stream_output(&self) -> Result<crate::control::PaneOutput, Error> {
+    pub fn stream_output(&self) -> Result<crate::control::PaneOutput, Error> {
         self.stream_output_with_limits(crate::ControlLimits::default())
-            .await
     }
 
     /// Like [`Self::stream_output`], with explicit frame budgets.
@@ -74,32 +73,31 @@ impl Pane {
     ///
     /// Returns the same errors as [`Self::stream_output`].
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
     /// Nothing is left held, as for [`Self::stream_output`].
     #[cfg(feature = "control-mode")]
-    pub async fn stream_output_with_limits(
+    pub fn stream_output_with_limits(
         &self,
         limits: crate::ControlLimits,
     ) -> Result<crate::control::PaneOutput, Error> {
         // tmux reports a pane only to a client attached to a session that
         // links its window, so attaching through this handle's cached session
         // would deliver silence after the pane was joined elsewhere.
-        let window = self.window().await?.ok_or_else(|| Error::ObjectGone {
+        let window = self.window()?.ok_or_else(|| Error::ObjectGone {
             kind: crate::ObjectKind::Pane,
             id: self.id().to_string(),
         })?;
         let server = crate::Server::from_core(Arc::clone(&self.core));
         let (sender, events) =
-            crate::control::ControlMode::attach_with_limits(&server, window.session_id(), limits)
-                .await?
+            crate::control::ControlMode::attach_with_limits(&server, window.session_id(), limits)?
                 .split();
 
         // One session can hold many panes, and the connection carries all of
         // them, so narrowing happens before the caller reads.
-        if let Err(error) = sender.watch_only(std::slice::from_ref(self.id())).await {
+        if let Err(error) = sender.watch_only(std::slice::from_ref(self.id())) {
             drop(sender);
-            return Err(events.shutdown_after_error(error).await);
+            return Err(events.shutdown_after_error(error));
         }
 
         Ok(crate::control::PaneOutput::new(
@@ -117,8 +115,8 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
-    pub async fn capture(&self) -> Result<Vec<TmuxText>, Error> {
-        self.capture_with(CaptureOptions::visible()).await
+    pub fn capture(&self) -> Result<Vec<TmuxText>, Error> {
+        self.capture_with(CaptureOptions::visible())
     }
 
     /// Read the pane's contents, choosing how much and in what form.
@@ -136,39 +134,34 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let guard = libtmux::test::TestServer::new()?;
     /// # let server = guard.server();
     /// use libtmux::CaptureOptions;
     ///
-    /// let session = server.new_session("captured").await?;
-    /// let pane = session.panes().await?.remove(0);
+    /// let session = server.new_session("captured")?;
+    /// let pane = session.panes()?.remove(0);
     ///
-    /// let visible = pane.capture_with(CaptureOptions::visible()).await?;
-    /// let everything = pane.capture_with(CaptureOptions::history()).await?;
+    /// let visible = pane.capture_with(CaptureOptions::visible())?;
+    /// let everything = pane.capture_with(CaptureOptions::history())?;
     /// assert!(everything.len() >= visible.len());
     ///
-    /// let last_ten = pane.capture_with(CaptureOptions::visible().start(-10)).await?;
+    /// let last_ten = pane.capture_with(CaptureOptions::visible().start(-10))?;
     /// assert!(last_ten.len() >= visible.len());
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn capture_with(&self, options: CaptureOptions) -> Result<Vec<TmuxText>, Error> {
+    pub fn capture_with(&self, options: CaptureOptions) -> Result<Vec<TmuxText>, Error> {
         // Refusing beats dispatching a flag tmux will reject with a usage
         // error that names the whole command.
         let version = crate::Server::from_core(Arc::clone(&self.core))
-            .capabilities()
-            .await?
+            .capabilities()?
             .tmux_version()
             .clone();
         let needs_wrap_trim = options.needs_wrap_trim();
         let command = options.lower(self.id().as_ref(), &version)?;
         let target = command.target().map(OsStr::to_os_string);
-        let result = self.core.execute(command).await?;
+        let result = self.core.execute(command)?;
         if !result.success() {
             return Err(Error::from_refused_result(
                 "capture-pane",
@@ -206,36 +199,30 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::CaptureOptions;
     ///
-    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let guard = libtmux::test::TestServer::new()?;
     /// let server = guard.server();
-    /// let session = server.new_session("prompts").await?;
-    /// let pane = session.panes().await?.remove(0);
+    /// let session = server.new_session("prompts")?;
+    /// let pane = session.panes()?.remove(0);
     ///
-    /// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
-    ///     let lines = pane.capture_lines(CaptureOptions::history()).await?;
+    /// if server.capabilities()?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
+    ///     let lines = pane.capture_lines(CaptureOptions::history())?;
     ///     // Without shell integration nothing is marked, which is an answer.
     ///     let prompts = lines.iter().filter(|line| line.starts_prompt).count();
     ///     assert!(prompts <= lines.len());
     /// }
     ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn capture_lines(&self, options: CaptureOptions) -> Result<Vec<CapturedLine>, Error> {
+    pub fn capture_lines(&self, options: CaptureOptions) -> Result<Vec<CapturedLine>, Error> {
         crate::Server::from_core(Arc::clone(&self.core))
-            .require("capture-pane -F", crate::version::since::CAPTURE_LINE_FLAGS)
-            .await?;
+            .require("capture-pane -F", crate::version::since::CAPTURE_LINE_FLAGS)?;
 
         Ok(self
-            .capture_with(options.line_flags())
-            .await?
+            .capture_with(options.line_flags())?
             .into_iter()
             .map(|row| CapturedLine::parse(&row))
             .collect())
@@ -279,41 +266,36 @@ impl Pane {
     /// Returns an error when tmux cannot be reached or refuses a capture.
     /// Running out of time is [`PaneWait::TimedOut`], not an error.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing happened. A look only reads, so output a dropped wait missed
-    /// stays in the scrollback, up to `history-limit`, for the next wait.
+    /// Nothing happened. A look only reads, so output a cancelled wait missed stays in
+    /// the scrollback, up to `history-limit`, for the next wait.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::PaneWait;
     /// use std::time::Duration;
     ///
-    /// # let guard = libtmux::test::TestServer::builder().start().await?;
-    /// # let session = guard.server().new_session("waiting").await?;
-    /// # let pane = session.panes().await?.remove(0);
-    /// pane.send_line("printf 'ready\\n'").await?;
+    /// # let guard = libtmux::test::TestServer::builder().start()?;
+    /// # let session = guard.server().new_session("waiting")?;
+    /// # let pane = session.panes()?.remove(0);
+    /// pane.send_line("printf 'ready\\n'")?;
     ///
-    /// let seen = pane.wait_for_text("ready", Duration::from_secs(10)).await?;
+    /// let seen = pane.wait_for_text("ready", Duration::from_secs(10))?;
     /// assert_eq!(seen, PaneWait::Arrived);
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn wait_for_text(
+    pub fn wait_for_text(
         &self,
         needle: impl AsRef<[u8]>,
         within: Duration,
     ) -> Result<PaneWait, Error> {
         let needle = needle.as_ref();
         self.look_until(within, |text, _| contains(text, needle))
-            .await
     }
 
     /// Wait until this pane stops producing output for `quiet_for`.
@@ -330,7 +312,7 @@ impl Pane {
     /// Returns an error when tmux cannot be reached or refuses a capture.
     /// Running out of time is [`PaneWait::TimedOut`], not an error.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
     /// Nothing happened: a look only reads. A retry measures quiet afresh,
     /// from its own first look.
@@ -339,30 +321,22 @@ impl Pane {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::PaneWait;
     /// use std::time::Duration;
     ///
-    /// # let guard = libtmux::test::TestServer::builder().start().await?;
-    /// # let session = guard.server().new_session("settling").await?;
-    /// # let pane = session.panes().await?.remove(0);
+    /// # let guard = libtmux::test::TestServer::builder().start()?;
+    /// # let session = guard.server().new_session("settling")?;
+    /// # let pane = session.panes()?.remove(0);
     /// let settled = pane
     ///     .wait_for_quiet(Duration::from_millis(300), Duration::from_secs(10))
-    ///     .await?;
+    ///     ?;
     /// assert_eq!(settled, PaneWait::Arrived);
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn wait_for_quiet(
-        &self,
-        quiet_for: Duration,
-        within: Duration,
-    ) -> Result<PaneWait, Error> {
-        let mut last_change = tokio::time::Instant::now();
+    pub fn wait_for_quiet(&self, quiet_for: Duration, within: Duration) -> Result<PaneWait, Error> {
+        let mut last_change = std::time::Instant::now();
         let mut previous: Option<Vec<u8>> = None;
         self.look_until(within, move |text, now| {
             if previous.as_deref() == Some(text) {
@@ -372,7 +346,6 @@ impl Pane {
             last_change = now;
             false
         })
-        .await
     }
 
     /// Wait until `settled` holds for this pane's captured lines.
@@ -402,40 +375,36 @@ impl Pane {
     /// includes a pane that has been closed. Running out of time is
     /// [`PaneWait::TimedOut`], not an error.
     ///
-    /// # Cancel safety
+    /// # Cancellation
     ///
-    /// Nothing happened. A look only reads, so a future dropped mid-look
-    /// leaves tmux as it was, and output produced in the meantime stays in the
-    /// scrollback, up to `history-limit`, for the next wait to find.
+    /// Nothing happened. A look only reads, so cancelling a look leaves tmux as it was,
+    /// and output produced in the meantime stays in the scrollback, up to
+    /// `history-limit`, for the next wait to find.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
     /// use libtmux::PaneWait;
     /// use std::time::Duration;
     ///
-    /// # let guard = libtmux::test::TestServer::builder().start().await?;
-    /// # let session = guard.server().new_session("counting").await?;
-    /// # let pane = session.panes().await?.remove(0);
-    /// pane.send_line("for n in 1 2 3; do echo tick; done").await?;
+    /// # let guard = libtmux::test::TestServer::builder().start()?;
+    /// # let session = guard.server().new_session("counting")?;
+    /// # let pane = session.panes()?.remove(0);
+    /// pane.send_line("for n in 1 2 3; do echo tick; done")?;
     ///
     /// // The echoed command contains `tick`; only the output is a line equal to it.
     /// let ticked = pane
     ///     .wait_until(Duration::from_secs(10), |lines| {
     ///         lines.iter().filter(|line| **line == "tick").count() == 3
     ///     })
-    ///     .await?;
+    ///     ?;
     /// assert_eq!(ticked, PaneWait::Arrived);
-    /// # guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
+    /// # guard.shutdown()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn wait_until(
+    pub fn wait_until(
         &self,
         within: Duration,
         mut settled: impl FnMut(&[TmuxText]) -> bool,
@@ -450,14 +419,13 @@ impl Pane {
                 .collect();
             settled(&lines)
         })
-        .await
     }
 
     /// The shared loop: look, decide, sleep, repeat until the deadline.
-    async fn look_until(
+    fn look_until(
         &self,
         within: Duration,
-        mut settled: impl FnMut(&[u8], tokio::time::Instant) -> bool,
+        mut settled: impl FnMut(&[u8], std::time::Instant) -> bool,
     ) -> Result<PaneWait, Error> {
         // Scrollback rather than the visible screen, and wrapped lines joined:
         // output that scrolled away would read as absent, and a needle
@@ -465,8 +433,7 @@ impl Pane {
         let options = CaptureOptions::history().join_wrapped();
         let target = self.id().to_string();
         let version = crate::Server::from_core(Arc::clone(&self.core))
-            .capabilities()
-            .await?
+            .capabilities()?
             .tmux_version()
             .clone();
 
@@ -482,10 +449,10 @@ impl Pane {
         )
         .then(options.lower(&target, &version)?);
 
-        let deadline = tokio::time::Instant::now().checked_add(within);
+        let deadline = std::time::Instant::now().checked_add(within);
 
         loop {
-            let result = self.core.execute_chain(look.clone()).await?;
+            let result = self.core.execute_chain(look.clone())?;
             if !result.success() {
                 return Err(Error::from_refused_result(
                     "capture-pane",
@@ -495,7 +462,7 @@ impl Pane {
             }
             let (dead, text) = split_look(result.stdout());
 
-            let now = tokio::time::Instant::now();
+            let now = std::time::Instant::now();
             // Asked before the deadline is checked, so output already there
             // when the wait began is an answer rather than a timeout.
             if settled(text, now) {
@@ -508,10 +475,10 @@ impl Pane {
                 return Ok(PaneWait::Dead);
             }
 
-            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
                 return Ok(PaneWait::TimedOut);
             }
-            tokio::time::sleep(POLL_INTERVAL.min(within)).await;
+            std::thread::sleep(POLL_INTERVAL.min(within));
         }
     }
 }

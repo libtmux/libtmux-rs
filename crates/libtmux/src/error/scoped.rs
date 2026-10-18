@@ -32,23 +32,24 @@ use super::Error;
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
 /// use libtmux::ScopeError;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let outcome = guard.server().with_session("work", async |_session| {
+/// let guard = libtmux::test::TestServer::new()?;
+/// let outcome = guard.server().with_session("work",  |_session| {
 ///     Err::<(), _>("operation failed")
-/// }).await;
+/// });
 /// assert!(matches!(outcome, Err(ScopeError::Operation("operation failed"))));
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
 #[non_exhaustive]
 pub enum ScopeError<T, E> {
+    /// Cancellation was requested before the operation callback started.
+    Cancelled {
+        /// Cleanup failed after creation, marked as [`Error::AfterEffect`].
+        cleanup: Option<Error>,
+    },
     /// The resource could not be created; the operation did not run.
     Creation(Error),
     /// The operation failed and cleanup succeeded.
@@ -89,7 +90,7 @@ impl<T, E> ScopeError<T, E> {
             Self::Operation(operation) | Self::OperationAndCleanup { operation, .. } => {
                 Some(operation)
             }
-            Self::Creation(_) | Self::Cleanup { .. } => None,
+            Self::Cancelled { .. } | Self::Creation(_) | Self::Cleanup { .. } => None,
         }
     }
 
@@ -101,14 +102,14 @@ impl<T, E> ScopeError<T, E> {
     /// # Examples
     ///
     /// ```no_run
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// #  fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
     /// // The work is done even when tearing the session down failed, so the
     /// // value is worth keeping rather than discarding with the error.
     /// let outcome = server
-    ///     .with_session("build", async |session| {
+    ///     .with_session("build",  |session| {
     ///         Ok::<_, libtmux::Error>(session.id().to_string())
     ///     })
-    ///     .await;
+    ///     ;
     ///
     /// let id = match outcome {
     ///     Ok(id) => Some(id),
@@ -121,7 +122,10 @@ impl<T, E> ScopeError<T, E> {
     pub fn into_value(self) -> Option<T> {
         match self {
             Self::Cleanup { value, .. } => Some(value),
-            Self::Creation(_) | Self::Operation(_) | Self::OperationAndCleanup { .. } => None,
+            Self::Cancelled { .. }
+            | Self::Creation(_)
+            | Self::Operation(_)
+            | Self::OperationAndCleanup { .. } => None,
         }
     }
 
@@ -140,6 +144,7 @@ impl<T, E> ScopeError<T, E> {
     #[must_use]
     pub const fn tmux_error(&self) -> Option<&Error> {
         match self {
+            Self::Cancelled { cleanup } => cleanup.as_ref(),
             Self::Creation(error)
             | Self::Cleanup { cleanup: error, .. }
             | Self::OperationAndCleanup { cleanup: error, .. } => Some(error),
@@ -151,6 +156,10 @@ impl<T, E> ScopeError<T, E> {
 impl<T: fmt::Debug, E: fmt::Debug> fmt::Debug for ScopeError<T, E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled { cleanup } => formatter
+                .debug_struct("Cancelled")
+                .field("cleanup", cleanup)
+                .finish(),
             Self::Creation(error) => formatter.debug_tuple("Creation").field(error).finish(),
             Self::Operation(error) => formatter.debug_tuple("Operation").field(error).finish(),
             Self::Cleanup { value, cleanup } => formatter
@@ -170,6 +179,17 @@ impl<T: fmt::Debug, E: fmt::Debug> fmt::Debug for ScopeError<T, E> {
 impl<T, E: fmt::Display> fmt::Display for ScopeError<T, E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled { cleanup: None } => {
+                formatter.write_str("scoped operation was cancelled")
+            }
+            Self::Cancelled {
+                cleanup: Some(cleanup),
+            } => {
+                write!(
+                    formatter,
+                    "scoped operation was cancelled; cleanup also failed: {cleanup}"
+                )
+            }
             Self::Creation(error) => write!(formatter, "scoped resource creation failed: {error}"),
             Self::Operation(error) => write!(formatter, "scoped operation failed: {error}"),
             Self::Cleanup { cleanup, .. } => {
@@ -186,6 +206,9 @@ impl<T, E: fmt::Display> fmt::Display for ScopeError<T, E> {
 impl<T: fmt::Debug, E: fmt::Debug + fmt::Display> std::error::Error for ScopeError<T, E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Cancelled { cleanup } => cleanup
+                .as_ref()
+                .map(|error| error as &(dyn std::error::Error + 'static)),
             Self::Creation(error) => Some(error),
             Self::Cleanup { cleanup, .. } | Self::OperationAndCleanup { cleanup, .. } => {
                 Some(cleanup)

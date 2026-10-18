@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::OnceCell;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 #[cfg(feature = "control-mode")]
 use crate::SessionId;
@@ -42,7 +42,7 @@ pub(crate) struct BuildContext {
     inherited_tmux_pane: Option<OsString>,
     socket_root: Option<OsString>,
     fallback_socket_root: Option<PathBuf>,
-    real_uid: u32,
+    real_uid: Option<u32>,
 }
 
 impl BuildContext {
@@ -62,21 +62,35 @@ impl BuildContext {
             inherited_tmux_pane,
             socket_root,
             fallback_socket_root,
-            real_uid,
+            real_uid: Some(real_uid),
         }
     }
 
     pub(crate) fn capture() -> Self {
-        Self::new(
+        let mut context = Self::new(
             env::current_dir().ok(),
             env::var_os("PATH"),
             env::var_os("TMUX"),
             env::var_os("TMUX_PANE"),
             env::var_os("TMUX_TMPDIR"),
             Path::new("/tmp").canonicalize().ok(),
-            rustix::process::getuid().as_raw(),
-        )
+            0,
+        );
+        context.real_uid = real_uid().ok();
+        context
     }
+}
+
+fn real_uid() -> std::io::Result<u32> {
+    let status = std::fs::read_to_string("/proc/self/status")?;
+    status
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Uid:")
+                .and_then(|values| values.split_whitespace().next())
+                .and_then(|value| value.parse().ok())
+        })
+        .ok_or_else(|| std::io::Error::other("real user ID is unavailable"))
 }
 
 #[derive(Clone)]
@@ -97,6 +111,11 @@ pub(crate) struct CoreConfiguration {
 }
 
 impl CoreConfiguration {
+    pub(crate) fn with_group_signal_helper(mut self, path: PathBuf) -> Self {
+        self.launch = self.launch.with_group_signal_helper(path);
+        self
+    }
+
     /// Replace the budgets this server's dispatches run under.
     pub(crate) const fn with_limits(
         mut self,
@@ -139,7 +158,9 @@ impl CoreConfiguration {
         let inputs = EndpointInputs::new(
             &working_directory,
             context.socket_root.as_deref(),
-            context.real_uid,
+            context
+                .real_uid
+                .ok_or(ServerConfigurationErrorKind::RealUserIdUnavailable)?,
             context.inherited_tmux.as_deref(),
         )
         .with_captured_fallback_socket_root(context.fallback_socket_root.as_deref());
@@ -316,13 +337,15 @@ fn map_identity_error(error: &IdentityError) -> ServerConfigurationErrorKind {
 pub(crate) struct Core {
     configuration: CoreConfiguration,
     executor: Arc<dyn Executor>,
-    capabilities: OnceCell<EngineCapabilities>,
-    next_request_id: AtomicU64,
+    capabilities: Arc<OnceLock<EngineCapabilities>>,
+    capabilities_gate: Arc<Mutex<()>>,
+    next_request_id: Arc<AtomicU64>,
+    cancellation: crate::CancellationToken,
     /// The `wait-for` channels this handle has a client on, or a signal for.
     ///
     /// Shared by every clone of a [`crate::Server`], because the clients are
     /// this process's and a channel is one name on the tmux server.
-    channel_waits: ChannelWaits,
+    channel_waits: Arc<ChannelWaits>,
     #[cfg(feature = "control-mode")]
     persistent_clients: PersistentClients,
     /// PIDs of control clients this process itself spawned with
@@ -333,7 +356,7 @@ pub(crate) struct Core {
     /// handles, and stays correct across [`crate::control::ControlSender`]
     /// and [`crate::control::ControlEvents`] being dropped independently.
     #[cfg(feature = "control-mode")]
-    control_client_pids: Arc<std::sync::Mutex<std::collections::HashSet<u32>>>,
+    control_client_pids: Arc<Mutex<std::collections::HashSet<u32>>>,
 }
 
 impl Core {
@@ -358,13 +381,15 @@ impl Core {
         Self {
             configuration,
             executor,
-            capabilities: OnceCell::new(),
-            next_request_id: AtomicU64::new(1),
-            channel_waits: ChannelWaits::default(),
+            capabilities: Arc::new(OnceLock::new()),
+            capabilities_gate: Arc::new(Mutex::new(())),
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            cancellation: crate::CancellationToken::new(),
+            channel_waits: Arc::new(ChannelWaits::default()),
             #[cfg(feature = "control-mode")]
             persistent_clients: PersistentClients::new(control_client_limits),
             #[cfg(feature = "control-mode")]
-            control_client_pids: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            control_client_pids: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -384,9 +409,11 @@ impl Core {
         Self {
             configuration: self.configuration.clone(),
             executor: Arc::new(executor),
-            capabilities: OnceCell::new_with(Some(capabilities)),
-            next_request_id: AtomicU64::new(1),
-            channel_waits: ChannelWaits::default(),
+            capabilities: Arc::new(OnceLock::from(capabilities)),
+            capabilities_gate: Arc::new(Mutex::new(())),
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            cancellation: self.cancellation.clone(),
+            channel_waits: Arc::new(ChannelWaits::default()),
             persistent_clients: PersistentClients::new(self.configuration.control_client_limits),
             // Shared with the parent: a control client this process spawned is
             // the same process whichever handle dispatches through it.
@@ -416,11 +443,76 @@ impl Core {
         Self::with_executor(configuration, executor)
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn execute_with_timeout(
+        &self,
+        command: Command,
+        timeout: Duration,
+    ) -> Result<CommandResult, Error> {
+        let request = CommandRequest::with_global_argv(
+            self.next_request_id(),
+            &self.configuration.global_argv,
+            command,
+        )
+        .with_cancellation(self.cancellation.clone());
+        SubprocessExecutor::new(
+            self.configuration.launch.executable().to_os_string(),
+            timeout,
+        )
+        .with_launch_context(self.configuration.launch.clone())
+        .with_output_limits(self.configuration.output_limits)
+        .execute(request)
+        .run()
+    }
+
+    pub(crate) fn with_cancellation(mut self, token: crate::CancellationToken) -> Self {
+        self.cancellation = token;
+        self
+    }
+
+    pub(crate) fn cancelled_error(&self, command: &Command) -> Error {
+        Error::cancelled(self.next_request_id().get(), command.summary())
+    }
+
+    pub(crate) fn cancellation_token(&self) -> &crate::CancellationToken {
+        &self.cancellation
+    }
+
+    pub(crate) fn for_cleanup(&self) -> Arc<Self> {
+        self.for_cancellation(crate::CancellationToken::new())
+    }
+
+    pub(crate) fn for_cancellation(&self, token: crate::CancellationToken) -> Arc<Self> {
+        Arc::new(Self {
+            configuration: self.configuration.clone(),
+            executor: Arc::clone(&self.executor),
+            capabilities: Arc::clone(&self.capabilities),
+            capabilities_gate: Arc::clone(&self.capabilities_gate),
+            next_request_id: Arc::clone(&self.next_request_id),
+            cancellation: token,
+            channel_waits: Arc::clone(&self.channel_waits),
+            #[cfg(feature = "control-mode")]
+            persistent_clients: self.persistent_clients.clone(),
+            #[cfg(feature = "control-mode")]
+            control_client_pids: Arc::clone(&self.control_client_pids),
+        })
+    }
+
+    fn execute_request(&self, request: CommandRequest) -> Result<CommandResult, Error> {
+        let request = request.with_cancellation(self.cancellation.clone());
+        self.executor.execute(request).run()
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn control_request_ids(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.next_request_id)
+    }
+
     fn next_request_id(&self) -> RequestId {
         RequestId::new(self.next_request_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub(crate) async fn execute(&self, command: Command) -> Result<CommandResult, Error> {
+    pub(crate) fn execute(&self, command: Command) -> Result<CommandResult, Error> {
         // Rendered before the command is consumed, and only for the transport
         // that reads a line. A subprocess dispatch pays nothing for it.
         #[cfg(feature = "control-mode")]
@@ -435,7 +527,7 @@ impl Core {
         );
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
-        self.executor.execute(request).await
+        self.execute_request(request)
     }
 
     /// Start a dispatch with no deadline of its own, and name it.
@@ -466,7 +558,7 @@ impl Core {
     }
 
     /// The `wait-for` channels this handle has a client on, or a signal for.
-    pub(crate) const fn channel_waits(&self) -> &ChannelWaits {
+    pub(crate) fn channel_waits(&self) -> &ChannelWaits {
         &self.channel_waits
     }
 
@@ -480,7 +572,7 @@ impl Core {
         self.executor.renders_control_line()
     }
 
-    pub(crate) async fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
+    pub(crate) fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
         #[cfg(feature = "control-mode")]
         let control_line = self
             .executor
@@ -493,12 +585,12 @@ impl Core {
         );
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
-        self.executor.execute(request).await
+        self.execute_request(request)
     }
 
-    async fn probe_capabilities(&self) -> Result<EngineCapabilities, Error> {
+    fn probe_capabilities(&self) -> Result<EngineCapabilities, Error> {
         let request = CommandRequest::new(self.next_request_id(), Command::new("-V"));
-        let result = self.executor.execute(request).await?;
+        let result = self.execute_request(request)?;
         if !result.success() {
             return Err(Error::version_probe_failed(
                 result.request_id(),
@@ -512,17 +604,23 @@ impl Core {
         Ok(EngineCapabilities::from_tmux_version(version))
     }
 
-    pub(crate) async fn capabilities(&self) -> Result<&EngineCapabilities, Error> {
-        self.capabilities
-            .get_or_try_init(|| self.probe_capabilities())
-            .await
+    pub(crate) fn capabilities(&self) -> Result<&EngineCapabilities, Error> {
+        if let Some(capabilities) = self.capabilities.get() {
+            return Ok(capabilities);
+        }
+        let _guard = self
+            .capabilities_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(capabilities) = self.capabilities.get() {
+            return Ok(capabilities);
+        }
+        let capabilities = self.probe_capabilities()?;
+        Ok(self.capabilities.get_or_init(|| capabilities))
     }
 
     #[cfg(feature = "control-mode")]
-    pub(crate) async fn spawn_control(
-        &self,
-        session: &SessionId,
-    ) -> Result<PersistentChild, Error> {
+    pub(crate) fn spawn_control(&self, session: &SessionId) -> Result<PersistentChild, Error> {
         let mut global_argv = self.configuration.global_argv.clone();
         global_argv.push(OsString::from("-C"));
         let request = CommandRequest::with_global_argv(
@@ -534,15 +632,14 @@ impl Core {
                 .arg("-E")
                 .arg("-t")
                 .arg(session.to_string()),
-        );
-        let reservation = self
-            .persistent_clients
-            .reserve(
-                request.request_id(),
-                request.summary().clone(),
-                tokio::time::Instant::now().checked_add(self.configuration.timeout),
-            )
-            .await?;
+        )
+        .with_cancellation(self.cancellation.clone());
+        let reservation = self.persistent_clients.reserve(
+            request.request_id(),
+            request.summary().clone(),
+            std::time::Instant::now().checked_add(self.configuration.timeout),
+            self.cancellation_token(),
+        )?;
         PersistentChild::spawn(
             &self.configuration.launch,
             &request,
@@ -561,20 +658,44 @@ impl Core {
     pub(crate) fn owns_control_client(&self, pid: u32) -> bool {
         self.control_client_pids
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .contains(&pid)
     }
 
-    pub(crate) async fn shutdown(&self) -> Result<(), Error> {
+    pub(crate) fn shutdown(&self) -> Result<(), Error> {
         #[cfg(feature = "control-mode")]
         {
-            let (executor, ()) =
-                tokio::join!(self.executor.shutdown(), self.persistent_clients.shutdown());
-            executor
+            std::thread::scope(|scope| {
+                let closing = std::thread::Builder::new()
+                    .name("libtmux-control-shutdown".to_owned())
+                    .spawn_scoped(scope, || self.persistent_clients.shutdown());
+                self.finish_shutdown(closing)
+            })
         }
         #[cfg(not(feature = "control-mode"))]
-        {
-            self.executor.shutdown().await
+        self.executor.shutdown().run()
+    }
+
+    #[cfg(feature = "control-mode")]
+    fn finish_shutdown(
+        &self,
+        closing: std::io::Result<std::thread::ScopedJoinHandle<'_, Result<(), Error>>>,
+    ) -> Result<(), Error> {
+        let ordinary = self.executor.shutdown().run();
+        match closing {
+            Ok(closing) => {
+                let persistent = match closing.join() {
+                    Ok(result) => result,
+                    Err(payload) => std::panic::resume_unwind(payload),
+                };
+                ordinary.and(persistent)
+            }
+            Err(source) => {
+                // Thread exhaustion must not skip cleanup. Both registries
+                // retain child-cleanup failures for a later shutdown call.
+                let _ = self.persistent_clients.shutdown();
+                Err(Error::RuntimeUnavailable { source })
+            }
         }
     }
 
@@ -927,8 +1048,8 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn captured_context_is_applied_to_the_real_subprocess_boundary() {
+    #[test]
+    fn captured_context_is_applied_to_the_real_subprocess_boundary() {
         let workspace = tempfile::tempdir().expect("temporary directory");
         let bin = workspace.path().join("bin");
         std::fs::create_dir(&bin).expect("bin directory exists");
@@ -1001,7 +1122,6 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
         let core = Core::new(configuration);
         let result = core
             .execute(Command::new("display-message").arg("value;"))
-            .await
             .expect("fake subprocess executes");
         let stdout = result.stdout_utf8().expect("fixture output is UTF-8");
 
@@ -1019,11 +1139,11 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
                 bin.display(),
             )
         );
-        core.shutdown().await.expect("shutdown succeeds");
+        core.shutdown().expect("shutdown succeeds");
     }
 
-    #[tokio::test]
-    async fn removed_captured_cwd_is_not_misreported_as_a_missing_executable() {
+    #[test]
+    fn removed_captured_cwd_is_not_misreported_as_a_missing_executable() {
         let workspace = tempfile::tempdir().expect("temporary directory");
         let working_directory = workspace.path().join("sentinel-deleted-cwd");
         std::fs::create_dir(&working_directory).expect("captured cwd exists initially");
@@ -1049,7 +1169,6 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
 
         let error = core
             .execute(Command::new("display-message"))
-            .await
             .expect_err("spawn fails when its captured cwd disappears");
         assert!(matches!(error, Error::Spawn { .. }));
         let mut source: Option<&dyn StdError> = Some(&error);
@@ -1058,6 +1177,73 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
             assert!(!format!("{current:?}").contains("sentinel-deleted-cwd"));
             source = current.source();
         }
-        core.shutdown().await.expect("shutdown remains clean");
+        core.shutdown().expect("shutdown remains clean");
+    }
+
+    #[cfg(all(feature = "control-mode", feature = "test-support"))]
+    #[test]
+    fn a_failed_shutdown_thread_still_closes_both_executors() {
+        let fixture = crate::test::TestServer::new().expect("fixture starts");
+        let session = fixture
+            .server()
+            .new_session("shutdown-fallback")
+            .expect("session starts");
+        let executable = fixture
+            .server()
+            .resolved_tmux_executable()
+            .expect("tmux resolves");
+        let configuration = CoreConfiguration::resolve(
+            &SocketSelection::Path(fixture.socket_path().to_owned()),
+            None,
+            None,
+            executable.into_os_string(),
+            Duration::from_secs(5),
+            BuildContext::capture(),
+        )
+        .expect("configuration resolves");
+        let core = std::sync::Arc::new(Core::new(configuration));
+        let server = crate::Server::from_core(std::sync::Arc::clone(&core));
+        let connection =
+            crate::control::ControlMode::attach(&server, session.id()).expect("control attaches");
+        let clients: Vec<u32> = core
+            .control_client_pids
+            .lock()
+            .expect("PID lock")
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(clients.len(), 1, "the test owns one active control process");
+        let failure = core
+            .finish_shutdown(Err(std::io::ErrorKind::WouldBlock.into()))
+            .expect_err("the spawn failure is returned after cleanup");
+        assert!(
+            matches!(failure, Error::RuntimeUnavailable { source } if source.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert!(
+            matches!(
+                core.execute(Command::new("list-sessions")),
+                Err(Error::ExecutorShutdown { .. })
+            ),
+            "ordinary admission must be closed"
+        );
+        assert!(
+            core.control_client_pids
+                .lock()
+                .expect("PID lock")
+                .is_empty(),
+            "persistent cleanup must finish before returning"
+        );
+        for pid in clients {
+            assert!(
+                !Path::new(&format!("/proc/{pid}")).exists(),
+                "control child {pid} was not reaped"
+            );
+        }
+        assert!(matches!(
+            connection.shutdown(),
+            Err(Error::ExecutorShutdown { .. })
+        ));
+        core.shutdown().expect("repeated cleanup stays complete");
+        fixture.shutdown().expect("fixture shuts down");
     }
 }

@@ -32,15 +32,13 @@ const TEMPLATE: &str =
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux::test::TestServer::new()?;
 /// let server = guard.server();
-/// server.bind_key("prefix", "Y", "display-message hello").await?;
+/// server.bind_key("prefix", "Y", "display-message hello")?;
 ///
-/// let version = server.capabilities().await?.tmux_version().clone();
+/// let version = server.capabilities()?.tmux_version().clone();
 /// if version.has_behavior(&libtmux::since::LIST_KEYS_FORMAT) {
-///     let bindings = server.typed_key_bindings(Some("prefix")).await?;
+///     let bindings = server.typed_key_bindings(Some("prefix"))?;
 ///     let bound = bindings
 ///         .iter()
 ///         .find(|binding| binding.key() == "Y")
@@ -50,9 +48,7 @@ const TEMPLATE: &str =
 ///     assert_eq!(bound.note(), None);
 /// }
 ///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
+/// guard.shutdown()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -153,12 +149,10 @@ impl Server {
     /// those releases print. Returns [`Error::DecodeListing`] when a row does
     /// not decode, and an error when tmux cannot be reached or refuses the
     /// listing.
-    pub async fn typed_key_bindings(&self, table: Option<&str>) -> Result<Vec<KeyBinding>, Error> {
-        self.require("list-keys formats", LIST_KEYS_FORMAT).await?;
+    pub fn typed_key_bindings(&self, table: Option<&str>) -> Result<Vec<KeyBinding>, Error> {
+        self.require("list-keys formats", LIST_KEYS_FORMAT)?;
 
-        let result = self
-            .cmd(Command::new("list-keys").arg("-F").arg(TEMPLATE))
-            .await?;
+        let result = self.cmd(Command::new("list-keys").arg("-F").arg(TEMPLATE))?;
         if !result.success() {
             return Err(Error::from_refused_result("list-keys", &result, None));
         }
