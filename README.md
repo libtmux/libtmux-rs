@@ -1,10 +1,10 @@
 <!-- libtmux-logo -->
-<p align="center">
+<div align="center">
   <picture>
     <source srcset="assets/logo.svg" type="image/svg+xml">
     <img src="assets/logo.png" width="128" height="128" alt="libtmux for Rust">
   </picture>
-</p>
+</div>
 <!-- /libtmux-logo -->
 
 <div align="center">
