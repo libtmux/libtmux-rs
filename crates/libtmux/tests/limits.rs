@@ -259,3 +259,45 @@ async fn persistent_clients_have_their_own_admission_limit() {
         .expect("replacement shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn retained_waits_have_their_own_budget_and_release_it_after_signal() {
+    let fixture = TestServer::builder()
+        .dispatch_limits(
+            DispatchLimits::default()
+                .max_in_flight(1)
+                .max_wait_clients(1),
+        )
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = fixture.server();
+    let first = libtmux::test::unique_name("resident-first");
+    let second = libtmux::test::unique_name("resident-second");
+    let third = libtmux::test::unique_name("resident-third");
+    let within = libtmux::test::scaled(Duration::from_millis(200));
+    let initial = server.wait_for_channel(&first, within).await;
+    let shared = server.wait_for_channel(&first, within).await;
+    let refused = server.wait_for_channel(&second, within).await;
+    server
+        .signal_channel(&first)
+        .await
+        .expect("ordinary capacity remains");
+    let signalled = server
+        .wait_for_channel(&first, libtmux::test::scaled(Duration::from_secs(5)))
+        .await;
+    let reused = server.wait_for_channel(&third, within).await;
+    fixture.shutdown().await.expect("all resident clients stop");
+
+    assert!(matches!(initial, Ok(libtmux::ChannelWait::TimedOut)));
+    assert!(matches!(shared, Ok(libtmux::ChannelWait::TimedOut)));
+    assert!(
+        matches!(
+            refused,
+            Err(libtmux::Error::Overloaded { in_flight: 1, .. })
+        ),
+        "a distinct channel is refused while the resident budget is full: {refused:?}",
+    );
+    assert!(matches!(signalled, Ok(libtmux::ChannelWait::Signalled)));
+    assert!(matches!(reused, Ok(libtmux::ChannelWait::TimedOut)));
+}

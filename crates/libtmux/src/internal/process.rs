@@ -224,6 +224,23 @@ impl ProcessAdmission {
         self
     }
 
+    pub(crate) fn try_acquire(
+        &self,
+        request_id: RequestId,
+        command: &CommandSummary,
+    ) -> Result<OwnedSemaphorePermit, Error> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::executor_shutdown(request_id.get(), command.clone()));
+        }
+        self.permits
+            .try_acquire_arc()
+            .ok_or_else(|| Error::Overloaded {
+                request_id: request_id.get(),
+                command: command.clone(),
+                in_flight: self.limit,
+            })
+    }
+
     pub(crate) async fn acquire(
         &self,
         request_id: RequestId,

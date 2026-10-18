@@ -2,6 +2,7 @@ assoc_const libtmux_tokio::ControlClientLimits::DEFAULT_CLIENTS: usize
 assoc_const libtmux_tokio::ControlLimits::DEFAULT_BLOCK_BYTES: usize
 assoc_const libtmux_tokio::ControlLimits::DEFAULT_LINE_BYTES: usize
 assoc_const libtmux_tokio::DispatchLimits::DEFAULT_IN_FLIGHT: usize
+assoc_const libtmux_tokio::DispatchLimits::DEFAULT_WAIT_CLIENTS: usize
 assoc_const libtmux_tokio::OutputLimits::DEFAULT_STDERR_BYTES: usize
 assoc_const libtmux_tokio::OutputLimits::DEFAULT_STDOUT_BYTES: usize
 assoc_const libtmux_tokio::ReleaseSuffix::FINAL: Self
@@ -372,6 +373,8 @@ function libtmux_tokio::ControlLimits::max_line_bytes: const fn(self, bytes: usi
 function libtmux_tokio::DispatchLimits::acquire_timeout: const fn(self, timeout: Option<Duration>) -> Self
 function libtmux_tokio::DispatchLimits::in_flight: const fn(self) -> usize
 function libtmux_tokio::DispatchLimits::max_in_flight: const fn(self, permits: usize) -> Self
+function libtmux_tokio::DispatchLimits::max_wait_clients: const fn(self, clients: usize) -> Self
+function libtmux_tokio::DispatchLimits::wait_clients: const fn(self) -> usize
 function libtmux_tokio::EngineCapabilities::tmux_version: const fn(&self) -> &libtmux_tokio::TmuxVersion
 function libtmux_tokio::Error::after_effect: fn(self, operation: &'static str) -> Self
 function libtmux_tokio::Error::found_version: fn(&self) -> Option<&libtmux_tokio::TmuxVersion>

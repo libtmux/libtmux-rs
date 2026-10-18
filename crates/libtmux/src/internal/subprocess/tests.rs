@@ -628,6 +628,52 @@ async fn shutdown_cancels_all_children_rejects_new_work_and_is_idempotent() {
     assert_process_reaped(second_pid);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parked_client_budget_refuses_extra_clients_and_leaves_ordinary_capacity() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let executor = executor("block", TEST_TIMEOUT).with_dispatch_limits(
+        DispatchLimits::default()
+            .max_in_flight(1)
+            .max_wait_clients(1),
+    );
+    let parked_file = root.path().join("parked");
+    let worker = tokio::spawn(
+        executor.execute(request(1, [parked_file.as_os_str().to_owned()]).without_deadline()),
+    );
+    let parked_pid = read_pids(&parked_file, 1).await[0];
+    let extra_file = root.path().join("extra");
+    let extra = tokio::time::timeout(
+        Duration::from_millis(250),
+        executor.execute(request(2, [extra_file.as_os_str().to_owned()]).without_deadline()),
+    )
+    .await;
+    let extra_started = extra_file.exists();
+    let ordinary_file = root.path().join("ordinary");
+    let ordinary_worker =
+        tokio::spawn(executor.execute(request(3, [ordinary_file.as_os_str().to_owned()])));
+    let ordinary_pid = read_pids(&ordinary_file, 1).await[0];
+    executor
+        .shutdown()
+        .await
+        .expect("shutdown wakes both kinds of client");
+    assert!(matches!(
+        worker.await.expect("parked worker"),
+        Err(Error::ExecutorShutdown { .. })
+    ));
+    assert!(matches!(
+        ordinary_worker.await.expect("ordinary worker"),
+        Err(Error::ExecutorShutdown { .. })
+    ));
+    assert_process_reaped(parked_pid);
+    assert_process_reaped(ordinary_pid);
+    assert_eq!(executor.active_request_count(), 0);
+    assert!(
+        matches!(extra, Ok(Err(Error::Overloaded { in_flight: 1, .. }))),
+        "excess resident clients are refused without waiting: {extra:?}",
+    );
+    assert!(!extra_started, "rejected client never starts");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn duplicate_active_request_id_is_rejected_before_spawn() {
     let directory = tempfile::tempdir().expect("temporary directory");

@@ -2,6 +2,7 @@ assoc_const libtmux::ControlClientLimits::DEFAULT_CLIENTS: usize
 assoc_const libtmux::ControlLimits::DEFAULT_BLOCK_BYTES: usize
 assoc_const libtmux::ControlLimits::DEFAULT_LINE_BYTES: usize
 assoc_const libtmux::DispatchLimits::DEFAULT_IN_FLIGHT: usize
+assoc_const libtmux::DispatchLimits::DEFAULT_WAIT_CLIENTS: usize
 assoc_const libtmux::OutputLimits::DEFAULT_STDERR_BYTES: usize
 assoc_const libtmux::OutputLimits::DEFAULT_STDOUT_BYTES: usize
 assoc_const libtmux::ReleaseSuffix::FINAL: Self
@@ -372,6 +373,8 @@ function libtmux::ControlLimits::max_line_bytes: const fn(self, bytes: usize) ->
 function libtmux::DispatchLimits::acquire_timeout: const fn(self, timeout: Option<Duration>) -> Self
 function libtmux::DispatchLimits::in_flight: const fn(self) -> usize
 function libtmux::DispatchLimits::max_in_flight: const fn(self, permits: usize) -> Self
+function libtmux::DispatchLimits::max_wait_clients: const fn(self, clients: usize) -> Self
+function libtmux::DispatchLimits::wait_clients: const fn(self) -> usize
 function libtmux::EngineCapabilities::tmux_version: const fn(&self) -> &libtmux::TmuxVersion
 function libtmux::Error::after_effect: fn(self, operation: &'static str) -> Self
 function libtmux::Error::found_version: fn(&self) -> Option<&libtmux::TmuxVersion>

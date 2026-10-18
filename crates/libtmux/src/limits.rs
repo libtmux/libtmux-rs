@@ -108,6 +108,7 @@ impl Default for OutputLimits {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchLimits {
     pub(crate) max_in_flight: usize,
+    pub(crate) max_wait_clients: usize,
     pub(crate) acquire_timeout: Option<Duration>,
 }
 
@@ -117,6 +118,29 @@ impl DispatchLimits {
     /// tmux serializes commands on its own thread, so more clients than this
     /// buys queueing rather than throughput.
     pub const DEFAULT_IN_FLIGHT: usize = 16;
+
+    /// How many parked channel and lock clients may remain resident by default.
+    pub const DEFAULT_WAIT_CLIENTS: usize = 64;
+
+    /// Bound parked channel and lock clients independently of ordinary commands.
+    ///
+    /// A full budget returns [`Error::Overloaded`](crate::Error::Overloaded)
+    /// immediately, before starting a client. Zero is treated as one. A timed
+    /// out channel wait may retain its client to preserve a later tmux signal;
+    /// it keeps this permit until completion or server shutdown.
+    #[must_use]
+    pub const fn max_wait_clients(self, clients: usize) -> Self {
+        Self {
+            max_wait_clients: if clients == 0 { 1 } else { clients },
+            ..self
+        }
+    }
+
+    /// How many parked channel and lock clients may remain resident.
+    #[must_use]
+    pub const fn wait_clients(self) -> usize {
+        self.max_wait_clients
+    }
 
     /// Set how many dispatches may run at once.
     ///
@@ -155,6 +179,7 @@ impl Default for DispatchLimits {
     fn default() -> Self {
         Self {
             max_in_flight: Self::DEFAULT_IN_FLIGHT,
+            max_wait_clients: Self::DEFAULT_WAIT_CLIENTS,
             acquire_timeout: None,
         }
     }

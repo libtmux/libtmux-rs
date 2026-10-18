@@ -160,9 +160,9 @@ impl Server {
     /// than opening a second, and a signal that releases it with nobody
     /// waiting is kept for the next wait, which is where the latch above
     /// survives a wait that gave up. The client is this process's, so it ends
-    /// with [`Server::shutdown`]; it does not count against
-    /// [`crate::DispatchLimits`], because signalling the channel is itself a
-    /// dispatch.
+    /// with [`Server::shutdown`]. It counts against
+    /// [`DispatchLimits::max_wait_clients`](crate::DispatchLimits::max_wait_clients),
+    /// independently of ordinary dispatch, so signalling it can still run.
     ///
     /// `within` is capped at [`Server::default_timeout`]: ask for longer by
     /// building the server with a longer timeout.
@@ -173,6 +173,9 @@ impl Server {
     /// reached. Running out of time is [`ChannelWait::TimedOut`] rather than
     /// an error, so "nothing signalled it" stays distinct from "the command
     /// did not get through" -- the caller retries only one of those.
+    /// [`Error::Overloaded`] means the resident-client budget is full and no
+    /// client was started. Waiting again on an already parked channel shares
+    /// its existing client and does not require another permit.
     ///
     /// A handle from `Server::over_control_mode` is refused with
     /// [`crate::ControlModeErrorKind::BlockingCommand`]: a connection runs one

@@ -17,6 +17,10 @@ full.
 
 ### Changed
 
+- Bound parked channel and lock clients separately from ordinary dispatch.
+  `DispatchLimits::max_wait_clients` sets their budget; the default is 64.
+  Both runtime drivers reject excess clients before starting a process.
+
 - Split the client into a runtime-independent async `libtmux`, a dependency-free
   `libtmux-core` for protocol and value types, and `libtmux-tokio` for native
   Tokio process I/O. `Server`, `Session`, `Window`, and `Pane` remain usable

@@ -52,6 +52,11 @@ A command that waits indefinitely can also hold up its fence. Use the
 subprocess channel APIs for `wait-for` waits and locks. A command that closes
 the control connection before the fence returns reports a closed connection.
 
+Parked channel and lock clients have a separate limit of 64 per server.
+`DispatchLimits::max_wait_clients` changes that limit. A full budget returns
+`Error::Overloaded` before starting another client. Timed-out channel waits
+may retain their client and permit until a later signal or server shutdown.
+
 ## Features and dependencies
 
 Optional features on `libtmux-tokio` enable the matching features on

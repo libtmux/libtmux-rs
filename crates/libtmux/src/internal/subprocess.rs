@@ -65,6 +65,7 @@ struct Shared {
     /// serializes on the far side regardless, so the extra clients buy
     /// queueing rather than throughput.
     admission: ProcessAdmission,
+    wait_admission: ProcessAdmission,
 }
 
 struct Lifecycle {
@@ -136,6 +137,7 @@ impl SubprocessExecutor {
             }),
             empty: Event::new(),
             admission: ProcessAdmission::new(limits.max_in_flight, limits.acquire_timeout),
+            wait_admission: ProcessAdmission::new(limits.max_wait_clients, None),
         });
         self
     }
@@ -172,6 +174,7 @@ impl SubprocessExecutor {
                 }),
                 empty: Event::new(),
                 admission: ProcessAdmission::new(DispatchLimits::DEFAULT_IN_FLIGHT, None),
+                wait_admission: ProcessAdmission::new(DispatchLimits::DEFAULT_WAIT_CLIENTS, None),
             }),
         }
     }
@@ -241,20 +244,20 @@ impl SubprocessExecutor {
         };
         trace_requested(&context);
 
-        // A request with no deadline is parked on a tmux channel rather than
-        // working, and holds its client until something signals or unlocks
-        // that channel -- which takes a dispatch of its own. Counting it
-        // against the ceiling would let enough parked clients block the very
-        // commands that release them.
+        // Parked clients have a separate budget so ordinary commands can
+        // still acquire the capacity needed to release them.
         let permit = if request.is_unbounded() {
-            None
+            self.shared
+                .wait_admission
+                .try_acquire(context.request_id, &context.command)
         } else {
-            match self.acquire_permit(&context).await {
-                Ok(permit) => Some(permit),
-                Err(error) => {
-                    trace_failed(&context, &error);
-                    return Err(error);
-                }
+            self.acquire_permit(&context).await
+        };
+        let permit = match permit {
+            Ok(permit) => Some(permit),
+            Err(error) => {
+                trace_failed(&context, &error);
+                return Err(error);
             }
         };
 
@@ -411,6 +414,7 @@ impl Executor for SubprocessExecutor {
                 }
             }
             shared.admission.close();
+            shared.wait_admission.close();
 
             loop {
                 let notified = shared.empty.listen();
