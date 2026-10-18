@@ -28,9 +28,15 @@ use crate::{Command, SplitDirection};
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SplitTarget {
     /// Divides whichever pane in the window is currently active.
-    Window(WindowTarget),
+    Window(
+        /// The window whose active pane will be split.
+        WindowTarget,
+    ),
     /// Divides this exact pane, regardless of which one is active.
-    Pane(PaneTarget),
+    Pane(
+        /// The pane to split, independent of the window's active pane.
+        PaneTarget,
+    ),
 }
 
 impl SplitTarget {

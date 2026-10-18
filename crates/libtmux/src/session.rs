@@ -65,7 +65,10 @@ use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EnvironmentEntry {
     /// tmux holds this value, exactly as stored.
-    Set(TmuxText),
+    Set(
+        /// The stored environment value, preserving its original bytes.
+        TmuxText,
+    ),
     /// tmux will remove this name from the environment it hands out.
     Removed,
 }

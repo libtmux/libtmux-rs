@@ -440,7 +440,10 @@ pub enum PaneTarget {
         PaneId,
     ),
     /// The pane an earlier step creates.
-    Slot(Slot<PaneSlot>),
+    Slot(
+        /// Reference to the pane produced by an earlier step of this plan.
+        Slot<PaneSlot>,
+    ),
 }
 
 /// A `-t` target naming a window, resolved when the plan runs.
@@ -459,7 +462,10 @@ pub enum WindowTarget {
         WindowId,
     ),
     /// The window an earlier step creates.
-    Slot(Slot<WindowSlot>),
+    Slot(
+        /// Reference to the window produced by an earlier step of this plan.
+        Slot<WindowSlot>,
+    ),
 }
 
 /// A `-t` target naming a session, resolved when the plan runs.
@@ -478,7 +484,10 @@ pub enum SessionTarget {
         SessionId,
     ),
     /// The session an earlier step creates.
-    Slot(Slot<SessionSlot>),
+    Slot(
+        /// Reference to the session produced by an earlier step of this plan.
+        Slot<SessionSlot>,
+    ),
 }
 
 macro_rules! target_conversions {

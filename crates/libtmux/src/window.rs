@@ -1418,9 +1418,15 @@ impl fmt::Display for Layout {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LayoutSpec {
     /// An arrangement tmux knows by name.
-    Named(Layout),
+    Named(
+        /// The preset used to compute a new pane arrangement.
+        Layout,
+    ),
     /// A layout string tmux produced, restoring pane sizes exactly.
-    Saved(OsString),
+    Saved(
+        /// Layout text to restore, subject to format and tmux version checks.
+        OsString,
+    ),
 }
 
 impl From<Layout> for LayoutSpec {
@@ -1752,9 +1758,15 @@ impl JoinOptions {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PaneSize {
     /// A number of rows or columns, depending on the split direction.
-    Cells(u32),
+    Cells(
+        /// Requested row or column count, according to the split direction.
+        u32,
+    ),
     /// A share of the space being divided, as a percentage.
-    Percent(u32),
+    Percent(
+        /// Requested share of the space being divided, in whole percent.
+        u32,
+    ),
 }
 
 impl fmt::Display for PaneSize {
