@@ -326,7 +326,7 @@ derive behind its `derive` feature.
 [Guide][macros-guide]
 
 ```console
-$ cargo add libtmux@0.1.0-alpha.15 --features derive
+$ cargo add libtmux@0.1.0-alpha.16 --features derive
 ```
 
 The example in [its README][macros-guide] derives `Filterable` for a `Job`
