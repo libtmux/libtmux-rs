@@ -76,9 +76,11 @@ $ cargo add libtmux@0.1.0-alpha.15
 <details>
 <summary>Cargo.toml</summary>
 
+The package split is unreleased. Use this branch as a Git dependency:
+
 ```toml
 [dependencies]
-libtmux = "0.1.0-alpha.15"
+libtmux = { git = "https://github.com/libtmux/libtmux-rs", branch = "codex/standard-library-client-core" }
 ```
 
 </details>
@@ -117,7 +119,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 The examples on this page run as written, against a throwaway tmux. To run
 them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.0-alpha.15", features = ["test-support"] }`.
+`libtmux = { git = "https://github.com/libtmux/libtmux-rs", branch = "codex/standard-library-client-core", features = ["test-support"] }`.
 
 Everything that reaches tmux is `async`. Everything that reads an
 already-taken snapshot is not, so walking a tree you already have costs no

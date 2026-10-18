@@ -304,14 +304,22 @@ responsible for terminating the child's isolated process group and awaiting the
 direct child after deadline expiry, caller cancellation, or explicit shutdown.
 Pipe draining precedes `wait`, so the unreaped direct child anchors the numeric
 process-group identity until inherited pipes close or the overall deadline
-expires. Dropping the caller future signals cancellation; `kill_on_drop` is
-only a final safety net and is never the reaping strategy.
+expires. Dropping the caller future signals cancellation. Driver drop guards
+make a final termination attempt only while they still own the child. They
+retire its identity after reaping or `ECHILD`; an unrelated external reaper or
+automatic `SIGCHLD` reaping remains unsupported.
+
+When direct-child signalling fails, cleanup checks status without waiting for
+a live child. Errors preserve stage names and OS error codes. Explicit shutdown
+retains the first cleanup failure for later callers; containment is unconfirmed
+and descendants may remain. Drop is best effort.
 
 Deterministic cleanup requires the chosen driver to keep running through
 `Server::shutdown`. The default async-io driver owns a shared worker; the Tokio
 adapter uses the application's active runtime. Shut servers down before that
-runtime. Process teardown uses a synchronous cleanup fallback, while explicit
-shutdown joins the supervised work and reports failures. `TestServer` owns its
+runtime. Driver drop guards request termination without waiting for a live
+child; explicit shutdown joins the supervised work and reports failures.
+`TestServer` owns its
 foreground daemon separately for cleanup when its guard drops.
 
 Concurrent subprocess requests have no ordering guarantee beyond the atomic

@@ -1283,3 +1283,48 @@ impl crate::driver::Runtime for TokioTasksWithStdProcesses {
         Ok(child)
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_retains_pre_effect_cleanup_failure() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("child.pid");
+    let executor = executor("block", TEST_TIMEOUT).with_test_hooks(TestHooks {
+        deny_termination: true,
+        ..TestHooks::default()
+    });
+    let dispatch = tokio::spawn(executor.execute(request(74, [path.as_os_str().to_os_string()])));
+    let child_pid = read_pids(&path, 1).await[0];
+    let pidfd = rustix::process::pidfd_open(pid(child_pid), rustix::process::PidfdFlags::empty())
+        .expect("harness owns a stable child reference");
+    let result = tokio::time::timeout(Duration::from_millis(250), executor.shutdown()).await;
+    if result.is_err() {
+        rustix::process::pidfd_send_signal(&pidfd, rustix::process::Signal::KILL)
+            .expect("harness ends the owned child before asserting failure");
+        let _ = executor.shutdown().await;
+    }
+    // The driver Drop remains real. This test denies the supervisor's two
+    // signal effects, not the harness's ability to recover its owned child.
+    let error = result
+        .expect("known cleanup failures must not wait for a live child")
+        .expect_err("injected termination denial");
+    let source = StdError::source(&error)
+        .expect("cleanup source")
+        .to_string();
+    assert!(source.contains("process-group signal"));
+    assert!(source.contains("direct-child signal"));
+    assert!(source.contains("os error 13"));
+    for _ in 0..2 {
+        let error = executor.shutdown().await.expect_err("failure persists");
+        assert_eq!(
+            StdError::source(&error)
+                .expect("retained source")
+                .to_string(),
+            source
+        );
+    }
+    assert!(matches!(
+        dispatch.await.expect("supervisor result"),
+        Err(Error::WaitChild { .. })
+    ));
+    assert_process_gone(child_pid).await;
+}

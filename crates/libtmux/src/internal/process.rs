@@ -1,12 +1,11 @@
 use std::ffi::{OsStr, OsString};
+use std::io;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(feature = "control-mode")]
-use std::io;
 #[cfg(feature = "control-mode")]
 use std::process::Stdio;
 #[cfg(feature = "control-mode")]
@@ -23,8 +22,9 @@ pub(crate) type OwnedSemaphorePermit = async_lock::SemaphoreGuardArc;
 use async_lock::Semaphore;
 use std::time::Instant;
 
+use crate::driver::Process;
 #[cfg(feature = "control-mode")]
-use crate::driver::{Process, Reader, Writer};
+use crate::driver::{Reader, Writer};
 #[cfg(feature = "control-mode")]
 use crate::internal::watch;
 
@@ -280,6 +280,10 @@ impl ProcessAdmission {
 pub(crate) struct ProcessGroupGuard {
     process_group: Option<Pid>,
     armed: bool,
+    #[cfg(test)]
+    fail_group_signal: bool,
+    #[cfg(test)]
+    fail_child_signal: bool,
 }
 
 impl ProcessGroupGuard {
@@ -290,20 +294,46 @@ impl ProcessGroupGuard {
         Self {
             process_group,
             armed: true,
+            #[cfg(test)]
+            fail_group_signal: false,
+            #[cfg(test)]
+            fail_child_signal: false,
         }
     }
 
-    #[cfg(feature = "test-support")]
     pub(crate) const fn is_armed(&self) -> bool {
         self.armed
     }
 
-    pub(crate) fn signal(&self) {
+    pub(crate) fn signal(&self) -> io::Result<()> {
         if self.armed
             && let Some(process_group) = self.process_group
         {
-            let _ = kill_process_group(process_group, Signal::KILL);
+            #[cfg(test)]
+            if self.fail_group_signal {
+                return Err(rustix::io::Errno::ACCESS.into());
+            }
+            retry_signal(|| kill_process_group(process_group, Signal::KILL).map_err(Into::into))
+        } else {
+            Ok(())
         }
+    }
+
+    pub(crate) fn kill_child(&self, child: &mut dyn Process) -> io::Result<()> {
+        if !self.armed {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if self.fail_child_signal {
+            return Err(rustix::io::Errno::ACCESS.into());
+        }
+        retry_signal(|| child.start_kill())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deny_termination_for_test(&mut self) {
+        self.fail_group_signal = true;
+        self.fail_child_signal = true;
     }
 
     pub(crate) fn disarm(&mut self) {
@@ -313,7 +343,107 @@ impl ProcessGroupGuard {
 
 impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
-        self.signal();
+        let _ = self.signal();
+    }
+}
+
+fn retry_signal(mut signal: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    loop {
+        match signal() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) => {
+                return Ok(());
+            }
+            result => return result,
+        }
+    }
+}
+
+pub(crate) async fn terminate_child(
+    child: &mut dyn Process,
+    process_group: &mut ProcessGroupGuard,
+) -> io::Result<()> {
+    if child.id().is_none() {
+        process_group.disarm();
+    }
+    let (signal, kill) = if process_group.is_armed() {
+        (process_group.signal(), process_group.kill_child(child))
+    } else {
+        (Ok(()), Ok(()))
+    };
+    let waited = if kill.is_err() {
+        // A failed termination must not turn a known error into an unbounded wait.
+        loop {
+            match child.try_wait() {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                result => break result.map(|status| status.map(|_| ())).transpose(),
+            }
+        }
+    } else {
+        Some(loop {
+            match child.wait().await {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                result => break result.map(|_| ()),
+            }
+        })
+    };
+    if waited.as_ref().is_some_and(|result| {
+        result.is_ok()
+            || result.as_ref().is_err_and(|error| {
+                error.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error())
+            })
+    }) {
+        process_group.disarm();
+    }
+    let errors = [
+        ("process-group signal", signal.err()),
+        ("direct-child signal", kill.err()),
+        ("child wait", waited.and_then(Result::err)),
+    ];
+    let Some(first) = errors.iter().find_map(|(_, error)| error.as_ref()) else {
+        return Ok(());
+    };
+    let message = errors
+        .iter()
+        .filter_map(|(stage, error)| {
+            error.as_ref().map(|error| {
+                let kind = error.kind();
+                match error.raw_os_error() {
+                    Some(code) => format!("{stage}: {kind:?} (os error {code})"),
+                    None => format!("{stage}: {kind:?}"),
+                }
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(io::Error::new(first.kind(), message))
+}
+
+#[derive(Clone)]
+pub(crate) struct CleanupFailure {
+    request_id: u64,
+    command: CommandSummary,
+    kind: io::ErrorKind,
+    message: String,
+}
+
+impl CleanupFailure {
+    pub(crate) fn new(request_id: u64, command: CommandSummary, source: &io::Error) -> Self {
+        Self {
+            request_id,
+            command,
+            kind: source.kind(),
+            // terminate_child includes stage names and OS codes, never child output.
+            message: source.to_string(),
+        }
+    }
+
+    pub(crate) fn error(&self) -> Error {
+        Error::wait_child(
+            self.request_id,
+            self.command.clone(),
+            io::Error::new(self.kind, self.message.clone()),
+        )
     }
 }
 
@@ -336,6 +466,7 @@ struct PersistentShared {
 struct PersistentLifecycle {
     accepting: bool,
     active: usize,
+    cleanup_failure: Option<CleanupFailure>,
 }
 
 #[cfg(feature = "control-mode")]
@@ -347,6 +478,7 @@ impl PersistentClients {
                 lifecycle: Mutex::new(PersistentLifecycle {
                     accepting: true,
                     active: 0,
+                    cleanup_failure: None,
                 }),
                 stopped,
                 empty: Event::new(),
@@ -391,7 +523,7 @@ impl PersistentClients {
         })
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self) -> Result<(), Error> {
         {
             let mut lifecycle = lock_persistent(&self.shared);
             lifecycle.accepting = false;
@@ -401,8 +533,14 @@ impl PersistentClients {
 
         loop {
             let notified = self.shared.empty.listen();
-            if lock_persistent(&self.shared).active == 0 {
-                return;
+            {
+                let lifecycle = lock_persistent(&self.shared);
+                if lifecycle.active == 0 {
+                    return lifecycle
+                        .cleanup_failure
+                        .as_ref()
+                        .map_or(Ok(()), |failure| Err(failure.error()));
+                }
             }
             notified.await;
         }
@@ -467,7 +605,7 @@ pub(crate) struct PersistentChild {
     request_id: RequestId,
     command: CommandSummary,
     // Admission remains active until process cleanup has finished.
-    _registration: PersistentRegistration,
+    registration: PersistentRegistration,
     // Removes this pid from the owned set once dropped; its ordering
     // relative to the other fields does not matter, since nothing here reads
     // it back.
@@ -529,7 +667,7 @@ impl PersistentChild {
             stopped: reservation.stopped,
             request_id: request.request_id(),
             command: request.summary().clone(),
-            _registration: reservation.registration,
+            registration: reservation.registration,
             _pid_guard: pid_guard,
         })
     }
@@ -550,19 +688,23 @@ impl PersistentChild {
         Error::executor_shutdown(self.request_id.get(), self.command.clone())
     }
 
+    #[cfg(test)]
+    pub(crate) fn deny_group_signal_for_test(&mut self) {
+        self.process_group.fail_group_signal = true;
+    }
+
     pub(crate) async fn terminate(&mut self) -> Result<(), Error> {
-        self.process_group.signal();
-        let _ = self.child.start_kill();
-        loop {
-            match self.child.wait().await {
-                Ok(_) => {
-                    self.process_group.disarm();
-                    return Ok(());
-                }
-                Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-                Err(source) => return Err(Error::control_mode(source)),
-            }
-        }
+        terminate_child(&mut *self.child, &mut self.process_group)
+            .await
+            .map_err(|source| {
+                let failure =
+                    CleanupFailure::new(self.request_id.get(), self.command.clone(), &source);
+                let error = failure.error();
+                lock_persistent(&self.registration.shared)
+                    .cleanup_failure
+                    .get_or_insert(failure);
+                error
+            })
     }
 }
 
@@ -723,3 +865,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod cleanup_tests;

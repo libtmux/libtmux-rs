@@ -732,15 +732,15 @@ pub enum Error {
         kind: io::ErrorKind,
     },
 
-    /// The direct tmux child could not be awaited.
+    /// The tmux child could not be signalled, reaped, or confirmed as owned.
     #[non_exhaustive]
-    #[error("failed to wait for tmux request {request_id} ({command})")]
+    #[error("failed to clean up or wait for tmux request {request_id} ({command})")]
     WaitChild {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
         /// The sanitized logical command.
         command: CommandSummary,
-        /// The operating-system wait error.
+        /// The cleanup stage and operating-system error. Descendants may remain.
         #[source]
         source: io::Error,
     },

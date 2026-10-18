@@ -594,12 +594,12 @@ impl Core {
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
         #[cfg(feature = "control-mode")]
         {
-            let (executor, ()) = futures_util::future::join(
+            let (executor, persistent) = futures_util::future::join(
                 self.executor.shutdown(),
                 self.persistent_clients.shutdown(),
             )
             .await;
-            executor
+            executor.and(persistent)
         }
         #[cfg(not(feature = "control-mode"))]
         {
@@ -1092,5 +1092,61 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
             source = current.source();
         }
         core.shutdown().await.expect("shutdown remains clean");
+    }
+    #[cfg(feature = "control-mode")]
+    #[tokio::test]
+    async fn shutdown_reports_control_cleanup_failure_after_closing_dispatch() {
+        use crate::command::{CommandRequest, RequestId};
+        use crate::internal::process::{LaunchContext, PersistentChild};
+        use std::sync::Arc;
+
+        let configuration = CoreConfiguration::resolve(
+            &SocketSelection::Path(PathBuf::from("/tmp/libtmux-rs-test/cleanup-unused.sock")),
+            None,
+            None,
+            OsString::from("/bin/sleep"),
+            Duration::from_secs(5),
+            BuildContext::capture(),
+        )
+        .expect("inert core configuration");
+        let core = Core::new(configuration);
+        let request = CommandRequest::new(RequestId::new(87), Command::new("30"));
+        let reservation = core
+            .persistent_clients
+            .reserve(request.request_id(), request.summary().clone(), None)
+            .await
+            .expect("control reservation");
+        let mut child = PersistentChild::spawn(
+            &LaunchContext::new("/bin/sleep"),
+            &request,
+            reservation,
+            Arc::clone(&core.control_client_pids),
+        )
+        .expect("owned control child");
+        child.deny_group_signal_for_test();
+        child
+            .terminate()
+            .await
+            .expect_err("group failure survives direct-child reaping");
+        drop(child);
+        for _ in 0..2 {
+            let error = core
+                .shutdown()
+                .await
+                .expect_err("Core reports control cleanup failure");
+            assert!(
+                StdError::source(&error)
+                    .expect("cleanup source")
+                    .to_string()
+                    .contains("process-group signal")
+            );
+        }
+        assert!(
+            matches!(
+                core.execute(Command::new("30")).await,
+                Err(Error::ExecutorShutdown { .. })
+            ),
+            "ordinary admission must also close"
+        );
     }
 }

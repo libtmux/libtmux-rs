@@ -32,7 +32,8 @@ use crate::Error;
 use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatus, RequestId};
 use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, ShutdownFuture};
 use crate::internal::process::{
-    LaunchContext, OwnedSemaphorePermit, ProcessAdmission, ProcessGroupGuard, validate_request,
+    CleanupFailure, LaunchContext, OwnedSemaphorePermit, ProcessAdmission, ProcessGroupGuard,
+    terminate_child, validate_request,
 };
 use crate::internal::watch;
 
@@ -69,6 +70,7 @@ struct Shared {
 struct Lifecycle {
     accepting: bool,
     entries: HashMap<RequestId, watch::Sender<bool>>,
+    cleanup_failure: Option<CleanupFailure>,
 }
 
 #[derive(Clone)]
@@ -97,6 +99,7 @@ pub(crate) enum ReaderFailure {
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct TestHooks {
+    deny_termination: bool,
     after_reservation_reached: Option<Arc<std::sync::Barrier>>,
     after_reservation_release: Option<Arc<std::sync::Barrier>>,
     after_spawn_reached: Option<Arc<std::sync::Barrier>>,
@@ -129,6 +132,7 @@ impl SubprocessExecutor {
             lifecycle: Mutex::new(Lifecycle {
                 accepting: true,
                 entries: HashMap::new(),
+                cleanup_failure: None,
             }),
             empty: Event::new(),
             admission: ProcessAdmission::new(limits.max_in_flight, limits.acquire_timeout),
@@ -164,6 +168,7 @@ impl SubprocessExecutor {
                 lifecycle: Mutex::new(Lifecycle {
                     accepting: true,
                     entries: HashMap::new(),
+                    cleanup_failure: None,
                 }),
                 empty: Event::new(),
                 admission: ProcessAdmission::new(DispatchLimits::DEFAULT_IN_FLIGHT, None),
@@ -328,6 +333,16 @@ impl SubprocessExecutor {
             }
         };
 
+        let process_group = ProcessGroupGuard::new(child.id());
+        #[cfg(test)]
+        let process_group = {
+            let mut process_group = process_group;
+            if self.configuration.hooks.deny_termination {
+                process_group.deny_termination_for_test();
+            }
+            process_group
+        };
+
         #[cfg(test)]
         if let (Some(spawned_pid), Some(child_id)) =
             (&self.configuration.hooks.spawned_pid, child.id())
@@ -341,7 +356,6 @@ impl SubprocessExecutor {
             self.configuration.hooks.after_spawn_release.as_ref(),
         );
 
-        let process_group = ProcessGroupGuard::new(child.id());
         let readers = ReaderTasks::spawn(
             &*self.configuration.runtime,
             child.take_stdout(),
@@ -400,8 +414,14 @@ impl Executor for SubprocessExecutor {
 
             loop {
                 let notified = shared.empty.listen();
-                if lock_lifecycle(&shared).entries.is_empty() {
-                    return Ok(());
+                {
+                    let lifecycle = lock_lifecycle(&shared);
+                    if lifecycle.entries.is_empty() {
+                        return lifecycle
+                            .cleanup_failure
+                            .as_ref()
+                            .map_or(Ok(()), |failure| Err(failure.error()));
+                    }
                 }
                 notified.await;
             }
@@ -449,25 +469,29 @@ impl Drop for ChildOwnership {
         #[cfg(feature = "test-support")]
         if self.synchronous_reap_on_drop && self.process_group.is_armed() {
             self.readers.abort();
-            self.process_group.signal();
-            let _ = self.child.start_kill();
+            let _ = self.process_group.signal();
+            let killed = self.process_group.kill_child(&mut *self.child).is_ok();
+            let deadline = Instant::now() + Duration::from_secs(1);
             loop {
                 match self.child.try_wait() {
                     Ok(Some(_)) => {
                         self.process_group.disarm();
                         break;
                     }
-                    Ok(None) => {
+                    Ok(None) if killed && Instant::now() < deadline => {
                         std::thread::yield_now();
                     }
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                    Err(error)
+                        if error.kind() == io::ErrorKind::Interrupted
+                            && Instant::now() < deadline =>
+                    {
                         std::thread::yield_now();
                     }
                     Err(error) if error.raw_os_error() == Some(ErrnoValue::child()) => {
                         self.process_group.disarm();
                         break;
                     }
-                    Err(_) => break,
+                    Ok(None) | Err(_) => break,
                 }
             }
         }
@@ -516,7 +540,10 @@ async fn supervise_outer(
             .await
             {
                 Ok(()) => Err(error),
-                Err(wait_error) => Err(wait_error),
+                Err(wait_error) => {
+                    ownership.registry.remember_cleanup(&wait_error);
+                    Err(wait_error)
+                }
             }
         }
         Err(()) => {
@@ -532,7 +559,10 @@ async fn supervise_outer(
                     context.request_id(),
                     context.command.clone(),
                 )),
-                Err(wait_error) => Err(wait_error),
+                Err(wait_error) => {
+                    ownership.registry.remember_cleanup(&wait_error);
+                    Err(wait_error)
+                }
             }
         }
     };
@@ -783,27 +813,9 @@ async fn cleanup_child(
     context: &RequestContext,
 ) -> Result<(), Error> {
     readers.abort_and_join().await;
-    process_group.signal();
-    let _ = child.start_kill();
-    loop {
-        match child.wait().await {
-            Ok(_) => {
-                process_group.disarm();
-                return Ok(());
-            }
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            Err(source) => {
-                if source.raw_os_error() == Some(ErrnoValue::child()) {
-                    process_group.disarm();
-                }
-                return Err(Error::wait_child(
-                    context.request_id(),
-                    context.command.clone(),
-                    source,
-                ));
-            }
-        }
-    }
+    terminate_child(child, process_group)
+        .await
+        .map_err(|source| Error::wait_child(context.request_id(), context.command.clone(), source))
 }
 
 async fn cancelled(receiver: &mut watch::Receiver<bool>) {
@@ -962,6 +974,19 @@ impl RegistryGuard {
             shared,
             request_id,
             armed: true,
+        }
+    }
+
+    fn remember_cleanup(&self, error: &Error) {
+        if let Error::WaitChild {
+            request_id,
+            command,
+            source,
+        } = error
+        {
+            lock_lifecycle(&self.shared)
+                .cleanup_failure
+                .get_or_insert_with(|| CleanupFailure::new(*request_id, command.clone(), source));
         }
     }
 

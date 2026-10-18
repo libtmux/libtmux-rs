@@ -125,16 +125,17 @@ default = ["query"]
 full = ["blocking", "control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
 blocking = ["libtmux/blocking"]
 control-mode = ["libtmux/control-mode"]
-derive = ["libtmux/derive"]
+derive = ["query", "libtmux/derive"]
 plan = ["libtmux/plan"]
 query = ["libtmux/query"]
-schema = ["libtmux/schema"]
+schema = ["serde", "libtmux/schema"]
 serde = ["libtmux/serde"]
 test-support = ["libtmux/test-support"]
 tracing = ["libtmux/tracing"]
-unstable-fuzzing = ["libtmux/unstable-fuzzing"]
+unstable-fuzzing = ["control-mode", "query", "serde", "libtmux/unstable-fuzzing"]
 
 [dependencies]
+rustix = { version = "1.1.4", features = ["process"] }
 libtmux = { path = "../libtmux", version = "=0.1.0-alpha.15", default-features = false }
 futures-util = "0.3"
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
@@ -144,7 +145,6 @@ tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1.36"
 schemars.workspace = true
 serde.workspace = true
-rustix = { version = "1.1.4", features = ["process"] }
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 futures-core = "0.3"
 jsonschema.workspace = true
