@@ -390,7 +390,9 @@ gives each test an isolated socket under `/tmp/libtmux-rs-test/` and
 deterministic cleanup.
 
 Every Rust example on this page is compiled by `cargo test --doc`, including
-the ones in this file. See
+the ones in this file. The `tmux-workspace` commands and the workspace YAML are
+parsed by that crate's tests, and the `tmux-mcp` commands by that crate's,
+against the real command lines. See
 [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) for the gates and the
 things that will bite, and [`.github/WRITING.md`](.github/WRITING.md) for how
 the prose reads.
