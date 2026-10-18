@@ -19,6 +19,7 @@ include = [
     "/README.md",
     "/docs/design.md",
     "/docs/findings.md",
+    "/docs/list-profiles.txt",
     "/docs/migration.md",
     "/docs/parity.md",
     "/docs/packages.md",

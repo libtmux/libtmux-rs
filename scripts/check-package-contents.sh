@@ -123,6 +123,8 @@ for file in LICENSE-APACHE LICENSE-MIT README.md src/lib.rs; do
     require_line "$values_package" "$file" "libtmux-core"
 done
 
+require_line "$core_package" "docs/list-profiles.txt" "libtmux"
+
 for file in "${macros_files[@]}"; do
     require_line "$macros_package" "${file#"$macros_root"/}" "libtmux-macros"
 done
