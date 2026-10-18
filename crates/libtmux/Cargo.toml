@@ -161,6 +161,7 @@ tracing = { version = "0.1.36", optional = true }
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 futures-core = "0.3"
 jsonschema.workspace = true
+rustix = { version = "1.1.4", features = ["process"] }
 serde_json.workspace = true
 static_assertions = "1.1.0"
 tempfile.workspace = true
