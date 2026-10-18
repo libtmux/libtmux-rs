@@ -13,7 +13,7 @@ rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
 You need tmux 3.3a or newer on `PATH` and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 The CLI's captured-child support has a narrower binding boundary; see
-[CLI cancellation](../crates/tmux-workspace/README.md#cli-cancellation).
+[Bootstrap scripts](../crates/tmux-workspace/docs/cli.md#bootstrap-scripts).
 
 `rust-toolchain.toml` pins the toolchain, so rustup installs it on the first
 cargo command. The gate also needs the two MSRV floors and three Cargo tools:
@@ -127,7 +127,14 @@ pages is a test rather than prose:
   `crates/libtmux/tests/macros_readme.rs` compiles the same example again as
   an ordinary test.
 
-`crates/tmux-mcp/README.md` is the page not covered; its blocks are prose.
+`crates/tmux-mcp/README.md` has no Rust to compile. Its commands and its JSON
+client configurations are checked instead by `crates/tmux-mcp/tests/docs.rs`,
+which passes each one, here and on the `libtmux` and `tmux-workspace` READMEs
+and the repository README, through the binary's own argument and setting
+validation. `every_documented_command_parses` does the same for
+`tmux-workspace` commands on those pages, and
+`crates/tmux-workspace/tests/readme.rs` loads the workspace YAML on the
+`tmux-workspace` and repository READMEs.
 
 Nothing checks that a page stays wired. Deleting one of those `include_str!`
 items stops testing that README and every gate stays green, so treat the item

@@ -1,12 +1,20 @@
-//! The generated MCP tool reference follows the authoritative registry.
+//! The generated MCP tool reference follows the authoritative registry, and
+//! the commands and client configurations the READMEs show are ones the
+//! binary accepts.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use tmux_mcp::{Selection, TmuxTools};
+use serde_json::Value;
+use tmux_mcp::cli::{Options, Stop};
+use tmux_mcp::{
+    ENVIRONMENT_VALUES_ENV, EXCLUDE_TOOLS_ENV, Selection, TOOLS_ENV, TOOLSETS_ENV, TmuxTools,
+    parse_environment_values,
+};
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
@@ -149,9 +157,571 @@ fn readme_links_to_the_generated_reference_without_copying_the_inventory() -> Te
 
     assert!(readme.contains("[generated tool reference](TOOLS.md)"));
     assert!(!readme.contains("**Inspect (18):**"));
-    assert!(readme.contains("configured recipient cohort"));
+    assert!(readme.contains("### Pane input"));
+    assert!(readme.contains("The checks look; they do not lock."));
     assert!(readme.contains("trusted POSIX-compatible pane shell"));
-    assert!(readme.contains("may be the inherited caller"));
-    assert!(readme.contains("do not prove delivery"));
     Ok(())
+}
+
+/// Settings `tmux-mcp --help` lists whose names live in the binary, which
+/// this test cannot import.
+const SOCKET_ENV: &str = "LIBTMUX_SOCKET";
+const SOCKET_PATH_ENV: &str = "LIBTMUX_SOCKET_PATH";
+const TMUX_CONFIG_ENV: &str = "LIBTMUX_TMUX_CONFIG";
+
+/// How a document starts the server: the program it names, the arguments it
+/// passes, and the environment it sets.
+#[derive(Debug, Eq, PartialEq)]
+struct Launch {
+    program: String,
+    arguments: Vec<String>,
+    environment: Vec<(String, String)>,
+}
+
+impl Launch {
+    fn setting(&self, name: &str) -> Option<&str> {
+        self.environment
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Whether the binary would get past startup validation, without starting
+    /// it: the arguments, then every setting it reads before opening tmux.
+    fn accepted(&self) -> Result<(), String> {
+        if self.program != "tmux-mcp" {
+            return Err(format!("starts {:?}, not tmux-mcp", self.program));
+        }
+        match Options::parse(self.arguments.iter().map(OsString::from)) {
+            Ok(_) | Err(Stop::Help | Stop::Version) => {}
+            Err(Stop::Misuse(reason)) => return Err(reason),
+        }
+        for (name, _) in &self.environment {
+            let known = [
+                SOCKET_ENV,
+                SOCKET_PATH_ENV,
+                TMUX_CONFIG_ENV,
+                TOOLSETS_ENV,
+                TOOLS_ENV,
+                EXCLUDE_TOOLS_ENV,
+                ENVIRONMENT_VALUES_ENV,
+            ];
+            if name.starts_with("LIBTMUX_") && !known.contains(&name.as_str()) {
+                return Err(format!("{name} is not a setting tmux-mcp reads"));
+            }
+        }
+        // Tool names are checked against the registry when the surface is
+        // built, not when the lists are split, so parsing alone accepts any
+        // name.
+        let selection = Selection::parse(
+            self.setting(TOOLSETS_ENV),
+            self.setting(TOOLS_ENV),
+            self.setting(EXCLUDE_TOOLS_ENV),
+        )
+        .map_err(|error| error.to_string())?;
+        let server = libtmux::Server::new().map_err(|error| error.to_string())?;
+        TmuxTools::builder(server)
+            .selection(selection)
+            .try_build()
+            .map_err(|error| error.to_string())?;
+        parse_environment_values(self.setting(ENVIRONMENT_VALUES_ENV))
+            .map_err(|error| error.to_string())?;
+        if self.setting(SOCKET_ENV).is_some() && self.setting(SOCKET_PATH_ENV).is_some() {
+            return Err(format!("{SOCKET_ENV} and {SOCKET_PATH_ENV} are exclusive"));
+        }
+        if self
+            .setting(TMUX_CONFIG_ENV)
+            .is_some_and(|config| !Path::new(config).is_absolute())
+        {
+            return Err(format!("{TMUX_CONFIG_ENV} must be an absolute path"));
+        }
+        Ok(())
+    }
+}
+
+/// Split a command line the way a shell reads quotes, nothing more.
+fn words(line: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut current = String::new();
+    let mut started = false;
+    let mut quote = None;
+    for character in line.chars() {
+        match (quote, character) {
+            (Some(open), _) if open == character => quote = None,
+            (Some(_), _) => current.push(character),
+            (None, '\'' | '"') => {
+                quote = Some(character);
+                started = true;
+            }
+            (None, _) if character.is_whitespace() => {
+                if started {
+                    found.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            (None, _) => {
+                current.push(character);
+                started = true;
+            }
+        }
+    }
+    if started {
+        found.push(current);
+    }
+    found
+}
+
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+fn assignment(word: &str) -> Option<(String, String)> {
+    word.split_once('=')
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+}
+
+/// Every `$ ...` line of a Markdown document, with `\` continuations joined.
+fn shell_lines(markdown: &str) -> Vec<String> {
+    let mut lines = markdown.lines();
+    let mut found = Vec::new();
+    while let Some(line) = lines.next() {
+        let Some(command) = line.trim_start().strip_prefix("$ ") else {
+            continue;
+        };
+        let mut command = command.trim_end().to_owned();
+        while command.ends_with('\\') {
+            command.pop();
+            command.push(' ');
+            command.push_str(lines.next().unwrap_or_default().trim());
+        }
+        found.push(command);
+    }
+    found
+}
+
+/// The server a `<client> mcp add <name> [-e KEY=value] [--] <command>...`
+/// line registers, or `None` for a line that registers nothing.
+fn registration(words: &[String]) -> Option<Launch> {
+    let mut environment = Vec::new();
+    let mut named = false;
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        let command: Vec<String> = match word.as_str() {
+            "-e" | "--env" => {
+                environment.extend(words.next().and_then(|pair| assignment(pair)));
+                continue;
+            }
+            "-s" | "--scope" | "-t" | "--transport" => {
+                words.next();
+                continue;
+            }
+            "--" => words.cloned().collect(),
+            flag if flag.starts_with('-') => continue,
+            _ if !named => {
+                named = true;
+                continue;
+            }
+            program => std::iter::once(program.to_owned())
+                .chain(words.cloned())
+                .collect(),
+        };
+        let (program, arguments) = command.split_first()?;
+        return Some(Launch {
+            program: program.clone(),
+            arguments: arguments.to_vec(),
+            environment,
+        });
+    }
+    None
+}
+
+/// What starting `tmux-mcp` looks like on one command line, directly or
+/// through an MCP client's `mcp add`.
+fn launch(words: &[String]) -> Option<Launch> {
+    let split = words
+        .iter()
+        .position(|word| !is_assignment(word))
+        .unwrap_or(words.len());
+    let (assignments, command) = words.split_at(split);
+    let mut launch = match command {
+        [program, arguments @ ..] if program == "tmux-mcp" => Launch {
+            program: program.clone(),
+            arguments: arguments.to_vec(),
+            environment: Vec::new(),
+        },
+        [client, mcp, add, rest @ ..]
+            if ["claude", "codex", "gemini", "grok"].contains(&client.as_str())
+                && mcp == "mcp"
+                && add == "add" =>
+        {
+            registration(rest)?
+        }
+        _ => return None,
+    };
+    let mut environment: Vec<_> = assignments
+        .iter()
+        .filter_map(|word| assignment(word))
+        .collect();
+    environment.append(&mut launch.environment);
+    launch.environment = environment;
+    Some(launch)
+}
+
+fn shell_launches(markdown: &str) -> Vec<Launch> {
+    shell_lines(markdown)
+        .iter()
+        .filter_map(|line| launch(&words(line)))
+        .collect()
+}
+
+fn strings(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every server a client configuration starts, wherever the client nests it:
+/// `command` is a string, an array that includes the arguments, or an object
+/// holding `path`.
+fn configured(value: &Value, found: &mut Vec<Launch>) {
+    let Value::Object(map) = value else {
+        if let Value::Array(items) = value {
+            for item in items {
+                configured(item, found);
+            }
+        }
+        return;
+    };
+    let environment = map
+        .get("env")
+        .and_then(Value::as_object)
+        .map(|variables| {
+            variables
+                .iter()
+                .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let command = match map.get("command") {
+        Some(Value::String(program)) => Some((program.clone(), strings(map.get("args")))),
+        Some(Value::Array(_)) => {
+            let mut all = strings(map.get("command")).into_iter();
+            all.next().map(|program| (program, all.collect()))
+        }
+        Some(Value::Object(inner)) => inner
+            .get("path")
+            .and_then(Value::as_str)
+            .map(|path| (path.to_owned(), strings(inner.get("args")))),
+        _ => None,
+    };
+    if let Some((program, arguments)) = command {
+        found.push(Launch {
+            program,
+            arguments,
+            environment,
+        });
+    }
+    for (key, child) in map {
+        if key != "command" {
+            configured(child, found);
+        }
+    }
+}
+
+/// The servers every fenced `json` block starts, or the reason a block is not
+/// JSON.
+fn configured_launches(markdown: &str) -> Result<Vec<Launch>, String> {
+    let mut found = Vec::new();
+    let mut block: Option<String> = None;
+    for line in markdown.lines() {
+        match (&mut block, line.trim_start()) {
+            (None, fence) if fence.starts_with("```json") => block = Some(String::new()),
+            (Some(_), "```") => {
+                let text = block.take().unwrap_or_default();
+                let value: Value = serde_json::from_str(&text)
+                    .map_err(|error| format!("a json block does not parse: {error}\n{text}"))?;
+                configured(&value, &mut found);
+            }
+            (Some(text), _) => {
+                text.push_str(line);
+                text.push('\n');
+            }
+            (None, _) => {}
+        }
+    }
+    Ok(found)
+}
+
+/// This crate's README, then the pages of the other crates that show a
+/// `tmux-mcp` command: they ship in no package of this crate, so they are read
+/// only where the repository is.
+fn documents() -> TestResult<Vec<(&'static str, String)>> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut documents = vec![(
+        "README.md",
+        std::fs::read_to_string(manifest.join("README.md"))?,
+    )];
+    if manifest.join("../../Cargo.toml").is_file() {
+        for name in [
+            "../../README.md",
+            "../libtmux/README.md",
+            "../tmux-workspace/README.md",
+        ] {
+            documents.push((name, std::fs::read_to_string(manifest.join(name))?));
+        }
+    }
+    Ok(documents)
+}
+
+#[test]
+fn every_command_the_readmes_show_is_accepted_by_the_binary() -> TestResult {
+    let mut failures = Vec::new();
+    for (name, markdown) in documents()? {
+        let launches = shell_launches(&markdown);
+        assert!(!launches.is_empty(), "{name} shows no tmux-mcp command");
+        failures.extend(launches.iter().filter_map(|launch| {
+            launch
+                .accepted()
+                .err()
+                .map(|reason| format!("{name}: {reason}: {launch:?}"))
+        }));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+fn every_client_configuration_the_readmes_show_starts_the_binary() -> TestResult {
+    let mut failures = Vec::new();
+    for (name, markdown) in documents()? {
+        let launches = configured_launches(&markdown)?;
+        failures.extend(launches.iter().filter_map(|launch| {
+            launch
+                .accepted()
+                .err()
+                .map(|reason| format!("{name}: {reason}: {launch:?}"))
+        }));
+        if name == "README.md" {
+            assert!(!launches.is_empty(), "{name} shows no client configuration");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+fn the_readme_checks_find_what_they_report_and_refuse_what_the_binary_refuses() {
+    let accepted = [
+        "$ tmux-mcp",
+        "$ tmux-mcp --socket-name work",
+        "$ tmux-mcp -S /tmp/tmux-1000/work",
+        "$ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp",
+        "$ LIBTMUX_TOOLSETS='' \\\n    LIBTMUX_TOOLS=call_read_tools_batch \\\n    tmux-mcp",
+        "$ claude mcp add tmux -- tmux-mcp",
+        "$ claude mcp add tmux -e LIBTMUX_TOOLSETS=inspect -- tmux-mcp -L work",
+        "$ gemini mcp add tmux tmux-mcp",
+    ];
+    for markdown in accepted {
+        let launches = shell_launches(markdown);
+        assert_eq!(launches.len(), 1, "{markdown:?} is found");
+        assert_eq!(launches[0].accepted(), Ok(()), "{markdown:?}");
+    }
+
+    let refused = [
+        "$ tmux-mcp --no-such-flag",
+        "$ tmux-mcp -S /tmp/a -L b",
+        "$ LIBTMUX_TOOLSETS=bogus tmux-mcp",
+        "$ LIBTMUX_TOOLS=not_a_tool tmux-mcp",
+        "$ LIBTMUX_TOOLSET=inspect tmux-mcp",
+        "$ LIBTMUX_SOCKET=a LIBTMUX_SOCKET_PATH=/tmp/b tmux-mcp",
+        "$ LIBTMUX_TMUX_CONFIG=relative.conf tmux-mcp",
+        "$ claude mcp add tmux -- tmux-mcp --no-such-flag",
+        "$ claude mcp add tmux -e LIBTMUX_TOOLSETS=bogus -- tmux-mcp",
+        "$ claude mcp add tmux -- tmux-mpc",
+    ];
+    for markdown in refused {
+        let launches = shell_launches(markdown);
+        assert_eq!(launches.len(), 1, "{markdown:?} is found");
+        assert!(launches[0].accepted().is_err(), "{markdown:?} is refused");
+    }
+
+    assert!(shell_launches("$ cargo install tmux-mcp --version 0.1.0-alpha.16").is_empty());
+    assert!(shell_launches("$ cargo run --example surface -- '' show_environment").is_empty());
+
+    let configuration = |arguments: &str| {
+        format!(
+            "```json\n{{\"mcpServers\": {{\"tmux\": {{\"command\": \"tmux-mcp\", {arguments}}}}}}}\n```"
+        )
+    };
+    let clean = configured_launches(&configuration("\"args\": [\"-L\", \"work\"]")).unwrap();
+    assert_eq!(clean.len(), 1);
+    assert_eq!(clean[0].accepted(), Ok(()));
+    let bad = configured_launches(&configuration("\"args\": [\"--no-such-flag\"]")).unwrap();
+    assert!(bad[0].accepted().is_err());
+    let bad =
+        configured_launches(&configuration("\"env\": {\"LIBTMUX_TOOLSETS\": \"bogus\"}")).unwrap();
+    assert!(bad[0].accepted().is_err());
+    assert!(configured_launches("```json\n{\"mcpServers\": }\n```").is_err());
+    for client in [
+        r#"{"mcp": {"tmux": {"type": "local", "command": ["tmux-mcp", "-L", "work"]}}}"#,
+        r#"{"context_servers": {"tmux": {"command": {"path": "tmux-mcp", "args": ["-L", "work"]}}}}"#,
+    ] {
+        let launches = configured_launches(&format!("```json\n{client}\n```")).unwrap();
+        assert_eq!(launches.len(), 1, "{client}");
+        assert_eq!(launches[0].arguments, ["-L", "work"], "{client}");
+        assert_eq!(launches[0].accepted(), Ok(()), "{client}");
+    }
+}
+
+/// Where libtmux.org publishes one page per tool.
+const TOOL_PAGE: &str = "https://libtmux.org/en/rs/latest/mcp/tools/";
+
+/// Every tool the registry offers, with the toolset it belongs to.
+fn registered_tools() -> TestResult<Vec<(String, String)>> {
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(Selection::parse(
+            Some("inspect,manage,execute,teardown"),
+            None,
+            None,
+        )?)
+        .build();
+    Ok(tools
+        .offered()
+        .into_iter()
+        .map(|tool| {
+            let toolset = tool
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+                .and_then(|row| row["toolset"].as_str())
+                .expect("a capability row names its toolset")
+                .to_owned();
+            (tool.name.to_string(), toolset)
+        })
+        .collect())
+}
+
+/// Why the Toolsets table disagrees with the registry: a toolset without a
+/// row, a row with the wrong count, a tool left unlinked or linked to another
+/// name, or a link the toolset does not own.
+fn table_disagreement(readme: &str, tools: &[(String, String)]) -> Option<String> {
+    let toolsets: std::collections::BTreeSet<&str> =
+        tools.iter().map(|(_, toolset)| toolset.as_str()).collect();
+    for toolset in toolsets {
+        let names: Vec<&str> = tools
+            .iter()
+            .filter(|(_, owner)| owner == toolset)
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let Some(row) = readme
+            .lines()
+            .find(|line| line.starts_with(&format!("| [`{toolset}`][")))
+        else {
+            return Some(format!("the table has no row for {toolset}"));
+        };
+        if !row.contains(&format!("({})", names.len())) {
+            return Some(format!("the {toolset} row does not count {}", names.len()));
+        }
+        for name in &names {
+            if !row.contains(&format!("[`{name}`][{name}]")) {
+                return Some(format!("the {toolset} row does not link {name}"));
+            }
+        }
+        // One link per tool, and the toolset's own.
+        if row.matches("`][").count() != names.len() + 1 {
+            return Some(format!("the {toolset} row links something it does not own"));
+        }
+    }
+    None
+}
+
+/// Why the link definitions disagree with the registry: a tool without its
+/// page, or a page the registry has no tool for. The index page, which names
+/// no tool, is not a tool page.
+fn definitions_disagreement(readme: &str, tools: &[(String, String)]) -> Option<String> {
+    for (name, _) in tools {
+        if !readme
+            .lines()
+            .any(|line| line == format!("[{name}]: {TOOL_PAGE}{name}/"))
+        {
+            return Some(format!("{name} has no link definition"));
+        }
+    }
+    for line in readme.lines() {
+        let unknown = line
+            .split_once("]: ")
+            .and_then(|(_, target)| target.strip_prefix(TOOL_PAGE))
+            .map(|page| page.trim_end_matches('/'))
+            .filter(|name| !name.is_empty() && !tools.iter().any(|(known, _)| known == name));
+        if let Some(name) = unknown {
+            return Some(format!("{name} is not a registered tool"));
+        }
+    }
+    None
+}
+
+#[test]
+fn the_toolsets_table_links_every_tool_to_its_page() -> TestResult {
+    let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"))?;
+    let tools = registered_tools()?;
+
+    assert_eq!(table_disagreement(&readme, &tools), None);
+    assert_eq!(definitions_disagreement(&readme, &tools), None);
+    Ok(())
+}
+
+#[test]
+fn the_tool_link_checks_accept_a_clean_table_and_name_each_break() {
+    let tools = vec![
+        ("capture_pane".to_owned(), "inspect".to_owned()),
+        ("list_panes".to_owned(), "inspect".to_owned()),
+        ("send_keys".to_owned(), "execute".to_owned()),
+    ];
+    let page = |name: &str| format!("[{name}]: {TOOL_PAGE}{name}/");
+    let table = |inspect: &str, count: usize| {
+        format!(
+            "| [`inspect`][toolset-inspect] ({count}) | read | {inspect} |\n\
+             | [`execute`][toolset-execute] (1) | type | [`send_keys`][send_keys] |\n"
+        )
+    };
+    let both = "[`capture_pane`][capture_pane], [`list_panes`][list_panes]";
+    let definitions = ["capture_pane", "list_panes", "send_keys"]
+        .map(page)
+        .join("\n");
+
+    // The control: nothing is reported.
+    assert_eq!(table_disagreement(&table(both, 2), &tools), None);
+    assert_eq!(definitions_disagreement(&definitions, &tools), None);
+
+    // An unlinked tool, a link to another name, an extra link and a wrong
+    // count each fail.
+    for broken in [
+        table("`capture_pane`, [`list_panes`][list_panes]", 2),
+        table(
+            "[`capture_pane`][capture_pan], [`list_panes`][list_panes]",
+            2,
+        ),
+        table(&format!("{both}, [`kill_pane`][kill_pane]"), 2),
+        table(both, 3),
+        table(both, 2).replace("| [`execute`]", "| [`teardown`]"),
+    ] {
+        assert!(table_disagreement(&broken, &tools).is_some(), "{broken}");
+    }
+
+    // A tool without a page and a page without a tool each fail.
+    assert!(definitions_disagreement(&page("capture_pane"), &tools).is_some());
+    let stale = format!("{definitions}\n{}", page("kill_pane"));
+    assert_eq!(
+        definitions_disagreement(&stale, &tools),
+        Some("kill_pane is not a registered tool".to_owned())
+    );
 }
