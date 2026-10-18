@@ -288,7 +288,7 @@ Examples and the API are on [docs.rs](https://docs.rs/tmux-workspace).
 The server handle below comes from `libtmux`, so add that too:
 
 ```console
-$ cargo add libtmux@0.1.0-alpha.15
+$ cargo add libtmux@0.1.0-alpha.16
 ```
 
 This previews what loading a workspace would send to tmux, and sends nothing:

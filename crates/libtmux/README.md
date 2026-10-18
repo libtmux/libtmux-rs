@@ -789,7 +789,7 @@ Python.
 
 ```console
 $ cargo install tmux-workspace \
-    --version 0.1.0-alpha.15 \
+    --version 0.1.0-alpha.16 \
     --locked
 ```
 
@@ -814,7 +814,7 @@ tool that changes state names what it changes.
 [Connect a client][mcp-connect] · [Guide][mcp-guide]
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.16
+$ cargo install tmux-mcp --version 0.1.0-alpha.17
 ```
 
 Register it with Claude Code. The guide has the same step for the other
