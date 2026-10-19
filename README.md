@@ -30,40 +30,25 @@ expression instead of a parsing problem.**
 
 </div>
 
+[Type into a pane][`Pane::send_line`], [query][Typed field handles] what a
+server holds with typed expressions, [load tmuxp workspaces][workspace-cli-load]
+from YAML, and [let an agent drive tmux][mcp-tools] over the Model Context
+Protocol.
+
 > **Alpha.** Releases carry an `-alpha` prerelease tag. The API is not
 > settled, and any release may change or remove exported identifiers without a
 > deprecation period. Pin an exact version. Not recommended for production.
 
-You may be looking for:
+**Contents** — [Quick start](#quick-start) ·
+[Is this for you?](#is-this-for-you) ·
+[Query what is there](#query-what-is-there) ·
+[Pick how commands reach tmux](#pick-how-commands-reach-tmux) ·
+[Load workspaces](#load-workspaces-from-yaml) ·
+[Drive tmux from an agent](#drive-tmux-from-an-agent) ·
+[Packages](#packages) · [What it leaves out](#what-it-leaves-out) ·
+[Support](#support-and-status) · [Documentation](#documentation)
 
-- [API documentation](https://docs.rs/libtmux) — every public item, with a
-  runnable example
-- [API reference](https://libtmux.org/en/rs/latest/reference/) — the same
-  items on libtmux.org, with guides and concepts beside them
-- [The `libtmux` guide](crates/libtmux/README.md) — features, the three
-  transport switches, testing
-- [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
-  package**, if you want an agent to drive tmux
-- [Examples](crates/libtmux/examples) — programs that run and clean up after
-  themselves, from reading a server to watching one over control mode
-- [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
-- [Parity ledger](crates/libtmux/docs/parity.md) — capability-by-capability
-  against Python libtmux
-
-## Is this for you?
-
-| You want to | Use |
-| --- | --- |
-| Script tmux from Rust, async | [`libtmux`](crates/libtmux) |
-| Ask "which pane/window/session matches X?" | [`libtmux`](crates/libtmux) query layer, below |
-| Let an AI agent read and drive tmux | [`tmux-mcp`](crates/tmux-mcp) |
-| Filter *your own* structs with the same grammar | [`libtmux-macros`](crates/libtmux-macros) |
-| Load tmuxp workspaces from the command line, or build them from Rust | [`tmux-workspace`](crates/tmux-workspace) |
-
-Not for you if you need Windows without WSL — tmux does not run there — or a
-synchronous-first API. Blocking callers get a runtime, not a mirrored API.
-
-## Install
+## Quick start
 
 The version has to be written out in full: Cargo does not resolve a prerelease
 unless the requirement names one, so a plain `0.1` requirement selects nothing.
@@ -83,7 +68,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 </details>
 
-## Drive tmux
+Create a session and a window, type into the pane, and check what tmux holds:
 
 ```rust
 use libtmux::test::TestServer;
@@ -118,7 +103,23 @@ Everything that reaches tmux is `async`. Everything that reads an
 already-taken snapshot is not, so walking a tree you already have costs no
 round trips.
 
+## Is this for you?
+
+| You want to | Use |
+| --- | --- |
+| Script tmux from Rust, async | [`libtmux`](crates/libtmux) |
+| Ask "which pane/window/session matches X?" | [`libtmux`](crates/libtmux) query layer, below |
+| Let an AI agent read and drive tmux | [`tmux-mcp`](crates/tmux-mcp) |
+| Filter *your own* structs with the same grammar | [`libtmux-macros`](crates/libtmux-macros) |
+| Load tmuxp workspaces from the command line, or build them from Rust | [`tmux-workspace`](crates/tmux-workspace) |
+
+Not for you if you need Windows without WSL, because tmux does not run there,
+or a synchronous-first API. A blocking caller drives the async API through
+[`blocking::Runtime`].
+
 ## Query what is there
+
+### [`Filterable::filter_fields`]: a comparison that means nothing does not compile
 
 [Typed field handles] build the expression, so a comparison that has no meaning
 for a field is a compile error rather than an empty result:
@@ -159,6 +160,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### [`SessionTree`] and [`WindowTree`]: ask what a session contains
 
 Ask what a session *contains*, and the relation is part of the expression:
 
@@ -202,12 +205,16 @@ a CLI, a config file, or an MCP tool call can carry one.
 
 ## Pick how commands reach tmux
 
-[Three switches], each a Cargo feature, none of them the default. The same
-workload under each, printed by `cargo run --example matrix --all-features`.
-Every column but `wall` is exact and checked against this block by
-`just example-tables`; the timings are one run on one developer machine.
-`processes` is counted: the example runs tmux through a wrapper that logs
-each start. `routed` is [`Plan::run`] on a [`Server::over_control_mode`] handle:
+### [`Plan::run`]: the same work at different costs
+
+[Three switches], each a Cargo feature, none of them the default. This is the
+same workload under each, printed by `cargo run --example matrix --all-features`.
+
+- Every column but `wall` is exact and checked against this block by
+  `just example-tables`. The timings are one run on one developer machine.
+- `processes` is counted: the example runs tmux through a wrapper that logs
+  each start.
+- `routed` is [`Plan::run`] on a [`Server::over_control_mode`] handle.
 
 <!-- example-output: matrix --all-features -->
 
@@ -231,19 +238,23 @@ the same failure, dispatched two ways:
   reports one status for the group whichever member failed.
 ```
 
-Same result, different cost — and different *evidence*. [Folding] a chain into
-one tmux invocation halves the dispatches, but tmux reports one status for the
-group, so a failure cannot be blamed on a member: attribution degrades to
-`unknown` by design rather than guessing. [Control mode] keeps per-command
-evidence over a single process.
+The result is the same and the cost differs, and so does the *evidence*:
+
+- **[Folding]** a chain into one tmux invocation halves the dispatches. tmux
+  reports one status for the group, so a failure cannot be blamed on a member,
+  and attribution degrades to `unknown` rather than guessing.
+- **[Control mode]** keeps per-command evidence over a single process.
 
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
 has the behavior table, the how-to-turn-it-on table, and the named presets.
 
 ## Load workspaces from YAML
 
-[`tmux-workspace`](crates/tmux-workspace) is a native tmuxp: it loads tmuxp
-workspace files, freezes running sessions back into them, and imports
+### [`tmux-workspace load`][workspace-cli-load]: build a session from a file
+
+[`tmux-workspace`](crates/tmux-workspace) is a native tmuxp. It
+[loads][workspace-cli-load] tmuxp workspace files, [freezes][workspace-cli-freeze]
+running sessions back into them, and [imports][workspace-cli-import]
 tmuxinator and teamocil projects.
 
 ```console
@@ -260,6 +271,8 @@ See [its README](crates/tmux-workspace/README.md) for every command.
 
 ## Drive tmux from an agent
 
+### [`tmux-mcp`][mcp-tools]: a tmux server for agents
+
 [`tmux-mcp`](crates/tmux-mcp) is a separate package: a Model Context Protocol
 server over this API, read-biased, where every tool that changes state names
 exactly what it changes.
@@ -271,17 +284,7 @@ $ cargo install tmux-mcp --version 0.1.0-alpha.17
 See [its README](crates/tmux-mcp/README.md) for the tool list and for wiring
 it into an MCP client.
 
-## Requirements
-
-Rust 1.85 or newer, tmux 3.3a or newer, and a Unix target. Native Windows is
-unsupported because tmux is unavailable there; WSL works.
-
-CI builds pinned tmux 3.3a, 3.4, 3.5a, 3.6b, and 3.7b from source and runs the
-whole workspace against each, because tmux's output and error wording change
-between releases. [`run_shell`] refuses on 3.3a and 3.4, which drop the
-command's output instead of returning it.
-
-## Crates
+## Packages
 
 | Crate | Version | What it is |
 | --- | --- | --- |
@@ -295,8 +298,9 @@ command's output instead of returning it.
 [tmux-workspace]: https://img.shields.io/crates/v/tmux-workspace.svg?label=tmux-workspace
 [workspace-crate]: https://crates.io/crates/tmux-workspace
 
-`libtmux` does not require proc macros: its own [`Filterable`] implementations
-are hand-written, and the derive exists for structs outside this workspace.
+[`libtmux`](crates/libtmux) does not require proc macros: its own
+[`Filterable`] implementations are hand-written, and the derive exists for
+structs outside this workspace.
 
 The last two crates are also how the API gets used from outside it. When
 either needs a workaround, that is treated as a finding about `libtmux` rather
@@ -311,7 +315,7 @@ as typed handles, and the query layer over them.
 [docs.rs][libtmux-docsrs] · [Guide][libtmux-guide] ·
 [Programs][libtmux-examples]
 
-The examples above are this crate's: [Drive tmux](#drive-tmux),
+The examples above are this crate's: [Quick start](#quick-start),
 [Query what is there](#query-what-is-there), and
 [Pick how commands reach tmux](#pick-how-commands-reach-tmux). The programs
 under `examples/` are longer.
@@ -383,21 +387,48 @@ $ claude mcp add tmux \
     -- tmux-mcp --socket-name work
 ```
 
-[libtmux-api]: https://libtmux.org/en/rs/latest/reference/
-[libtmux-docsrs]: https://docs.rs/libtmux/latest/libtmux/
-[libtmux-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md
-[libtmux-examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux/examples
-[macros-docsrs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
-[macros-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-macros/README.md#use-it
-[workspace-cli]: https://libtmux.org/en/rs/latest/workspace/cli/
-[workspace-api]: https://libtmux.org/en/rs/latest/workspace/reference/
-[workspace-docsrs]: https://docs.rs/tmux-workspace/latest/tmux_workspace/
-[workspace-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md
-[mcp-tools]: https://libtmux.org/en/rs/latest/mcp/tools/
-[mcp-api]: https://libtmux.org/en/rs/latest/mcp/reference/
-[mcp-docsrs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
-[mcp-connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
-[mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/README.md
+## What it leaves out
+
+- **A synchronous API.** Blocking callers drive the async API through
+  [`blocking::Runtime`].
+- **Native Windows.** tmux does not run there, so use WSL.
+- **A mock tmux.** Tests run against a real tmux, because what tmux answers is
+  the thing under test. [`libtmux::test::TestServer`] gives each test an
+  isolated socket.
+- **Proc macros in `libtmux` itself.** Its own [`Filterable`] implementations
+  are hand-written, and the derive exists for structs outside this workspace.
+
+## Support and status
+
+- **Rust 1.85 or newer** for the libraries. `tmux-mcp` needs 1.88.
+- **tmux 3.3a or newer.** CI builds pinned tmux 3.3a, 3.4, 3.5a, 3.6b, and 3.7b
+  from source and runs the whole workspace against each, because tmux's output
+  and error wording change between releases.
+- **A refusal on two releases.** [`run_shell`] refuses on 3.3a and 3.4, which
+  drop the command's output instead of returning it.
+- **Linux, including WSL.** CI runs the tests on Linux. On macOS, CI runs them
+  against Homebrew's current tmux on pushes to `master` and manual runs, and
+  not on pull requests.
+- **Unix only.** Native Windows is unsupported because tmux is unavailable
+  there.
+
+## Documentation
+
+You may be looking for:
+
+- [API documentation](https://docs.rs/libtmux) — every public item, with a
+  runnable example
+- [API reference](https://libtmux.org/en/rs/latest/reference/) — the same
+  items on libtmux.org, with guides and concepts beside them
+- [The `libtmux` guide](crates/libtmux/README.md) — features, the three
+  transport switches, testing
+- [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
+  package**, if you want an agent to drive tmux
+- [Examples](crates/libtmux/examples) — programs that run and clean up after
+  themselves, from reading a server to watching one over control mode
+- [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
+- [Parity ledger](crates/libtmux/docs/parity.md) — capability-by-capability
+  against Python libtmux
 
 ## Development
 
@@ -448,6 +479,25 @@ submitted for inclusion in this workspace by you, as defined in the Apache-2.0
 license, shall be dual licensed as above, without any additional terms or
 conditions.
 
+[libtmux-api]: https://libtmux.org/en/rs/latest/reference/
+[libtmux-docsrs]: https://docs.rs/libtmux/latest/libtmux/
+[libtmux-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md
+[libtmux-examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux/examples
+[macros-docsrs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
+[macros-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-macros/README.md#quick-start
+[workspace-cli]: https://libtmux.org/en/rs/latest/workspace/cli/
+[workspace-cli-load]: https://libtmux.org/en/rs/latest/workspace/cli/load/
+[workspace-cli-freeze]: https://libtmux.org/en/rs/latest/workspace/cli/freeze/
+[workspace-cli-import]: https://libtmux.org/en/rs/latest/workspace/cli/import/
+[workspace-api]: https://libtmux.org/en/rs/latest/workspace/reference/
+[workspace-docsrs]: https://docs.rs/tmux-workspace/latest/tmux_workspace/
+[workspace-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md
+[mcp-tools]: https://libtmux.org/en/rs/latest/mcp/tools/
+[mcp-api]: https://libtmux.org/en/rs/latest/mcp/reference/
+[mcp-docsrs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
+[mcp-connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
+[mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/README.md
+
 [Typed field handles]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
 [versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
 [Three switches]: https://libtmux.org/en/rs/latest/concepts/transports/
@@ -458,3 +508,8 @@ conditions.
 [`run_shell`]: https://libtmux.org/en/rs/latest/reference/server-server-run_shell/
 [`Filterable`]: https://libtmux.org/en/rs/latest/reference/query-filterable/
 [`libtmux::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
+[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
+[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_line/
+[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-sessiontree/
+[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-windowtree/
+[`blocking::Runtime`]: https://libtmux.org/en/rs/latest/reference/blocking-runtime/
