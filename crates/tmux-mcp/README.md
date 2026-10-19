@@ -17,28 +17,36 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 
 </div>
 
+Give an agent typed operations inside the terminal: [inspect][toolset-inspect]
+tmux, [arrange][toolset-manage] its objects, [drive][toolset-execute] pane
+programs, and [wait][wait_for_text] for observable outcomes.
+
+[Run a command][run_shell_command] and read its exit status, [wait][wait_for_text]
+for output you did not start, [follow][capture_since] a pane across turns, and
+[find][search_panes] the pane that printed something. For a single
+`tmux send-keys`, shelling out is shorter.
+
 > **Alpha.** The tool surface changes between releases, including in ways that
 > will not be called out as breaking, because nothing here is stable yet.
 > `cargo install` will not pick a prerelease unless asked, so the install
 > command below names the version. Feedback welcome.
 
-Give an agent typed operations inside the terminal: inspect tmux, arrange its
-objects, drive pane programs, and wait for observable outcomes.
+**Contents** — [Quick start](#quick-start) ·
+[Connect another client](#connect-another-client) ·
+[Choose which tmux it drives](#choose-which-tmux-it-drives) ·
+[Run work and wait for it](#run-work-and-wait-for-it) ·
+[The tools](#the-tools) ·
+[Limiting what a client can do](#limiting-what-a-client-can-do) ·
+[What comes back](#what-comes-back) · [Settings](#settings) ·
+[What it can reach](#what-it-can-reach) ·
+[Using it from Rust](#using-it-from-rust) · [Packages](#packages) ·
+[What it leaves out](#what-it-leaves-out) ·
+[Support and status](#support-and-status) ·
+[Documentation](#documentation)
 
-The [tool pages][tools] describe each tool, [Connect a client][connect] makes a
-first call, and the [API reference][api-reference] covers running the server
-from Rust. The API is also on [docs.rs][docs-rs].
+## Quick start
 
-Reading a pane goes through tmux's control mode rather than screen captures, so
-output that scrolled past between calls is still seen, and
-[`run_shell_command`][run_shell_command] reports a real exit status instead of
-leaving an agent to guess from text.
-
-## Requirements
-
-tmux 3.3a or newer, on `$PATH`. Rust 1.88 to build.
-
-## Install
+You need tmux 3.3a or newer on `PATH`, and Rust 1.88 to build.
 
 ```console
 $ cargo install tmux-mcp --version 0.1.0-alpha.17
@@ -51,28 +59,35 @@ prebuilt binary for Linux or macOS instead, when the release carries one:
 $ cargo binstall tmux-mcp --version 0.1.0-alpha.17
 ```
 
-Either puts a `tmux-mcp` binary on your path. It speaks MCP on stdin and stdout,
-so every client below is really the same thing: run `tmux-mcp`.
-
-Check that the shell finds it:
+Either puts a `tmux-mcp` binary on your path. A client starts it as a
+subprocess and speaks MCP on its stdin and stdout. Check that the shell finds
+it:
 
 ```console
 $ tmux-mcp --version
 ```
 
-### Claude Code
+### `claude mcp add`: tell Claude Code about it
 
 ```console
 $ claude mcp add tmux -- tmux-mcp
 ```
 
-### Codex CLI
+Then ask the client for something only tmux can do, such as "create a tmux
+session called demo and tell me what panes it has".
+
+## Connect another client
+
+Every client starts the same command, `tmux-mcp`. [Connect an MCP
+client][connect] on libtmux.org covers startup and shutdown.
+
+### `codex mcp add`: Codex CLI
 
 ```console
 $ codex mcp add tmux -- tmux-mcp
 ```
 
-### Gemini CLI
+### `gemini mcp add`: Gemini CLI
 
 Note the missing `--`: this command takes the server command as a positional
 argument, so a `--` before it would be parsed as the end of the arguments and
@@ -82,13 +97,13 @@ nothing would be registered.
 $ gemini mcp add tmux tmux-mcp
 ```
 
-### Grok CLI
+### `grok mcp add`: Grok CLI
 
 ```console
 $ grok mcp add tmux tmux-mcp
 ```
 
-### Claude Desktop
+### `claude_desktop_config.json`: Claude Desktop
 
 Add to `claude_desktop_config.json` — under `~/Library/Application
 Support/Claude/` on macOS, `%APPDATA%\Claude\` on Windows:
@@ -103,7 +118,7 @@ Support/Claude/` on macOS, `%APPDATA%\Claude\` on Windows:
 }
 ```
 
-### Cursor
+### `.cursor/mcp.json`: Cursor
 
 Add to `.cursor/mcp.json` in a project, or `~/.cursor/mcp.json` for every
 project:
@@ -118,9 +133,7 @@ project:
 }
 ```
 
-### VS Code
-
-Add to `.vscode/mcp.json`:
+### `.vscode/mcp.json`: VS Code
 
 ```json
 {
@@ -133,9 +146,7 @@ Add to `.vscode/mcp.json`:
 }
 ```
 
-### Windsurf
-
-Add to `~/.codeium/windsurf/mcp_config.json`:
+### `~/.codeium/windsurf/mcp_config.json`: Windsurf
 
 ```json
 {
@@ -147,9 +158,9 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 }
 ```
 
-### Zed
+### `~/.config/zed/settings.json`: Zed
 
-Add to `~/.config/zed/settings.json`, or open it with `zed: open settings`:
+Open it with `zed: open settings`:
 
 ```json
 {
@@ -164,7 +175,7 @@ Add to `~/.config/zed/settings.json`, or open it with `zed: open settings`:
 }
 ```
 
-### Cline and Roo Code
+### `cline_mcp_settings.json`: Cline and Roo Code
 
 Open the MCP Servers panel and choose Configure MCP Servers, which opens
 `cline_mcp_settings.json`. Add:
@@ -179,9 +190,7 @@ Open the MCP Servers panel and choose Configure MCP Servers, which opens
 }
 ```
 
-### Goose
-
-Add to `~/.config/goose/config.yaml`:
+### `~/.config/goose/config.yaml`: Goose
 
 ```yaml
 extensions:
@@ -192,10 +201,10 @@ extensions:
     args: []
 ```
 
-### opencode
+### `~/.config/opencode/opencode.json`: opencode
 
-Add to `~/.config/opencode/opencode.json`. Note that `command` is an array
-here, and that the table is `mcp` rather than `mcpServers`:
+Note that `command` is an array here, and that the table is `mcp` rather than
+`mcpServers`:
 
 ```json
 {
@@ -208,9 +217,7 @@ here, and that the table is `mcp` rather than `mcpServers`:
 }
 ```
 
-### Antigravity
-
-Add to `~/.gemini/config/mcp_config.json`:
+### `~/.gemini/config/mcp_config.json`: Antigravity
 
 ```json
 {
@@ -222,12 +229,12 @@ Add to `~/.gemini/config/mcp_config.json`:
 }
 ```
 
-### JetBrains AI Assistant
+### JetBrains AI Assistant: a stdio server
 
 Settings → Tools → AI Assistant → Model Context Protocol → Add, then choose a
 stdio server with command `tmux-mcp`.
 
-### Passing options
+### Passing options: a socket or a toolset
 
 Every client above starts the same command, so a socket or a toolset goes
 where the client keeps a command's arguments and environment. Claude Code
@@ -254,346 +261,110 @@ A JSON client takes the same two settings as `args` and `env`:
 }
 ```
 
-[Toolset selection](#toolset-selection) and
-[Choosing a server](#choosing-a-server) list every setting.
-
-### Anything else
+### Anything else: the command and no arguments
 
 Any client that runs a stdio MCP server takes the same two pieces: the command
 `tmux-mcp`, and no arguments. That default selects a dedicated product socket
 and a minimal tmux configuration.
 
-## What it offers
+## Choose which tmux it drives
 
-Forty-five tools belong to the unordered `inspect`, `manage`, `execute`, and
-`teardown` toolsets. Each native route carries one machine-readable capability
-record; registration, descriptions, annotations, selection, and
-[`tmux://capabilities`] all read that record. The
-[generated tool reference](TOOLS.md) records every route and capability
-directly from that registry.
-The [tool pages][tools] publish it.
+The choice is made once, when the server starts, and no tool call can change
+it. [Settings](#settings) lists every flag and variable, and
+[the contract][contract-server] has the precedence rules.
 
-| Toolset | Intent | Tools |
-|---|---|---|
-| [`inspect`][toolset-inspect] (18) | Read bounded tmux state and terminal output | [`call_read_tools_batch`][call_read_tools_batch], [`capture_pane`][capture_pane], [`capture_since`][capture_since], [`find_pane_by_position`][find_pane_by_position], [`get_pane_info`][get_pane_info], [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_tmux_variables`][get_tmux_variables], [`get_window_info`][get_window_info], [`list_panes`][list_panes], [`list_sessions`][list_sessions], [`list_windows`][list_windows], [`search_panes`][search_panes], [`show_environment`][show_environment], [`show_hooks`][show_hooks], [`show_option`][show_option], [`snapshot_pane`][snapshot_pane], [`wait_for_text`][wait_for_text] |
-| [`manage`][toolset-manage] (13) | Change tmux objects without starting a process | [`move_window`][move_window], [`rename_session`][rename_session], [`rename_window`][rename_window], [`resize_pane`][resize_pane], [`resize_window`][resize_window], [`select_layout`][select_layout], [`select_pane`][select_pane], [`select_window`][select_window], [`set_mouse_enabled`][set_mouse_enabled], [`set_pane_title`][set_pane_title], [`signal_channel`][signal_channel], [`swap_pane`][swap_pane], [`wait_for_channel`][wait_for_channel] |
-| [`execute`][toolset-execute] (9) | Start configured processes or drive pane programs | [`create_session`][create_session], [`create_window`][create_window], [`paste_text`][paste_text], [`respawn_pane`][respawn_pane], [`run_shell_command`][run_shell_command], [`send_keys`][send_keys], [`send_keys_batch`][send_keys_batch], [`set_synchronize_panes`][set_synchronize_panes], [`split_window`][split_window] |
-| [`teardown`][toolset-teardown] (5) | Delete tmux state | [`clear_pane_scrollback`][clear_pane_scrollback], [`kill_pane`][kill_pane], [`kill_session`][kill_session], [`kill_window`][kill_window], [`set_history_limit`][set_history_limit] |
+### [`--socket-name`][guide-existing-server]: pick a socket by name
 
-### Pane input
+With no flag, the server drives a tmux server of its own, on a socket named
+`libtmux-mcp`, started with a minimal configuration the package ships. None of
+its tools can name the sessions you already have.
 
-[`send_keys`][send_keys], [`send_keys_batch`][send_keys_batch],
-[`paste_text`][paste_text] and [`run_shell_command`][run_shell_command] type
-into panes, and what they type runs with your user's permissions. Before one
-acts, the server looks at the panes the input would reach. If any of them
-fails a check below, that input is refused and nothing is sent.
-
-Which panes receive input:
-
-- `send_keys` and `send_keys_batch` reach the pane you name, plus every other
-  synchronized pane in its window when that pane has synchronized input on.
-  [`set_synchronize_panes`][set_synchronize_panes] sets the window default,
-  and a pane's own setting overrides it.
-- `paste_text` reaches only the pane you name, even when synchronized input is
-  on.
-- `run_shell_command` reaches exactly one pane, and refuses when synchronized
-  input would reach more.
-- A reply lists the panes the input was meant for. It does not prove the input
-  arrived.
-
-Input is refused when a pane it would reach:
-
-- is dead, has input turned off, or is in a tmux mode such as copy mode
-- is on screen in a terminal that a person has attached. With a zoomed window
-  only the zoomed pane counts, and control-mode clients never do
-- is reserved by a running `run_shell_command`
-- is the pane the server was started from
-
-It is also refused when `TMUX` and `TMUX_PANE` are set but incomplete or out
-of date, because the server cannot tell which pane is its own. Start the
-server outside tmux, or with both set correctly.
-
-The checks look; they do not lock. A person can attach, or a pane can change,
-between the check and the keystrokes.
-
-`run_shell_command`:
-
-- Needs a pane running a POSIX shell that the server recognises.
-- Reserves its pane until the command ends or the pane closes. Until then the
-  other pane-input tools refuse that pane.
-- Lets `send_keys` with only `C-c` or `C-\` through, to interrupt the command.
-- Stops waiting at its deadline, but not the command, and the reservation
-  stays. [`respawn_pane`][respawn_pane] with `kill_first` set to `true` ends a
-  program that ignores both interrupts.
-
-Batches:
-
-- `send_keys_batch` takes 1 to 64 operations and runs them in order, repeating
-  the checks before each one. A refused operation does not undo the ones
-  before it. `on_error` is `stop`, the default, or `continue`.
-- [`call_read_tools_batch`][call_read_tools_batch] takes 1 to 16 inspect
-  operations, and one approval covers the whole batch. Its reply is capped at
-  1,000,000 bytes. Anything trimmed is flagged, and no executed row is
-  dropped.
-
-Each tool's page, linked in the table above, has the full contract.
-
-### Capability records
-
-The capability row is not a second hand-maintained catalog. A client receives
-it under `_meta["com.git-pull.libtmux-mcp/capability"]`, holding only what the
-tool does not already carry: toolset, process reach, effect and output sets,
-the secret and untrusted-content flags, schema-keyed input literalization, any
-nested authority, and future-input amplification. Name, title, description,
-annotations, and schemas stay on the tool. `tmux://capabilities` reports each
-tool's name, title, annotations and capability row, and leaves the description
-and schemas to `tools/list`, which a client already holds: the whole report is
-about 26 KB, read by an agent that wants the socket. The native definition
-also classifies every input sink, but that validation detail is not
-duplicated on the wire. For example, `get_tmux_variables.names` is
-reported as `validated-variable-name`; it is not falsely described as escaped
-literal text.
-
-## Resources
-
-`tmux://capabilities` reports the startup-frozen effective surface, selected
-socket, socket provenance, direct process reach, tmux effects, output classes,
-schema-keyed input literalization, future-input amplification, nested
-authority, and whole-call MCP annotations. No dynamic resource templates are
-registered.
-
-| URI | Holds |
-|---|---|
-| `tmux://capabilities` | The frozen effective tool surface, boundary, and connection provenance |
-
-The report also makes the outer boundary explicit. One process has one socket,
-no call can select another socket, no tool executes a host command, and the
-resource is static. Its connection object supplies the socket selector,
-resolved path, attach command, daemon state, and configuration provenance:
-
-```json
-{
-  "boundary": {
-    "oneSocketPerProcess": true,
-    "perCallSocketSelection": false,
-    "hostCommandExecution": false,
-    "dynamicResources": false
-  },
-  "connection": {
-    "socketSelector": "name:libtmux-mcp",
-    "socketProvenance": "default-dedicated",
-    "serverState": "created",
-    "configurationProvenance": "minimal"
-  }
-}
-```
-
-Read this resource when a client needs to explain its authority or cache the
-effective surface. Read tmux state through inspect tools; there are no live
-session, window, pane, or output resources to drift away from the tool catalog.
-
-## Toolset selection
-
-The default dedicated socket gets all four toolsets only when `tmux-mcp` can
-establish minimal-configuration provenance. An existing dedicated socket, an
-explicit socket, or an explicit tmux configuration defaults to `inspect`,
-`manage`, and `execute`; select `teardown` explicitly there.
-
-[`LIBTMUX_TOOLSETS`] replaces the default with a comma-separated unordered set.
-An empty string offers no toolsets. Empty tokens and unknown names stop startup.
-
-```console
-$ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp
-```
-
-[`LIBTMUX_TOOLS`] adds named tools after toolset expansion.
-[`LIBTMUX_EXCLUDE_TOOLS`] removes named tools last, including aggregate nested
-authority. Exclusions always win. Hidden tools are neither listed nor callable.
-
-```console
-$ LIBTMUX_TOOLSETS=inspect \
-    LIBTMUX_TOOLS=send_keys \
-    LIBTMUX_EXCLUDE_TOOLS=capture_pane \
-    tmux-mcp
-```
-
-Named inclusion also works with the zero-toolset subset. This exposes only the
-aggregate while retaining its 16 eligible inspect operations as nested
-authority; an exclusion removes the named operation from both authority and
-the generated `oneOf` schema:
-
-```console
-$ LIBTMUX_TOOLSETS='' \
-    LIBTMUX_TOOLS=call_read_tools_batch \
-    LIBTMUX_EXCLUDE_TOOLS=show_environment \
-    tmux-mcp
-```
-
-An excluded tool cannot be restored by naming it in `LIBTMUX_TOOLS`. Unknown
-tool names, unknown toolsets, and empty elements in any nonempty list fail
-before tmux is opened, so a typo never widens the surface.
-
-The retired `LIBTMUX_SAFETY` and `TMUX_MCP_SAFETY` settings stop startup with
-a migration error instead of silently widening or narrowing the surface.
-
-### Moving from an earlier alpha
-
-Retired names are not hidden aliases. No prompts are registered; their recipes
-now run in the client. Update existing client calls with this mapping:
-
-| Earlier surface | Current path |
-|---|---|
-| `--safety`, `LIBTMUX_SAFETY`, `TMUX_MCP_SAFETY` | Select unordered `LIBTMUX_TOOLSETS`, then exact inclusions or exclusions. |
-| `--confirm`, `--no-confirm`, `TMUX_MCP_CONFIRM` | Remove them. The server has no confirmation policy; clients decide approval from each tool's MCP annotations. |
-| `list_session_windows`, `list_window_panes` | Use [`list_windows`][list_windows] or [`list_panes`][list_panes], then filter the returned stable `session_id` or `window_id`. |
-| `describe` | Use [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_window_info`][get_window_info], or [`get_pane_info`][get_pane_info]. |
-| `list_servers` or per-call socket selection | Run one MCP process per socket and use [`get_server_info`][get_server_info] for its pinned server. |
-| `expand_format` | Use [`get_tmux_variables`][get_tmux_variables] for validated variable names; arbitrary tmux-format evaluation has no public replacement. |
-| `what_changed`, `watch_pane` | Follow a known pane with [`capture_since`][capture_since] or wait with [`wait_for_text`][wait_for_text]; there is no global activity feed or subscription. |
-| `find_panes`, `find_sessions` | Use [`search_panes`][search_panes] for terminal content, [`find_pane_by_position`][find_pane_by_position] for layout, or filter [`list_panes`][list_panes] and [`list_sessions`][list_sessions] locally. |
-| `run_command` | Use [`run_shell_command`][run_shell_command]. |
-| `wait_for_idle` | Use a concrete [`wait_for_text`][wait_for_text] condition or inspect new output with [`capture_since`][capture_since]; no idle heuristic remains. |
-| `start_command`, `job_status`, `list_jobs`, `forget_job` | No background handle remains. Use bounded [`run_shell_command`][run_shell_command], or drive a pane and observe it with [`capture_since`][capture_since]. |
-| `new_window`, `split_pane` | Use [`create_window`][create_window] and [`split_window`][split_window]. |
-| `rename` | Use [`rename_session`][rename_session], [`rename_window`][rename_window], or [`set_pane_title`][set_pane_title]. |
-| `pipe_pane` | No shell-command pipe route remains; read with [`capture_pane`][capture_pane] or [`capture_since`][capture_since]. |
-| `clear_pane` | Use teardown tool [`clear_pane_scrollback`][clear_pane_scrollback]. |
-| `set_option` | Use constrained tools such as [`set_mouse_enabled`][set_mouse_enabled], [`set_history_limit`][set_history_limit], or [`set_synchronize_panes`][set_synchronize_panes]. |
-| `set_environment` | No generic caller-controlled environment route remains. |
-| `show_environment` values | Values are withheld by default; allow names with [`LIBTMUX_ENVIRONMENT_VALUES`]. |
-| `run_plan` | Use [`call_read_tools_batch`][call_read_tools_batch] for inspect-only batches; issue typed state-changing calls separately. |
-| `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
-| `tmux://server` | Use [`get_server_info`][get_server_info]; `tmux://capabilities` adds the frozen connection and selection boundary. |
-| `tmux://sessions`, `tmux://windows`, `tmux://panes` | Use [`list_sessions`][list_sessions], [`list_windows`][list_windows], and [`list_panes`][list_panes]. |
-| `tmux://sessions/{name}`, `tmux://panes/{id}` | Use [`get_session_info`][get_session_info] and [`get_pane_info`][get_pane_info]. |
-| `tmux://sessions/{name}/windows`, `tmux://sessions/{name}/windows/{index}` | Use [`list_windows`][list_windows], filter by `session_id`, then pass the returned stable id to [`get_window_info`][get_window_info]. |
-| `tmux://panes/{id}/content` | Use [`capture_pane`][capture_pane] or continue from a cursor with [`capture_since`][capture_since]. |
-| `enter_copy_mode`, `exit_copy_mode` | Read with capture, snapshot, search, or cursor tools. The attached person owns pane modes. |
-| Prompt `run_and_wait` | Use one [`run_shell_command`][run_shell_command]; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
-| Prompt `interrupt_gracefully` | Start with [`snapshot_pane`][snapshot_pane]. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use [`send_keys`][send_keys] with `keys: ["C-c"]`, not `text: "C-c"`, then observe with [`capture_since`][capture_since] or [`wait_for_text`][wait_for_text]. `keys: ["C-\\"]` is stronger. Either, sent alone, reaches a command an active [`run_shell_command`][run_shell_command] still reserves; [`respawn_pane`][respawn_pane] with `kill_first: true` replaces a program that ignores both. Do not turn pane recovery into teardown. |
-| Prompt `diagnose_pane` | Start with [`snapshot_pane`][snapshot_pane]; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with [`capture_since`][capture_since], and use [`search_panes`][search_panes] if the target is uncertain. |
-
-### Asking first
-
-The server does not implement a separate confirmation or consent policy.
-Clients can use each tool's four MCP annotations to decide whether to ask a
-person before a whole call. Tool selection shapes the advertised interface; it
-does not reduce the tmux user's authority.
-
-The annotations derive from each tool's capability row. A tool that only
-observes tmux is `readOnlyHint: true`. Deleting tmux state or sending pane
-input is `destructiveHint: true`, because the receiving shell runs whatever
-arrives. Reads, teardown, and changes that set a named value, such as a
-rename, are `idempotentHint: true`. Starting or driving a process, or
-returning terminal text, is `openWorldHint: true`. Every `inspect` tool is
-read-only: the observer client that `wait_for_text` or `capture_since` attaches
-only reads, and changes no session, window, pane, or option.
-`set_history_limit` is destructive: from tmux 3.7 a lower limit discards
-existing panes' scrollback past it, so it is in `teardown` beside
-`clear_pane_scrollback`.
-
-When launched from tmux, the process inherits a pane ID, session number, server
-PID, and socket. Pane listings mark that pane `caller: "self"` only when the
-socket matches the selected server. Pane-input tools and the three kill tools
-additionally resolve the complete identity against a fresh selected-daemon
-snapshot before acting. A complete identity on another physical socket is
-foreign; malformed or inconsistent context on the selected socket fails closed.
-The comparison weighs the socket as well as the pane ID because `%1` names a
-different pane on every tmux server.
-
-Pane input also refuses a configured pane visible to a non-control tmux client.
-In an unzoomed window every visible pane is attended; in a zoomed window only
-the active pane is. Control-mode clients do not count. This is a protective
-refusal, not a consent signal.
-
-## Choosing a server
-
-Without arguments the server selects the `libtmux-mcp` socket, starts it with
-the shipped minimal configuration, and authenticates that this launch created
-the daemon before enabling teardown by default. An already-running daemon
-keeps its configuration and gets conservative provenance. The server does not
-follow `$TMUX`.
-
-Several `tmux-mcp` processes without arguments share that one daemon. Each
-holds a shared lock on `libtmux-mcp.lease` beside the socket, and the process
-that started the daemon stops it at shutdown only when no other process holds
-one. No process stops a daemon it did not start, so when the owner exits
-first the daemon outlives every process using it, and the next launch finds
-it already running. Stop it with `tmux -L libtmux-mcp kill-server`.
-
-Select another socket by path or name:
-
-```console
-$ tmux-mcp --socket /tmp/tmux-1000/work
-```
+To work with a tmux server you already run, name its socket:
 
 ```console
 $ tmux-mcp --socket-name work
 ```
 
-`-S` and `-L` work too. `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` provide the
-same startup choices. Set `LIBTMUX_TMUX_CONFIG` to use an explicit tmux
-configuration at an absolute path. Socket names and paths are mutually
-exclusive. `tmux-mcp --help` lists every flag and environment variable.
+`-L` is the short form. Several processes started without arguments share the
+`libtmux-mcp` daemon, and `tmux -L libtmux-mcp kill-server` stops it. [The
+contract][contract-server] says which process stops it on its own.
 
-## Trust boundary
-
-One process stays bound to one tmux socket. That limits which tmux objects its
-structured tools can name; it does not confine filesystem, network, credential,
-or process access. Toolset filtering shapes discovery and direct calls. It is
-not authorization.
-
-Execute tools run with the tmux user's authority. `run_shell_command` accepts a
-pane command; `send_keys`, `send_keys_batch`, and `paste_text` deliver input to
-the pane program. Spawn tools start only the configured process and accept no
-command or environment payload. No public tool runs a caller-authored host
-command.
-
-`run_shell_command` requires a trusted POSIX-compatible pane shell whose
-reserved words and special builtins retain their standard meanings. The tmux
-server and configuration are trusted too. Its resolved tmux executable and
-socket path must contain no ASCII terminal-control bytes; the tool rejects such
-routes before attaching its watcher. Command aliases and hooks are executable
-configuration, not a sandbox boundary. Valid inherited Bash and zsh `ERR` and
-`DEBUG` traps remain visible to the authored command; parent-shell traps and
-the `errexit`, `xtrace`, and `noglob` options remain unchanged.
-
-Pane output and tmux metadata may contain sensitive or untrusted text. Hooks
-may contain executable configuration. Existing aliases, hooks, plugins, status
-jobs, and pane processes can add effects to any call. Standard MCP annotations
-describe the whole call for client consent; they do not enforce authority.
-
-A tmux server holds the environment of the shell that started it, tokens and
-keys included. No tool returns an environment value by default.
-`show_environment` lists each name and whether it is set or marked for
-removal, and withholds the value. `get_tmux_variables` refuses a name the
-server or session environment holds, because tmux expands a name it does not
-know as a format from the environment. `LIBTMUX_ENVIRONMENT_VALUES` names, at
-startup, the variables whose values both tools may return; a named value
-reaches the client in clear. It takes up to 32 comma-separated names, matched
-exactly:
+### [`--socket`][guide-existing-server]: pick a socket by path
 
 ```console
-$ LIBTMUX_ENVIRONMENT_VALUES=TERM,LANG tmux-mcp
+$ tmux-mcp --socket /tmp/tmux-1000/work
 ```
 
-This covers what tmux holds, not what a pane's program can print: a command
-sent through an execute tool runs with the tmux user's environment.
+`-S` is the short form. A socket name and a path are mutually exclusive.
+[`LIBTMUX_SOCKET_PATH`][contract-server] and
+[`LIBTMUX_SOCKET`][contract-server] make the same choices from the
+environment, which is how a client's configuration sets them, and
+[`LIBTMUX_TMUX_CONFIG`][contract-server] names the tmux configuration for a
+daemon the server starts.
 
-## What it feels like
+## Run work and wait for it
+
+The server earns its keep once an agent has to wait, look, or avoid breaking
+the terminal it works in. Reading a pane goes through tmux's control mode
+rather than screen captures, so output that scrolled past between calls is
+still seen.
+
+### [`run_shell_command`][run_shell_command]: run a command and read its exit status
+
+[`run_shell_command`][run_shell_command] sends the command, waits for it to
+finish, and answers with its exit status and output:
 
 > **You:** Run the API tests in the `api` session and tell me what broke.
 >
-> **Agent:** `run_shell_command` in pane `%3` finished with exit status 1. Two
-> failures, both in `test_auth.py` — `test_token_refresh` and
-> `test_expired_session`. Want me to open them?
+> **Agent:** [`run_shell_command`][run_shell_command] in pane `%3` finished
+> with exit status 1. Two failures, both in `test_auth.py` —
+> `test_token_refresh` and `test_expired_session`. Want me to open them?
 
 The agent waited for the command, read its real exit status, and got the
-output the command actually wrote — no prompt, no echo, and nothing lost to
-scrollback.
+output the command wrote: no prompt, no echo, and nothing lost to scrollback.
 
-For a wider inventory pass, one batch call can list topology, snapshot a pane,
-and read an option while keeping each child’s complete MCP envelope:
+[`examples/run_and_wait`][example-run-and-wait] makes the same call through
+the tool a client calls, on a tmux of its own under `/tmp/libtmux-rs-test/`:
+
+```console
+$ cargo run --example run_and_wait
+```
+
+It runs `ls /no/such/path` and prints the nonzero exit status `ls` returned.
+Reaching the deadline ends the waiting and leaves the pane command running, so
+inspect the pane before sending more input.
+
+### [`wait_for_text`][wait_for_text]: wait for what a pane prints
+
+[`wait_for_text`][wait_for_text] watches the pane's output stream for a
+pattern, with stop patterns for the failures you already know. A line that
+scrolls past between looks is still seen, because it reads the stream.
+
+The same example starts a background job that prints `server is ready` a second
+later, waits for that line, and prints `waited: Matched`.
+
+[`run_shell_command`][run_shell_command], [`wait_for_text`][wait_for_text], and
+[`capture_since`][capture_since] return the output stream with escape
+sequences removed, so a line redrawn in place repeats once per redraw.
+[`capture_pane`][capture_pane] returns what the screen displays.
+
+### [`capture_since`][capture_since]: follow a pane across turns
+
+[`capture_since`][capture_since] returns only what is new since the cursor it
+gave you last time, and says `missed: true` if anything was dropped:
+
+```console
+$ cargo run --example follow
+```
+
+[`examples/follow`][example-follow] pushes 200 lines through a 24-row pane
+between two calls. The second call returns all of them, and the example prints
+`saw 200 of 200 lines, missed: false`.
+
+### [`call_read_tools_batch`][call_read_tools_batch]: several reads in one call
+
+One batch lists topology, snapshots a pane, and reads an option, keeping each
+child's complete MCP envelope:
 
 ```json
 {
@@ -606,73 +377,162 @@ and read an option while keeping each child’s complete MCP envelope:
 }
 ```
 
-Each result row preserves `content`, `structuredContent`, `_meta`, and
-`isError`. If the complete JSON-RPC response line would exceed 1,000,000 bytes,
-the batch truncates nested payloads until it fits without dropping an executed
-row. It reports `resultTruncated` per affected row plus outer `truncated` and
-`truncatedBytes` values.
+Each result row keeps its own `content`, `structuredContent`, `_meta`, and
+`isError`. A reply over the size cap is trimmed, and every trimmed row says so.
+[The contract][contract-batches] gives the limits.
 
-## When it earns its keep
+### Keep reads small
 
-For a single `tmux send-keys`, it does not. It earns its keep the moment an
-agent has to wait, look, or avoid breaking the terminal it is working in.
+- **Finding where something is.** [`search_panes`][search_panes] matches
+  across every pane at once and reports the pane and line. The listing tools
+  read names and commands, and cannot see what a terminal is showing.
+- **Asking about layout.** [`find_pane_by_position`][find_pane_by_position]
+  finds the pane touching a named window corner.
+  [`snapshot_pane`][snapshot_pane] adds geometry, cursor, and mode state to the
+  visible content.
+- **Reading tmux variables.**
+  [`get_tmux_variables`][get_tmux_variables] takes validated variable names
+  and builds the `#{variable}` references itself.
+- **Arranging a window.** [`select_layout`][select_layout] takes saved and
+  named tmux layouts, and returns the layout tmux applied.
 
-**Running something.** `run_shell_command` sends the command, waits for it to
-finish, and answers with its exit status and output. Reaching the deadline ends
-the waiting, not the pane command. Inspect the pane before sending more input;
-use `send_keys` with `keys: ["C-c"]` only when pane-wide interruption is
-intended. The tool requires one configured input recipient and observes its
-cohort, input-off state, mode, liveness, client attention, inherited-caller
-relation, foreground shell, route, and active-run ownership at exactly two
-checkpoints: before watcher setup and immediately before its single dispatch.
-Invalid syntax completes with a nonzero shell status. The process-wide
-reservation blocks other MCP pane input until completion is proved, but does
-not lock tmux against an external client changing the pane. `C-c` or `C-\`
-sent alone passes the reservation, and the interrupted command still reports
-completion, which releases the pane; `respawn_pane` with `kill_first: true`
-releases it from a program that ignores both.
+## The tools
 
-**Waiting for something you did not start.** `wait_for_text` watches the
-pane's output stream for a pattern, with stop patterns for the failures you
-already know. Because it reads the stream rather than polling the screen, a
-line that scrolls past between looks is still seen.
+The tools belong to unordered toolsets, and an operator grants or withholds a
+toolset as a whole. Each tool carries one machine-readable capability record.
+Registration, descriptions, annotations, selection, and
+[`tmux://capabilities`] all read it. The
+[generated tool reference](TOOLS.md) records every route and capability
+directly from that registry, and the [tool pages][tools] publish it.
 
-**Following a pane over several turns.** `capture_since` returns only what is
-new since the cursor it gave you last time, and says `missed: true` if
-anything was dropped.
+| Toolset | Intent | Tools |
+|---|---|---|
+| [`inspect`][toolset-inspect] (18) | Read bounded tmux state and terminal output | [`call_read_tools_batch`][call_read_tools_batch], [`capture_pane`][capture_pane], [`capture_since`][capture_since], [`find_pane_by_position`][find_pane_by_position], [`get_pane_info`][get_pane_info], [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_tmux_variables`][get_tmux_variables], [`get_window_info`][get_window_info], [`list_panes`][list_panes], [`list_sessions`][list_sessions], [`list_windows`][list_windows], [`search_panes`][search_panes], [`show_environment`][show_environment], [`show_hooks`][show_hooks], [`show_option`][show_option], [`snapshot_pane`][snapshot_pane], [`wait_for_text`][wait_for_text] |
+| [`manage`][toolset-manage] (13) | Change tmux objects without starting a process | [`move_window`][move_window], [`rename_session`][rename_session], [`rename_window`][rename_window], [`resize_pane`][resize_pane], [`resize_window`][resize_window], [`select_layout`][select_layout], [`select_pane`][select_pane], [`select_window`][select_window], [`set_mouse_enabled`][set_mouse_enabled], [`set_pane_title`][set_pane_title], [`signal_channel`][signal_channel], [`swap_pane`][swap_pane], [`wait_for_channel`][wait_for_channel] |
+| [`execute`][toolset-execute] (9) | Start configured processes or drive pane programs | [`create_session`][create_session], [`create_window`][create_window], [`paste_text`][paste_text], [`respawn_pane`][respawn_pane], [`run_shell_command`][run_shell_command], [`send_keys`][send_keys], [`send_keys_batch`][send_keys_batch], [`set_synchronize_panes`][set_synchronize_panes], [`split_window`][split_window] |
+| [`teardown`][toolset-teardown] (5) | Delete tmux state | [`clear_pane_scrollback`][clear_pane_scrollback], [`kill_pane`][kill_pane], [`kill_session`][kill_session], [`kill_window`][kill_window], [`set_history_limit`][set_history_limit] |
 
-`run_shell_command`, `wait_for_text`, and `capture_since` return the output
-stream with escape sequences removed, not the rendered screen. A line redrawn in place -- a line editor's
-echo, a progress bar -- repeats once per redraw. `capture_pane` shows what the
-screen displays.
+### [`send_keys`][send_keys]: typing into panes
 
-**Finding where something is.** `search_panes` matches across every pane at
-once and reports the pane and line. The listing tools will not: they read
-names and commands, not what a terminal is showing.
+[`send_keys`][send_keys], [`send_keys_batch`][send_keys_batch],
+[`paste_text`][paste_text] and [`run_shell_command`][run_shell_command] type
+into panes, and what they type runs with your user's permissions. Before one
+acts, the server looks at the panes the input would reach. A failed check
+refuses the input and sends nothing.
 
-**Asking about layout.** `find_pane_by_position` finds the pane touching a
-named window corner. `snapshot_pane` adds geometry, cursor, and mode state to
-the visible content.
+- **Synchronized panes.** [`send_keys`][send_keys] and
+  [`send_keys_batch`][send_keys_batch] also reach every other synchronized pane
+  in the window. [`paste_text`][paste_text] reaches only the pane you name, and
+  [`run_shell_command`][run_shell_command] refuses when input would reach more
+  than one.
+- **Panes it refuses.** A dead pane, one with input turned off or in a mode
+  such as copy mode, one a person has attached on screen, one reserved by a
+  running [`run_shell_command`][run_shell_command], and the pane the server
+  runs in.
+- **The shell.** [`run_shell_command`][run_shell_command] needs a pane running
+  a trusted POSIX-compatible pane shell that the server recognises.
+- **No lock.** The checks look; they do not lock. A person can attach, or a
+  pane can change, between the check and the keystrokes.
+- **No delivery receipt.** A reply lists the panes the input was meant for. It
+  does not prove the input arrived.
 
-`select_layout` accepts saved tmux layouts, named layouts, and unique name
-abbreviations. Names follow the running daemon's version; mirrored main
-layouts require tmux 3.5. Malformed syntax is refused before window lookup.
-tmux owns geometry and pruning, and a successful reply contains the saved
-layout actually applied. A readback failure after mutation remains a
-`partial_effect` error.
+[The contract][contract-pane-input] has the full checks, the reservation rules
+of [`run_shell_command`][run_shell_command], and the batch limits.
 
-**Reading several things.** `call_read_tools_batch` runs a bounded serial batch
-of enabled inspect operations. Its nested authority shrinks when an operation
-is excluded.
+## Limiting what a client can do
 
-**Reading tmux variables.** `get_tmux_variables` accepts one to 32 validated
-variable names and constructs bounded `#{variable}` references itself. The
-manifest records `validated-variable-name` under `inputLiteralization`. It
-does not accept arbitrary or shell-command formats, and refuses a name the
-tmux environment holds unless the operator allowed it (see
-[Trust boundary](#trust-boundary)).
+### [`LIBTMUX_TOOLSETS`]: choose the toolsets
 
-## Answers are typed
+It takes toolset names separated by commas, in any order, and replaces the
+default. An empty string offers no toolsets. Empty tokens and unknown names stop
+startup.
+
+The default dedicated socket gets all four toolsets only when `tmux-mcp` can
+establish minimal-configuration provenance. An existing dedicated socket, an
+explicit socket, or an explicit tmux configuration defaults to `inspect`,
+`manage`, and `execute`, so select `teardown` there by name.
+
+```console
+$ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp
+```
+
+### [`LIBTMUX_TOOLS`] and [`LIBTMUX_EXCLUDE_TOOLS`]: name exact tools
+
+[`LIBTMUX_TOOLS`] adds named tools after toolset expansion.
+[`LIBTMUX_EXCLUDE_TOOLS`] removes named tools last, including aggregate nested
+authority. Exclusions always win, and hidden tools are neither listed nor
+callable.
+
+```console
+$ LIBTMUX_TOOLSETS=inspect \
+    LIBTMUX_TOOLS=send_keys \
+    LIBTMUX_EXCLUDE_TOOLS=capture_pane \
+    tmux-mcp
+```
+
+An unknown tool, an unknown toolset, or an empty item in any nonempty list
+stops startup before tmux is opened, so a typo never widens the surface.
+Naming [`call_read_tools_batch`][call_read_tools_batch] with an empty toolset
+list offers only the batch, and an excluded operation leaves its nested
+authority:
+
+```console
+$ LIBTMUX_TOOLSETS='' \
+    LIBTMUX_TOOLS=call_read_tools_batch \
+    LIBTMUX_EXCLUDE_TOOLS=show_environment \
+    tmux-mcp
+```
+
+### [`examples/surface`][example-surface]: preview what a client would be offered
+
+It prints a selection's tools, their descriptions, answer fields, and
+capability records, without starting a tmux server. With no arguments it
+prints the surface the default selection offers:
+
+```console
+$ cargo run --example surface
+```
+
+It takes the toolsets, the included tools, and the excluded tools as arguments.
+This previews the aggregate-only selection above:
+
+```console
+$ cargo run --example surface -- '' call_read_tools_batch show_environment
+```
+
+### [`examples/refused`][example-refused]: what a client hears for a tool you left out
+
+The example serves only `inspect`, calls [`send_keys`][send_keys] anyway, and
+prints the refusal a client gets:
+
+```console
+$ cargo run --example refused
+```
+
+The refusal is a JSON-RPC invalid-params error. It names why the tool is
+missing and the setting an operator would change to offer it.
+
+### [`tmux://capabilities`]: what each tool says about itself
+
+Each tool describes what it reaches and changes, under
+`_meta["com.git-pull.libtmux-mcp/capability"]`. The server's one resource,
+[`tmux://capabilities`], reports the same records beside the selected socket and
+where that choice came from. [The contract][contract-resource] lists the
+fields.
+
+| URI | Holds |
+|---|---|
+| [`tmux://capabilities`] | The frozen effective tool surface, boundary, and connection provenance |
+
+### Asking first: annotations
+
+The server has no confirmation policy. A client decides whether to ask a
+person before a call from each tool's four MCP annotations, which derive from
+the tool's capability record. Selecting tools shapes what a client is offered
+and leaves the tmux user's authority as it was.
+[The contract][contract-asking] maps tools to annotations.
+
+## What comes back
 
 Every tool publishes an output schema and answers with structured content, so
 an agent reads fields rather than parsing text:
@@ -682,73 +542,156 @@ an agent reads fields rather than parsing text:
  "output": "ok\n", "bytes": 812, "truncated": false}
 ```
 
-Failures are typed too. Every error carries the same three fields, so an agent
-decides what to do next without reading prose. That includes arguments that
-do not match a tool's schema, and a call to a tool the startup selection left
-out, whose message names the settings that offer it:
+Every error carries the same three fields, so an agent decides what to do next
+without reading prose:
 
 ```json
 {"kind": "object_gone", "retryable": false, "stale": true}
 ```
 
-`stale` means the target is gone and a fresh listing would say something
-different — the answer is to look again, not to retry. `retryable` means the
-same call is safe to repeat unchanged and may succeed after the condition
-clears. A pane that closed and a tmux that is not running both fail, and only
-one of them is worth waiting on. `partial_effect` means tmux accepted part of
-a multi-step call before a later step failed; inspect the current state before
-choosing another action.
+- **`stale`** means the target is gone, so look again before you retry.
+- **`retryable`** means the same call is safe to repeat unchanged.
+- **`partial_effect`** (a `kind`) means tmux accepted part of a multi-step call
+  before a later step failed. Inspect the current state first.
+
+## Settings
+
+Flags choose the tmux server once, at startup. `tmux-mcp --help` prints them.
+
+| Flag | Meaning |
+|---|---|
+| `-S`, `--socket <PATH>` | The tmux server on this socket path |
+| `-L`, `--socket-name <NAME>` | The tmux server with this socket name |
+| `-V`, `--version` | Print the version and exit |
+| `-h`, `--help` | Print the flags and variables and exit |
+
+The environment sets the rest. A flag wins over its variable.
+
+| Variable | Does |
+|---|---|
+| [`LIBTMUX_TOOLSETS`] | Selects any unordered subset of the toolsets |
+| [`LIBTMUX_TOOLS`] | Adds exact tool names after toolset expansion |
+| [`LIBTMUX_EXCLUDE_TOOLS`] | Removes exact names after every inclusion |
+| [`LIBTMUX_ENVIRONMENT_VALUES`] | Names the tmux environment variables whose values tools may return; none by default |
+| [`LIBTMUX_SOCKET_PATH`][contract-server] | Socket path, as `-S`; ignored when `-S` or `-L` is given |
+| [`LIBTMUX_SOCKET`][contract-server] | Socket name, as `-L`; not together with [`LIBTMUX_SOCKET_PATH`][contract-server] |
+| [`LIBTMUX_TMUX_CONFIG`][contract-server] | Absolute path of a tmux configuration for a daemon the server starts |
+
+A malformed setting stops startup. The protocol runs on stdout, so anything
+the binary prints for a person goes to stderr, where an MCP client collects it
+as the server's log.
+
+## What it can reach
+
+One process is bound to one tmux socket, and no tool takes a socket argument.
+That limits which tmux objects the tools can name. It does not confine
+filesystem, network, credential, or process access, and filtering the tools
+does not authorize anything.
+
+- **Input runs with your authority.** Execute tools type into panes, and the
+  pane program runs what arrives.
+- **Environment values stay home.** [`show_environment`][show_environment]
+  lists names and whether each is set, and withholds the value.
+  [`LIBTMUX_ENVIRONMENT_VALUES`] names, at startup, the variables whose values
+  tools may return.
+- **Pane output may be sensitive.** Output and tmux metadata can hold secrets
+  or untrusted text, and hooks can hold executable configuration.
+
+This lets the tools return the values of `TERM` and `LANG`, and no others:
+
+```console
+$ LIBTMUX_ENVIRONMENT_VALUES=TERM,LANG tmux-mcp
+```
+
+[The contract][contract-trust] covers the shell requirements of
+[`run_shell_command`][run_shell_command] and what the server trusts.
 
 ## Using it from Rust
 
-The tool surface is a type, [`TmuxTools`][tmuxtools-docs], so a program can
-freeze a [`Selection`] in code, serve it over a transport other than stdio, or
-call a tool directly. The crate ships runnable examples. `run_and_wait` runs a
-command and reads its real exit status, then waits for a line a background job
-prints, through the same tools a client calls:
+### [`TmuxTools`]: the tool surface as a type
 
-```console
-$ cargo run --example run_and_wait
-```
-
-`follow` pushes 200 lines through a 24-row pane between two `capture_since`
-calls, and the second call returns all 200:
-
-```console
-$ cargo run --example follow
-```
-
-`refused` serves only `inspect`, calls `send_keys` anyway, and prints the
-refusal a client gets: a JSON-RPC invalid-params error naming why the tool is
-missing and the setting an operator would change to offer it:
-
-```console
-$ cargo run --example refused
-```
+The tool surface is a type, so a program can freeze a [`Selection`] in code,
+serve it over a transport other than stdio, or call a tool directly. The
+[API reference][api-reference] and [docs.rs][docs-rs] cover it, and
+[`examples/readonly`][example-readonly] serves the `inspect` toolset:
 
 ```console
 $ cargo run --example readonly
 ```
 
-```console
-$ cargo run --example surface
-```
+It speaks MCP on stdin and stdout, so talk to it from a client, or end it with
+EOF.
 
-`readonly` serves the `inspect` toolset. `surface` prints any selected toolset
-combination, named inclusions and exclusions, controlled descriptions, schemas,
-and capability fields without starting a tmux server. This prints an
-aggregate-only surface with one nested operation excluded:
+### [`examples/budget`][example-budget]: measure what a client downloads
 
-```console
-$ cargo run --example surface -- '' call_read_tools_batch show_environment
-```
+A client fetches every tool's schema at `tools/list`, which is the constraint
+that decides whether a tool earns its place. The example measures it for three
+selections, and names the tools that cost the most:
 
 ```console
 $ cargo run --example budget
 ```
 
-`budget` measures what a client downloads at `tools/list`, which is the
-constraint that decides whether a tool earns its place.
+## Packages
+
+### [`tmux-mcp`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp): the server
+
+This crate: the `tmux-mcp` command a client launches, and the library behind
+it. [`TmuxTools`] is the tool surface, and [`Selection`] is the toolset
+choice.
+
+### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux): the client under it
+
+The async tmux client and object model that every tool calls. [Its
+README][libtmux-guide] covers filtering, waiting, and control mode.
+
+### [`tmux-workspace`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-workspace): sessions to inspect
+
+Loads a tmuxp-style YAML workspace on a named socket, which an agent can then
+read through `tmux-mcp -L` with the same socket name. [Its
+README][workspace-agent] has the two commands.
+
+## What it leaves out
+
+- **Per-call socket selection.** One process serves one socket. Run one MCP
+  process per socket, and ask [`get_server_info`][get_server_info] for the
+  server a process is pinned to.
+- **Host commands.** No public tool runs a caller-authored command on the host.
+  Spawn tools start only the configured process.
+- **A consent policy.** A client decides approval from each tool's
+  [annotations](#asking-first-annotations).
+- **Pane modes.** Copy mode and the other modes belong to the person attached.
+  Read with [`capture_pane`][capture_pane], [`snapshot_pane`][snapshot_pane],
+  [`search_panes`][search_panes], or [`capture_since`][capture_since].
+- **Live resources.** [`tmux://capabilities`] is the only resource. Read tmux
+  state through the inspect tools.
+- **Background jobs, prompts, and idle heuristics.** The
+  [migration table][migration] says what replaced each.
+
+## Support and status
+
+- **Alpha.** Any release may change the tool surface. Pin an exact version.
+- **tmux 3.3a or newer**, on `PATH`.
+- **Rust 1.88 to build.** The libraries under it build on 1.85.
+- **Linux, including WSL.** CI runs the workspace's tests on Linux. On macOS,
+  CI runs them against Homebrew's current tmux on pushes to `master` and manual
+  runs, and not on pull requests.
+- **Windows.** Native Windows is unsupported because tmux is unavailable
+  there.
+
+## Documentation
+
+| | |
+|---|---|
+| [Tool pages][tools] | Every tool's arguments and results, one page each |
+| [Connect a client][connect] | Install, choose a socket, check the connection |
+| [Tool selection][topic-tool-selection] | Toolsets, inclusions, exclusions |
+| [API reference][api-reference] | The Rust API on libtmux.org |
+| [docs.rs][docs-rs] | The Rust API as rustdoc |
+| [`TOOLS.md`](TOOLS.md) | The generated tool reference |
+| [`docs/contracts.md`][contracts] | What the server promises |
+| [`docs/migration.md`][migration] | Moving from an earlier alpha |
+| [`examples/`][examples] | Runnable programs against a tmux of their own |
 
 ## Development
 
@@ -757,6 +700,9 @@ $ cargo test -p tmux-mcp
 ```
 
 The tests drive a real tmux on an isolated socket, so tmux must be on `$PATH`.
+They pass every command and client configuration on this page through the
+binary's own argument and setting validation, and `just examples` runs each
+example.
 
 ## Related
 
@@ -773,7 +719,25 @@ or [MIT license](LICENSE-MIT) at your option.
 [connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
 [api-reference]: https://libtmux.org/en/rs/latest/mcp/reference/
 [docs-rs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
-[tmuxtools-docs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/struct.TmuxTools.html
+[topic-tool-selection]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/
+[guide-existing-server]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/#connect-to-an-existing-server
+[contracts]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md
+[contract-pane-input]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md#pane-input
+[contract-batches]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md#batches
+[contract-resource]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md#the-capabilities-resource
+[contract-asking]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md#asking-first
+[contract-server]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md#choosing-a-server
+[contract-trust]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md#trust-boundary
+[migration]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/migration.md
+[examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp/examples
+[example-run-and-wait]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/examples/run_and_wait.rs
+[example-follow]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/examples/follow.rs
+[example-surface]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/examples/surface.rs
+[example-refused]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/examples/refused.rs
+[example-readonly]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/examples/readonly.rs
+[example-budget]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/examples/budget.rs
+[libtmux-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md
+[workspace-agent]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md#let-an-agent-watch-it
 [toolset-inspect]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-inspect
 [toolset-manage]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-manage
 [toolset-execute]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-execute
@@ -830,3 +794,4 @@ or [MIT license](LICENSE-MIT) at your option.
 [`LIBTMUX_EXCLUDE_TOOLS`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-exclude_tools_env/
 [`LIBTMUX_ENVIRONMENT_VALUES`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-environment_values_env/
 [`Selection`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-selection/
+[`TmuxTools`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-src-tmuxtools/

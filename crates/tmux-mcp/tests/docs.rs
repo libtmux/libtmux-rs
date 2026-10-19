@@ -157,10 +157,98 @@ fn readme_links_to_the_generated_reference_without_copying_the_inventory() -> Te
 
     assert!(readme.contains("[generated tool reference](TOOLS.md)"));
     assert!(!readme.contains("**Inspect (18):**"));
-    assert!(readme.contains("### Pane input"));
-    assert!(readme.contains("The checks look; they do not lock."));
-    assert!(readme.contains("trusted POSIX-compatible pane shell"));
+    // The warnings are content, not line breaks.
+    let flat = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("The checks look; they do not lock."));
+    assert!(flat.contains("trusted POSIX-compatible pane shell"));
     Ok(())
+}
+
+/// The page the README sends a reader to for the full contract. It ships in no
+/// package, so it is read only where the repository is.
+const CONTRACT_PAGE: &str =
+    "https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/docs/contracts.md";
+
+/// The anchor GitHub gives a heading: lowercase, spaces to hyphens, and
+/// punctuation other than hyphens and underscores dropped.
+fn anchor(heading: &str) -> String {
+    heading
+        .trim_start_matches('#')
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+        .map(|c| if c == ' ' { '-' } else { c })
+        .collect()
+}
+
+/// The sections of the contract page the README links that the page has no
+/// heading for.
+fn missing_contract_sections(readme: &str, contract: &str) -> Vec<String> {
+    let headings: Vec<String> = contract
+        .lines()
+        .filter(|line| line.starts_with('#'))
+        .map(anchor)
+        .collect();
+    let mut missing: Vec<String> = readme
+        .lines()
+        .filter_map(|line| line.split_once("]: ").map(|(_, target)| target.trim()))
+        .filter_map(|target| target.strip_prefix(CONTRACT_PAGE))
+        .filter_map(|rest| rest.strip_prefix('#'))
+        .filter(|section| !headings.iter().any(|heading| heading == section))
+        .map(str::to_owned)
+        .collect();
+    missing.sort();
+    missing
+}
+
+#[test]
+fn the_readme_links_only_to_contract_sections_that_exist() -> TestResult {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(manifest.join("README.md"))?;
+    assert!(readme.contains(&format!("]: {CONTRACT_PAGE}#pane-input")));
+    // The page ships in no package, so it is read only where the repository is.
+    if manifest.join("../../Cargo.toml").is_file() {
+        let contract = std::fs::read_to_string(manifest.join("docs/contracts.md"))?;
+        assert_eq!(
+            missing_contract_sections(&readme, &contract),
+            Vec::<String>::new()
+        );
+        let flat = contract.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("The checks look; they do not lock."));
+        assert!(flat.contains("trusted POSIX-compatible pane shell"));
+    }
+    Ok(())
+}
+
+#[test]
+fn the_contract_link_check_names_a_section_the_page_lacks() {
+    let contract = "# Contracts\n\n## Pane input\n\n### run_shell_command\n\n## Trust boundary\n";
+    let link = |section: &str| format!("[x]: {CONTRACT_PAGE}#{section}\n");
+
+    // The control: sections the page has, including an underscore heading.
+    let clean = [
+        link("pane-input"),
+        link("run_shell_command"),
+        link("trust-boundary"),
+    ]
+    .concat();
+    assert_eq!(
+        missing_contract_sections(&clean, contract),
+        Vec::<String>::new()
+    );
+
+    // A renamed or misspelled section is named, and other pages are ignored.
+    let broken = [link("pane-inputs"), link("trust-boundary")].concat();
+    assert_eq!(
+        missing_contract_sections(&broken, contract),
+        ["pane-inputs"]
+    );
+    let elsewhere = "[x]: https://example.com/contracts.md#nothing\n";
+    assert_eq!(
+        missing_contract_sections(elsewhere, contract),
+        Vec::<String>::new()
+    );
 }
 
 /// Settings `tmux-mcp --help` lists whose names live in the binary, which

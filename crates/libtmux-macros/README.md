@@ -16,13 +16,22 @@ own structs the same [typed query grammar] `libtmux` uses for tmux objects.
 
 </div>
 
+Derive it on a struct, then [filter a list of that struct](#quick-start) with
+the expressions `libtmux` uses for panes. A comparison that has no meaning for
+a field does not compile.
+
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not
 > resolve a prerelease unless the requirement names one, so a plain `0.1`
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
-## Install
+**Contents** — [Quick start](#quick-start) · [Relations](#relations) ·
+[Attributes](#attributes) · [Packages](#packages) ·
+[What it leaves out](#what-it-leaves-out) ·
+[Support and status](#support-and-status) · [Documentation](#documentation)
+
+## Quick start
 
 You do not depend on this crate. `libtmux` re-exports the macro behind its
 `derive` feature:
@@ -41,11 +50,10 @@ libtmux = { version = "0.1.0-alpha.16", features = ["derive"] }
 
 </details>
 
-`libtmux` itself never requires proc macros: its own `Filterable`
-implementations are hand-written, and this derive exists for structs outside
-that crate. Turning the feature off removes the dependency entirely.
+### [`#[derive(Filterable)]`]: filter your own structs
 
-## Use it
+Derive it, build an expression from the field handles, and match a list with
+it:
 
 ```rust
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
@@ -71,7 +79,47 @@ assert_eq!(jobs.iter().matching(&retried).count(), 1);
 Field types are read from the struct, and they decide which operations exist:
 `attempts.gt(2)` compiles because the field is an integer, and `name.gt(..)`
 does not, because text has no ordering. Getting that wrong is a compile error
-naming the field, not an expression that quietly matches nothing.
+that names the field.
+
+## Relations
+
+### [`#[filterable(many)]`][derive-docs]: ask what a value contains
+
+A relation lets one expression ask about what a value *contains*. Mark a
+`Vec<Child>` field with `many`, and its handle takes the child's field
+handles:
+
+```rust
+use libtmux::query::{Filterable as _, QueryIteratorExt as _};
+
+#[derive(libtmux::Filterable)]
+#[filterable(target = "step")]
+struct Step {
+    name: String,
+}
+
+#[derive(libtmux::Filterable)]
+#[filterable(target = "job")]
+struct Job {
+    name: String,
+    #[filterable(many)]
+    steps: Vec<Step>,
+}
+
+let jobs = [
+    Job { name: "ci".into(), steps: vec![Step { name: "build".into() }] },
+    Job { name: "idle".into(), steps: vec![] },
+];
+
+let job = Job::filter_fields();
+let step = Step::filter_fields();
+let building = job.steps.any(step.name.eq("build"));
+
+assert_eq!(jobs.iter().matching(&building).count(), 1);
+```
+
+`#[filterable(one)]` does the same for an `Option<Child>` field. Both read the
+related type's own field handles, so a relation is still one typed expression.
 
 ## Attributes
 
@@ -84,8 +132,40 @@ naming the field, not an expression that quietly matches nothing.
 | `#[filterable(many)]` | `Vec<T>` field | Declares a one-to-many relation |
 | `#[filterable(one)]` | `Option<T>` field | Declares a one-to-one relation |
 
-A relation lets a question about what a value *contains* stay one expression:
-`parents.children.any(children.name.eq("build"))`.
+[`Filterable`][derive-docs] documents each of them. With `libtmux`'s `serde`
+feature, the expression they build lowers to the versioned wire format that
+[`libtmux::query`][query-docs] describes.
+
+## Packages
+
+### [`libtmux-macros`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-macros): the derive
+
+This crate: [`#[derive(Filterable)]`] and the attributes above, with no
+dependency on `libtmux`.
+
+### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux): the grammar
+
+Defines the [`Filterable`][query-reference] trait the derive implements, and
+re-exports the derive behind its `derive` feature. [Its guide][libtmux-guide]
+filters tmux objects with the same expressions.
+
+## What it leaves out
+
+- **Anything but a struct with named fields.** Enums, tuple structs, unit
+  structs, and unions are refused, and so is a type alias.
+- **Other collections for a relation.** `many` takes exactly `Vec<Related>`,
+  and `one` takes exactly `Option<Related>`.
+- **A required dependency in `libtmux`.** `libtmux` never requires proc macros:
+  its own `Filterable` implementations are hand-written. Turning the feature
+  off removes this crate from the build entirely.
+
+## Support and status
+
+- **Alpha.** Pin an exact version.
+- **One version with `libtmux`.** The derive expands to paths into a hidden
+  core surface, so `libtmux` pins this crate to its own exact version.
+- **No tmux needed.** The derive is compile-time code, and the examples above
+  filter plain values.
 
 ## Documentation
 
@@ -98,7 +178,9 @@ A relation lets a question about what a value *contains* stay one expression:
   — filtering tmux objects, which uses the same grammar
 
 [derive-docs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
+[query-docs]: https://docs.rs/libtmux/latest/libtmux/query/
 [query-reference]: https://libtmux.org/en/rs/latest/reference/query-filterable/
+[libtmux-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md#filtering
 
 ## License
 
