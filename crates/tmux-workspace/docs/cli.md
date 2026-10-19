@@ -150,6 +150,13 @@ empty plugin/builder value keeps the native builder. The bridge's request
 travels in an environment variable rather than the child's command line. `shell`
 also runs tmuxp's Python shell.
 
+The backend depends on the coordinated [Python libtmux tmux-support
+change](https://github.com/tmux-python/libtmux/pull/779), which has not been
+released. CI qualifies its pinned source with tmux 3.3a. Released tmuxp 1.74.0
+pins libtmux below 0.62, so installing that release alone does not qualify the
+bridge. Use a compatible tmuxp environment carrying the updated Python library,
+and select it with `TMUX_WORKSPACE_PYTHON`.
+
 ## Imports
 
 `import tmuxinator` and `import teamocil` convert a project into a workspace
@@ -253,3 +260,14 @@ the command. They differ only here:
 | An unknown key | recorded in `unsupported_keys`; `Workspace::from_yaml_strict` refuses it unless it starts with `x-` | refused, unless it starts with `x-` |
 | An empty `windows` list | keeps the window tmux made, as tmuxp does | refused |
 | `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |
+
+## Speed against tmuxp
+
+On one Linux machine with tmux 3.7d and tmuxp 1.74.0, using medians of 20
+starts and 5 loads, the command starts in about a millisecond where tmuxp takes
+about 125, and a cold two-window load takes about 150 ms against 205. To
+measure your own:
+
+```console
+$ just bench-cli --binary target/release/tmux-workspace --tmuxp "$(command -v tmuxp)"
+```
