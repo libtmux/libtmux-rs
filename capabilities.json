@@ -1,0 +1,307 @@
+{
+  "capabilities": [
+    {
+      "apis": [
+        "control.ControlMode.attach",
+        "control.ControlMode.attach_with_limits",
+        "server.Server.over_control_mode",
+        "plan.Plan.run_over_control_mode"
+      ],
+      "commands": [
+        {
+          "command": "attach-session"
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "control-mode",
+      "name": "Control mode",
+      "since": "3.7",
+      "summary": "Attach a library-managed control client and stream events."
+    },
+    {
+      "apis": [
+        "control.ControlSender.mute_pane"
+      ],
+      "commands": [
+        {
+          "command": "refresh-client",
+          "flags": [
+            "-A"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "fallback",
+      "id": "control-pane-off",
+      "name": "Silence a pane in a control client",
+      "since": "3.7",
+      "summary": "mute_pane uses refresh-client -A off; earlier releases pause the pane instead."
+    },
+    {
+      "apis": [
+        "server.Server.delete_buffer"
+      ],
+      "commands": [
+        {
+          "command": "delete-buffer",
+          "flags": [
+            "-b"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "buffer-delete-named",
+      "name": "Named buffer deletion",
+      "since": "3.4",
+      "summary": "Delete one paste buffer by name without risking another buffer."
+    },
+    {
+      "apis": [
+        "server.Server.set_buffer"
+      ],
+      "commands": [
+        {
+          "command": "set-buffer",
+          "flags": [
+            "-b",
+            "-n"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "buffer-rename",
+      "name": "Buffer rename",
+      "since": "3.4",
+      "summary": "Rename a paste buffer without risking another buffer."
+    },
+    {
+      "apis": [
+        "window.Window.select_layout"
+      ],
+      "commands": [
+        {
+          "command": "select-layout"
+        }
+      ],
+      "error": "error.Error.InvalidLayout",
+      "handling": "refuse",
+      "id": "layout-without-checksum",
+      "name": "Layouts without a checksum",
+      "since": "3.4",
+      "summary": "Apply a layout string or a named layout that tmux validates before use."
+    },
+    {
+      "apis": [
+        "window.Window.select_layout",
+        "window.Layout.MainHorizontalMirrored",
+        "window.Layout.MainVerticalMirrored"
+      ],
+      "commands": [
+        {
+          "command": "select-layout"
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "layout-mirrored-main",
+      "name": "Mirrored main layouts",
+      "since": "3.5",
+      "summary": "Apply main-horizontal-mirrored and main-vertical-mirrored."
+    },
+    {
+      "apis": [
+        "window.Window.select_layout",
+        "window.LayoutSpec.Saved"
+      ],
+      "commands": [
+        {
+          "command": "select-layout"
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "layout-json",
+      "name": "JSON layout strings",
+      "since": "3.8-rc2",
+      "summary": "Apply a layout saved in the JSON form tmux reports."
+    },
+    {
+      "apis": [
+        "pane.CaptureOptions.trim_blank_cells",
+        "pane.Pane.capture_with"
+      ],
+      "commands": [
+        {
+          "command": "capture-pane",
+          "flags": [
+            "-T"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "capture-trim-blank-cells",
+      "name": "Capture without trailing blank cells",
+      "since": "3.4",
+      "summary": "Stop a capture at the last used cell instead of the pane width."
+    },
+    {
+      "apis": [
+        "pane.Pane.capture_lines"
+      ],
+      "commands": [
+        {
+          "command": "capture-pane",
+          "flags": [
+            "-F"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "capture-line-flags",
+      "name": "Capture with line flags",
+      "since": "3.7",
+      "summary": "Read each captured row with its wrapped and cursor flags."
+    },
+    {
+      "apis": [
+        "server.Server.typed_key_bindings"
+      ],
+      "commands": [
+        {
+          "command": "list-keys",
+          "flags": [
+            "-F"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "list-keys-format",
+      "name": "Typed key bindings",
+      "since": "3.7",
+      "summary": "Read key bindings through list-keys -F."
+    },
+    {
+      "apis": [
+        "options.OptionSchema.accepts"
+      ],
+      "commands": [
+        {
+          "command": "set-option",
+          "flags": [
+            "-p"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "pane-border-style-per-pane",
+      "name": "Per-pane border styles",
+      "since": "3.7",
+      "summary": "Set pane-border-style and pane-active-border-style on one pane."
+    }
+  ],
+  "floor": {
+    "minimum": "3.3a"
+  },
+  "port": "rs",
+  "schema": "libtmux-capabilities/1",
+  "workarounds": [
+    {
+      "apis": [
+        "server.Server.run_shell"
+      ],
+      "commands": [
+        {
+          "command": "run-shell"
+        }
+      ],
+      "handling": "refuse",
+      "id": "run-shell-output-in-copy-mode",
+      "name": "run-shell output capture",
+      "releases": [
+        "3.3a",
+        "3.4"
+      ],
+      "summary": "tmux 3.3 through 3.4 send run-shell output to a pane's copy-mode buffer and exit zero; libtmux refuses it."
+    },
+    {
+      "apis": [
+        "pane.Pane.break_out"
+      ],
+      "commands": [
+        {
+          "command": "break-pane"
+        }
+      ],
+      "handling": "refuse",
+      "id": "break-pane-misnames-windows",
+      "name": "break-pane window naming",
+      "releases": [
+        "3.7"
+      ],
+      "summary": "break-pane gets the new window wrong on exactly tmux 3.7; libtmux refuses it."
+    },
+    {
+      "apis": [
+        "command.Command",
+        "plan.Plan.run"
+      ],
+      "commands": [
+        {
+          "command": "split-window",
+          "flags": [
+            "-p"
+          ]
+        }
+      ],
+      "handling": "refuse",
+      "id": "split-window-percent-size",
+      "name": "split-window -p",
+      "releases": [
+        "3.4"
+      ],
+      "summary": "split-window -p is broken on tmux 3.4; use -l N%."
+    },
+    {
+      "apis": [
+        "server.Server.new_session",
+        "session.Session.new_window",
+        "session.Session.rename",
+        "window.Window.rename"
+      ],
+      "commands": [
+        {
+          "command": "new-session",
+          "flags": [
+            "-s"
+          ]
+        },
+        {
+          "command": "new-window",
+          "flags": [
+            "-n"
+          ]
+        },
+        {
+          "command": "rename-session"
+        },
+        {
+          "command": "rename-window"
+        }
+      ],
+      "handling": "refuse",
+      "id": "name-separators-rejected",
+      "name": "Colon and dot in names",
+      "releases": [
+        "3.7"
+      ],
+      "summary": "tmux 3.7 rejects ':' and '.' in session and window names after partly running."
+    }
+  ]
+}

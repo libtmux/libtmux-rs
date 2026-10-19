@@ -1,14 +1,13 @@
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt as _;
 
-use crate::{Error, ReleaseSuffix, ReleaseVersion, TmuxVersion};
+use crate::{Error, ReleaseVersion, TmuxVersion};
 
-const SAFE_NAMED_BUFFERS: ReleaseVersion = crate::since::NAMED_BUFFER_IDENTITY;
-const BREAK_BROKEN: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
-const BREAK_FIXED: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::PATCH_A);
-const NAME_CHARACTERS_BROKEN: ReleaseVersion = BREAK_BROKEN;
-const NAME_CHARACTERS_FIXED: ReleaseVersion = BREAK_FIXED;
-const LAYOUT_ERRORS_FIXED: ReleaseVersion = ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
+use crate::internal::support::capabilities::{
+    BREAK_PANE_MISNAMES_WINDOWS, BUFFER_DELETE_NAMED, BUFFER_RENAME, CAPTURE_LINE_FLAGS,
+    CAPTURE_TRIM_BLANK_CELLS, CONTROL_PANE_OFF, LAYOUT_WITHOUT_CHECKSUM, NAME_SEPARATORS_REJECTED,
+    SPLIT_WINDOW_PERCENT_SIZE,
+};
 
 struct Arguments<'a, T> {
     flags: Vec<(u8, Option<&'a [u8]>)>,
@@ -22,27 +21,22 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
     let name = name.as_ref().as_bytes();
     if native(name, b"delete-buffer", b"deleteb", 3) {
         if flags(arguments, b"b").iter().any(|(flag, _)| *flag == b'b') {
-            version.require("exact named-buffer deletion", SAFE_NAMED_BUFFERS)?;
+            version.require("exact named-buffer deletion", BUFFER_DELETE_NAMED.since)?;
         }
     } else if native(name, b"set-buffer", b"setb", 5) {
         let flags = flags(arguments, b"bnt");
         if flags.iter().any(|(flag, _)| *flag == b'b')
             && flags.iter().any(|(flag, _)| *flag == b'n')
         {
-            version.require("exact named-buffer rename", SAFE_NAMED_BUFFERS)?;
+            version.require("exact named-buffer rename", BUFFER_RENAME.since)?;
         }
     } else if native(name, b"break-pane", b"breakp", 2) {
-        if version
-            .behavior_release()
-            .is_some_and(|release| release >= BREAK_BROKEN && release < BREAK_FIXED)
-        {
-            return Err(Error::CapabilityDefective {
-                capability: "break-pane",
-                found: version.clone(),
-                broken_in: BREAK_BROKEN,
-                fixed_in: BREAK_FIXED,
-            });
-        }
+        refuse_interval(
+            version,
+            "break-pane",
+            BREAK_PANE_MISNAMES_WINDOWS.broken_in,
+            BREAK_PANE_MISNAMES_WINDOWS.fixed_in,
+        )?;
     } else if native(name, b"split-window", b"splitw", 2) {
         if flags(arguments, b"ceFlpt")
             .iter()
@@ -51,8 +45,8 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
             refuse_interval(
                 version,
                 "split-window -p",
-                ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL),
-                ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
+                SPLIT_WINDOW_PERCENT_SIZE.broken_in,
+                SPLIT_WINDOW_PERCENT_SIZE.fixed_in,
             )?;
         }
     } else if native(name, b"new-session", b"new", 3) {
@@ -71,7 +65,7 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
     } else if native(name, b"select-layout", b"selectl", 8) {
         if version
             .behavior_release()
-            .is_some_and(|release| release < LAYOUT_ERRORS_FIXED)
+            .is_some_and(|release| release < LAYOUT_WITHOUT_CHECKSUM.since)
         {
             let Arguments { flags, positional } = scan(arguments, b"t");
             if !flags.iter().any(|(flag, _)| b"Enp".contains(flag)) {
@@ -94,16 +88,16 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
         if flags(arguments, b"ABCFft").iter().any(|(flag, value)| {
             *flag == b'A' && value.is_some_and(|value| value.ends_with(b":off"))
         }) {
-            version.require("refresh-client pane off", crate::since::CONTROL_PANE_OFF)?;
+            version.require("refresh-client pane off", CONTROL_PANE_OFF.since)?;
         }
     } else if native(name, b"capture-pane", b"capturep", 2) {
         for (flag, _) in flags(arguments, b"bESt") {
             match flag {
                 b'T' => {
-                    version.require("capture-pane -T", crate::since::CAPTURE_TRIM_BLANK_CELLS)?;
+                    version.require("capture-pane -T", CAPTURE_TRIM_BLANK_CELLS.since)?;
                 }
                 b'F' => {
-                    version.require("capture-pane line flags", crate::since::CAPTURE_LINE_FLAGS)?;
+                    version.require("capture-pane line flags", CAPTURE_LINE_FLAGS.since)?;
                 }
                 _ => {}
             }
@@ -135,8 +129,8 @@ fn refuse_name_bytes(version: &TmuxVersion, name: &[u8]) -> Result<(), Error> {
         refuse_interval(
             version,
             "session or window name containing ':' or '.'",
-            NAME_CHARACTERS_BROKEN,
-            NAME_CHARACTERS_FIXED,
+            NAME_SEPARATORS_REJECTED.broken_in,
+            NAME_SEPARATORS_REJECTED.fixed_in,
         )?;
     }
     Ok(())

@@ -14,12 +14,13 @@ use crate::internal::listing;
 #[cfg(feature = "control-mode")]
 use crate::internal::process::PersistentChild;
 use crate::internal::scoped;
+use crate::internal::support::capabilities::RUN_SHELL_OUTPUT_IN_COPY_MODE;
 use crate::pane::Pane;
 use crate::session::Session;
 use crate::{
     Command, CommandChain, CommandResult, EngineCapabilities, Error, ListingDecodeError,
-    ReleaseSuffix, ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
-    TmuxArg, TmuxVersion,
+    ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, TmuxArg,
+    TmuxVersion,
 };
 
 mod builder;
@@ -1606,8 +1607,8 @@ impl Server {
                 Command::new("run-shell")
                     .refusing_interval(
                         "run-shell output",
-                        ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL),
-                        ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
+                        RUN_SHELL_OUTPUT_IN_COPY_MODE.broken_in,
+                        RUN_SHELL_OUTPUT_IN_COPY_MODE.fixed_in,
                     )
                     .arg("--")
                     .sensitive_arg(command.into()),
