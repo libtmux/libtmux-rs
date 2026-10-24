@@ -345,10 +345,11 @@ impl TmuxTools {
         description = "Wait until a pane writes matching text. On tmux 3.7 or newer it reads the \
                        pane's live output stream, so text that scrolls past between checks is \
                        still seen, and the returned text is that raw stream, not the rendered \
-                       screen: a line redrawn in place repeats. Below 3.7 it polls the visible screen about every 120 ms \
-                       and misses text that appears and scrolls off between two reads. \
-                       capture_pane shows the screen. Prefer run_shell_command for commands \
-                       you are sending yourself: it reports an exit status instead of guessing from output. Use this for output you did \
+                       screen: a line redrawn in place repeats. Below 3.7 it polls the \
+                       visible screen about every 120 ms and misses text that appears and \
+                       scrolls off between two reads. capture_pane shows the screen. Prefer \
+                       run_shell_command for commands you are sending yourself: it reports an \
+                       exit status instead of guessing from output. Use this for output you did \
                        not author, such as a server logging that it is ready. A line this server \
                        itself types and submits -- with send_keys, paste_text, or \
                        run_shell_command's own dispatch -- is discounted from a match for a \
