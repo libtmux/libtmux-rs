@@ -683,9 +683,9 @@ README][workspace-agent] has the two commands.
 - **Alpha.** Any release may change the tool surface. Pin an exact version.
 - **tmux 3.3a or newer**, on `PATH`.
 - **Rust 1.88 to build.** The libraries under it build on 1.85.
-- **Linux, including WSL.** CI runs the workspace's tests on Linux. On macOS,
-  CI runs them against Homebrew's current tmux on pushes to `master` and manual
-  runs, and not on pull requests.
+- **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS is
+  supported on a best-effort basis, and CI coverage for it is highly limited:
+  CI does not run the tests there.
 - **Windows.** Native Windows is unsupported because tmux is unavailable
   there.
 
