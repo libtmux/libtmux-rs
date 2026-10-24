@@ -80,12 +80,14 @@ trusted too. The frame does not claim to resist a hostile mutated shell.
 
 ## Waiting for text
 
-`wait_for_text` reads the same stream rather than polling `capture-pane`. That
-removes the two failure modes polling has: output that scrolls past between
-polls is still seen, and there is no grid anchor for tmux to invalidate when
-`history-limit` trims. A call accepts at most 32 patterns per list, 4,096 bytes
-per pattern, and 16 KiB across each compiled set. Rust's regex engine gives a
-linear-time bound, and the caller's deadline is capped at 600 seconds.
+On tmux 3.7 or newer, `wait_for_text` reads the same stream rather than
+polling `capture-pane`. That removes the two failure modes polling has: output
+that scrolls past between polls is still seen, and there is no grid anchor for
+tmux to invalidate when `history-limit` trims. Below 3.7 it polls the visible
+screen and keeps both failure modes. A call accepts at most 32 patterns per
+list, 4,096 bytes per pattern, and 16 KiB across each compiled set. Rust's
+regex engine gives a linear-time bound, and the caller's deadline is capped at
+600 seconds.
 
 The trade is real and worth stating: a stream is what programs wrote, not what
 the screen shows. Escape sequences are stripped before matching, but a
