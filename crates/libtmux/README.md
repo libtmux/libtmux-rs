@@ -344,7 +344,10 @@ deadline still returns successfully, so [`PaneWait`] is the answer.
 - **It reads the scrollback with wrapped lines joined,** so output that
   scrolled away is still found and a needle spanning a wrap still matches.
 - **It answers [`PaneWait::Dead`]** when the pane's process ends, rather than
-  holding the deadline.
+  holding the deadline. The answer carries no text, and a pane whose process
+  has ended is destroyed unless `remain-on-exit` is on, so there is usually
+  nothing left to capture. Set `remain-on-exit` on the pane if you need its
+  last output, then call [`Pane::capture`] after the `Dead` answer.
 
 Polling costs a tmux process per tick, and a tick is 120ms, so a wait stays
 under ten dispatches a second. Every command is also bounded by the server's
