@@ -793,8 +793,8 @@ pane writes the loop itself. [`Pane::wait_for_text`] and
 
 ## Packages
 
-Four crates are published from this repository. Each header links to the
-crate's directory, where its own README starts.
+Each crate published from this repository has a header linking to its
+directory, where its own README starts.
 
 ### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux)
 

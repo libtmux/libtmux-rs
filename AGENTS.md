@@ -9,7 +9,7 @@ was asked for.
 
 ## What is here
 
-One Cargo workspace, four crates, all published:
+One Cargo workspace; every crate in it is published:
 
 | Crate | What it is |
 | --- | --- |
