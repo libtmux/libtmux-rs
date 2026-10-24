@@ -220,13 +220,17 @@ mod tests {
     /// The guard checks the command it is given and nothing nested in it, as
     /// the documentation says. This pins that limit: a refused command
     /// reaches the daemon when it sits inside `if-shell` or `run-shell -C`.
+    /// The nested forms are ones tmux accepts, and the direct spelling is
+    /// the control that stays refused.
     #[test]
     fn commands_nested_in_another_command_are_not_inspected() {
         assert!(require(&["break-pane"], &version("3.7")).is_err());
+        assert!(require(&["break-pane", "-d"], &version("3.7")).is_err());
+        assert!(require(&["break-pane", "-d", "-n", "x"], &version("3.7")).is_err());
         for nested in [
             &["if-shell", "true", "break-pane"][..],
             &["run-shell", "-C", "break-pane"],
-            &["if-shell", "-F", "1", "{ break-pane }"],
+            &["if-shell", "-F", "1", "break-pane -d"],
         ] {
             assert!(require(nested, &version("3.7")).is_ok(), "{nested:?}");
         }
