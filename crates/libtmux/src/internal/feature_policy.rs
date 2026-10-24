@@ -5,8 +5,8 @@ use crate::{Error, ReleaseVersion, TmuxVersion};
 
 use crate::internal::support::capabilities::{
     BREAK_PANE_MISNAMES_WINDOWS, BUFFER_DELETE_NAMED, BUFFER_RENAME, CAPTURE_LINE_FLAGS,
-    CAPTURE_TRIM_BLANK_CELLS, CONTROL_PANE_OFF, LAYOUT_WITHOUT_CHECKSUM, NAME_SEPARATORS_REJECTED,
-    SPLIT_WINDOW_PERCENT_SIZE,
+    CAPTURE_TRIM_BLANK_CELLS, CLIPBOARD_QUERY, CONTROL_PANE_OFF, LAYOUT_WITHOUT_CHECKSUM,
+    NAME_SEPARATORS_REJECTED, SPLIT_WINDOW_PERCENT_SIZE,
 };
 
 struct Arguments<'a, T> {
@@ -85,10 +85,14 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
             }
         }
     } else if native(name, b"refresh-client", b"refresh", 3) {
-        if flags(arguments, b"ABCFft").iter().any(|(flag, value)| {
+        let found = flags(arguments, b"ABCFft");
+        if found.iter().any(|(flag, value)| {
             *flag == b'A' && value.is_some_and(|value| value.ends_with(b":off"))
         }) {
             version.require("refresh-client pane off", CONTROL_PANE_OFF.since)?;
+        }
+        if found.iter().any(|(flag, _)| *flag == b'l') {
+            version.require("refresh-client -l", CLIPBOARD_QUERY.since)?;
         }
     } else if native(name, b"capture-pane", b"capturep", 2) {
         for (flag, _) in flags(arguments, b"bESt") {
@@ -225,6 +229,37 @@ mod tests {
             &["if-shell", "-F", "1", "{ break-pane }"],
         ] {
             assert!(require(nested, &version("3.7")).is_ok(), "{nested:?}");
+        }
+    }
+
+    /// `-l` may lead the flags, follow a valued flag or share a cluster;
+    /// every spelling tmux resolves to refresh-client is checked.
+    #[test]
+    fn clipboard_query_is_refused_below_3_4() {
+        let commands: [&[&str]; 5] = [
+            &["refresh-client", "-l"],
+            &["refresh", "-l"],
+            &["refresh-c", "-t", "/dev/pts/1", "-l"],
+            &["refresh-client", "-Sl"],
+            &["refresh-client", "-l%1"],
+        ];
+        for command in commands {
+            assert!(
+                require(command, &version("3.3a")).is_err(),
+                "{command:?} on 3.3a"
+            );
+            for raw in ["3.4", "3.5a", "3.7c", "3.8", "next-3.9"] {
+                assert!(
+                    require(command, &version(raw)).is_ok(),
+                    "{command:?} on {raw}"
+                );
+            }
+        }
+        for command in [
+            &["refresh-client", "-S"][..],
+            &["refresh-client", "-t", "-l"],
+        ] {
+            assert!(require(command, &version("3.3a")).is_ok(), "{command:?}");
         }
     }
 

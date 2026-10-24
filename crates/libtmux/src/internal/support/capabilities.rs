@@ -214,6 +214,17 @@ pub(crate) const PANE_BORDER_STYLE_PER_PANE: Capability = Capability {
     commands: &[("set-option", &["-p"])],
 };
 
+pub(crate) const CLIPBOARD_QUERY: Capability = Capability {
+    id: "clipboard-query",
+    name: "Clipboard query",
+    summary: "Ask an attached client's terminal for its clipboard with refresh-client -l.",
+    since: since::CLIPBOARD_QUERY,
+    handling: Handling::Refuse,
+    error: UNSUPPORTED,
+    apis: COMMAND_PATHS,
+    commands: &[("refresh-client", &["-l"])],
+};
+
 pub(crate) const CAPABILITIES: &[&Capability] = &[
     &CONTROL_MODE,
     &CONTROL_PANE_OFF,
@@ -226,6 +237,7 @@ pub(crate) const CAPABILITIES: &[&Capability] = &[
     &CAPTURE_LINE_FLAGS,
     &LIST_KEYS_FORMAT,
     &PANE_BORDER_STYLE_PER_PANE,
+    &CLIPBOARD_QUERY,
 ];
 
 pub(crate) const BREAK_PANE_MISNAMES_WINDOWS: Workaround = Workaround {

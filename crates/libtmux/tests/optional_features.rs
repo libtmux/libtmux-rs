@@ -345,6 +345,42 @@ async fn real_tmux_compat_optional_literal_refresh_client_pane_off_refuses_befor
     assert!(control.0, "pane on leaves the chain running");
 }
 
+/// With an attached client whose terminal is `xterm-256color`, 3.3a stops on
+/// `refresh-client -l`. The refusal comes before dispatch, so it holds with or
+/// without a client, and nothing earlier in the chain runs.
+#[tokio::test]
+async fn real_tmux_compat_optional_literal_clipboard_query_refuses_before_a_prior_effect() {
+    let Some(minimum) = binary("LIBTMUX_TEST_MINIMUM_TMUX") else {
+        return;
+    };
+    let guard = TestServer::builder()
+        .tmux_executable(minimum)
+        .start()
+        .await
+        .expect("3.3a starts");
+    let server = guard.server();
+    server.new_session("keeper").await.expect("session");
+    let mut refused = Vec::new();
+    for name in ["refresh-client", "refresh", "refresh-c"] {
+        refused.push((
+            name,
+            chain_marker(server, Command::new(name).arg("-l")).await,
+        ));
+    }
+    let control = chain_marker(server, Command::new("refresh-client").arg("-S")).await;
+    let live = server.format(None, "#{pid}").await;
+    guard.shutdown().await.expect("fixture closes");
+    for (name, (earlier_effect, result)) in refused {
+        assert!(!earlier_effect, "{name} -l: a prior batch mutation ran");
+        assert!(
+            matches!(result, Err(Error::UnsupportedCapability { .. })),
+            "{name} -l refuses before dispatch: {result:?}"
+        );
+    }
+    assert!(control.0, "refresh-client -S leaves the chain running");
+    assert!(live.is_ok(), "the daemon stayed up: {live:?}");
+}
+
 #[tokio::test]
 async fn real_tmux_compat_optional_named_buffer_operations_refuse_before_collateral_effects() {
     let Some(minimum) = binary("LIBTMUX_TEST_MINIMUM_TMUX") else {

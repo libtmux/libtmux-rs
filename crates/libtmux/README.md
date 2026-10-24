@@ -128,6 +128,7 @@ Optional operations have narrower daemon requirements:
 | Literal `split-window -p` | Refused on 3.4; typed percentages use `-l N%` |
 | Literal `select-layout` with a layout operand | On 3.3a, a unique preset or standard serialized header; unsafe operands refuse |
 | Capture flags `-T` / `-F` | 3.4 / 3.7 or newer |
+| Literal `refresh-client -l` (clipboard query) | 3.4 or newer; on 3.3a it can stop the server |
 
 Managed control acquisition accepts a daemon ranking at or above 3.7 final,
 including `3.8-rc2` and `next-3.8`; `next-3.7` and `3.7-rc*` rank below it and

@@ -10,6 +10,7 @@ is shaped the way it is.
 - [tmux merges the server and session environments only when it starts a process](#tmux-merges-the-server-and-session-environments-only-when-it-starts-a-process)
 - [tmux 3.3 through 3.4 send `run-shell` output to a pane](#tmux-33-through-34-send-run-shell-output-to-a-pane)
 - [Muting a control-mode pane kills the server before tmux 3.7](#muting-a-control-mode-pane-kills-the-server-before-tmux-37)
+- [Asking for the clipboard kills tmux 3.3a](#asking-for-the-clipboard-kills-tmux-33a)
 - [A one-binding key listing goes to the message log on tmux 3.7 through 3.7c](#a-one-binding-key-listing-goes-to-the-message-log-on-tmux-37-through-37c)
 - [tmux cannot withdraw a queued `wait-for` client](#tmux-cannot-withdraw-a-queued-wait-for-client)
 - [Poll loops and deadlines that made tests flaky under load](#poll-loops-and-deadlines-that-made-tests-flaky-under-load)
@@ -151,6 +152,27 @@ dead server the same way it reports a refused command, so the assertion blamed
 the arguments. `TestServer::daemon_state` was added for this: a test cannot
 tell the two apart from the reply, but the fixture is the daemon's parent and
 can.
+
+## Asking for the clipboard kills tmux 3.3a
+
+`refresh-client -l` asks an attached client's terminal for its clipboard. On
+3.3a, with a client attached from an `xterm-256color` or `tmux-256color`
+terminal, the command never answers: the caller reads `server exited
+unexpectedly` and the server is gone. The same request with `screen` or `vt100`
+as the terminal leaves 3.3a up, and 3.4, 3.5a, 3.6b, 3.7c and 3.8 answer it
+from an `xterm-256color` terminal. 3.2a and 3.3, below the supported floor,
+stop the same way. With no client attached the command only reports that there
+is no current client, so the defect needs a real terminal to show.
+
+The crate has no typed clipboard request, so the guard sits on the raw path: a
+command whose name tmux resolves to `refresh-client` and that carries `-l` is
+refused below `since::CLIPBOARD_QUERY` before anything in its batch runs. The
+registry entry is `clipboard-query`.
+
+The range was measured by attaching a client through a pseudo-terminal and
+sending the command from a second process. `cmd_refresh_client_clipboard` is
+the same in 3.3 and 3.5a, so the fault lies in the terminal query it starts,
+not in the command; the exact cause was not traced.
 
 ## A one-binding key listing goes to the message log on tmux 3.7 through 3.7c
 

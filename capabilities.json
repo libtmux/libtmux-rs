@@ -204,6 +204,26 @@
       "name": "Per-pane border styles",
       "since": "3.7",
       "summary": "Set pane-border-style and pane-active-border-style on one pane."
+    },
+    {
+      "apis": [
+        "command.Command",
+        "plan.Plan.run"
+      ],
+      "commands": [
+        {
+          "command": "refresh-client",
+          "flags": [
+            "-l"
+          ]
+        }
+      ],
+      "error": "error.Error.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "clipboard-query",
+      "name": "Clipboard query",
+      "since": "3.4",
+      "summary": "Ask an attached client's terminal for its clipboard with refresh-client -l."
     }
   ],
   "floor": {

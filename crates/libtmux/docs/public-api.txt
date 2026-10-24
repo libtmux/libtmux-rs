@@ -236,6 +236,7 @@ constant libtmux::option_names::XTERM_KEYS: &str
 constant libtmux::since::CAPTURE_LINE_FLAGS: libtmux::ReleaseVersion
 constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS: libtmux::ReleaseVersion
 constant libtmux::since::CLIENTS_HIDE_STOPPED: libtmux::ReleaseVersion
+constant libtmux::since::CLIPBOARD_QUERY: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_ACQUISITION: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
 constant libtmux::since::JSON_LAYOUTS: libtmux::ReleaseVersion

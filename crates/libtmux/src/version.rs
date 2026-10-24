@@ -778,6 +778,15 @@ pub mod since {
     pub const NAMED_BUFFER_IDENTITY: ReleaseVersion =
         ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
 
+    /// `refresh-client -l`, which asks an attached client's terminal for its
+    /// clipboard.
+    ///
+    /// On 3.3a the request stops the server when the client's terminal is
+    /// `xterm-256color` or `tmux-256color`, and every later command reports
+    /// `server exited unexpectedly`; 3.4 answers it. Raw commands carrying
+    /// `-l` are refused below this release.
+    pub const CLIPBOARD_QUERY: ReleaseVersion = ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
+
     /// Managed control acquisition, decided before `-C`.
     ///
     /// Any build ranking at or above 3.7 final is eligible, including

@@ -21,7 +21,9 @@ command in the same flat chain.
 
 Exact tmux 3.7 refuses `break-pane`; upgrade that daemon to 3.7a or newer.
 On 3.4, replace a literal `split-window -p N` with `split-window -l N%`.
-Typed percentage splits already use that spelling. On 3.3a, use a unique
+Typed percentage splits already use that spelling. A literal
+`refresh-client -l` is refused on 3.3a; upgrade to 3.4 to ask a terminal for
+its clipboard. On 3.3a, use a unique
 layout preset, a serialized layout with a four-hex header and nonempty body,
 or the validated `Window::select_layout` API. The guard checks the command
 it is given. It does not look inside tmux command strings nested in another
