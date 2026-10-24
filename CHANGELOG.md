@@ -22,6 +22,12 @@ full.
   best-effort basis, and the release workflow still builds and attaches the
   macOS binaries. (#87)
 
+### Security
+
+- The release binaries of `tmux-mcp` and `tmux-workspace` build against tokio
+  1.54.1, which fixes RUSTSEC-2026-0386 in tokio's `AsyncFd` constructors.
+  (#92)
+
 ## 0.1.0-alpha.16 - 2026-10-18
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.16;
