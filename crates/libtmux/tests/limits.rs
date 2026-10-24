@@ -8,6 +8,9 @@
 #![cfg(feature = "test-support")]
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+#[path = "support/versions.rs"]
+mod versions;
+
 use std::time::{Duration, Instant};
 
 use libtmux::test::TestServer;
@@ -173,6 +176,9 @@ async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
     use libtmux::control::ControlMode;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("frames").await.expect("session");
 
@@ -226,6 +232,9 @@ async fn persistent_clients_have_their_own_admission_limit() {
         .start()
         .await
         .expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("persistent-admission")

@@ -18,7 +18,7 @@ set -euo pipefail
 
 readonly dev_root=/tmp/libtmux-rs-dev
 
-# crate | example | features | arguments | stdin driver | must print
+# crate | example | features | arguments | stdin driver | must print | needs control
 #
 # Blank lines and `#` comments are ignored; every other row must name an
 # example that exists, and every example must have a row.
@@ -48,15 +48,15 @@ libtmux  | inspect  |                                               |    |      
 libtmux  | find     | query                                         | sh |               | in window
 libtmux  | scratch  | test-support                                  |    |               | hello from tmux
 libtmux  | sweep    | test-support                                  |    |               | fixture
-libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket
+libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket | control
 libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
 libtmux  | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
 libtmux  | recover  | test-support                                  |    |               | is_object_gone: false
 tmux-mcp | budget   |                                               |    |               | of it output schemas
 tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
-tmux-mcp | run_and_wait |                                           |    |               | waited: Matched
-tmux-mcp | follow   |                                               |    |               | saw 200 of 200 lines, missed: false
+tmux-mcp | run_and_wait |                                           |    |               | waited: Matched | control
+tmux-mcp | follow   |                                               |    |               | saw 200 of 200 lines, missed: false | control
 tmux-mcp | refused  |                                               |    |               | send_keys refused: Mcp error: -32602: tool send_keys is not offered
 tmux-workspace | build |                                              |    |               | built editor: 2 panes
 tmux-workspace | strict |                                             |    |               | strict: refused: workspace configuration is invalid at line 8
@@ -122,6 +122,21 @@ tmux -S "$socket" new-window -d -n second sh
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
 export TMUX="$socket,$server_pid,0"
 
+# Positive control examples need a daemon ranking at or above 3.7 final, the
+# rule `since::CONTROL_ACQUISITION` states: `3.7` and later numbered releases,
+# plus any release candidate or `next-` build of a later minor, such as
+# `3.8-rc2` or `next-3.9`. `next-3.7` and `3.7-rc*` rank below 3.7 final.
+control_qualified=$(tmux -S "$socket" display-message -p '#{version}' | python3 -c '
+import re, sys
+match = re.fullmatch(r"(next-)?([0-9]+)\.([0-9]+)([a-z]|-rc[0-9]*)?", sys.stdin.read().strip())
+eligible = False
+if match:
+    development, major, minor, suffix = match.groups()
+    release = (int(major), int(minor))
+    eligible = release > (3, 7) or (release == (3, 7) and not development and not (suffix or "").startswith("-rc"))
+print("yes" if eligible else "no")
+')
+
 # Whatever nobody is still using. A directory belonging to a run in progress is
 # not a leak even though it is new, and one belonging to a run that is gone is
 # a leak even though it is old, so this asks who owns a thing rather than what
@@ -178,15 +193,19 @@ mcp_handshake() {
 # A driven example measures how long its server takes to answer, and a cold
 # build inside that window reads as a server that never did.
 printf 'building %s examples\n' "$(rows | wc -l | tr -d ' ')"
-while IFS='|' read -r crate name features args driver expect; do
+while IFS='|' read -r crate name features args driver expect requirement; do
     opts=(--quiet --manifest-path "crates/$crate/Cargo.toml" --example "$name")
     if [ -n "$features" ]; then opts+=(--features "$features"); fi
     cargo build "${opts[@]}"
 done < <(rows)
 
 failures=()
-while IFS='|' read -r crate name features args driver expect; do
+while IFS='|' read -r crate name features args driver expect requirement; do
     printf '\n=== example %s/%s\n' "$crate" "$name"
+    if [[ "$requirement" == "control" && "$control_qualified" != "yes" ]]; then
+        printf 'positive control example requires a daemon ranking at or above tmux 3.7\n'
+        continue
+    fi
     opts=(--quiet --manifest-path "crates/$crate/Cargo.toml" --example "$name")
     if [ -n "$features" ]; then opts+=(--features "$features"); fi
     # shellcheck disable=SC2086 # arguments are a field, and are meant to split
@@ -233,6 +252,6 @@ if [ -n "$leaked" ]; then
 fi
 
 if [ "$status" -eq 0 ]; then
-    printf '\nevery example ran and left nothing behind\n'
+    printf '\nevery eligible example ran and left nothing behind\n'
 fi
 exit "$status"

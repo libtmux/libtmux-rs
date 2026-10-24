@@ -10,6 +10,7 @@ is shaped the way it is.
 - [tmux merges the server and session environments only when it starts a process](#tmux-merges-the-server-and-session-environments-only-when-it-starts-a-process)
 - [tmux 3.3 through 3.4 send `run-shell` output to a pane](#tmux-33-through-34-send-run-shell-output-to-a-pane)
 - [Muting a control-mode pane kills the server before tmux 3.7](#muting-a-control-mode-pane-kills-the-server-before-tmux-37)
+- [Asking for the clipboard kills tmux 3.3a](#asking-for-the-clipboard-kills-tmux-33a)
 - [A one-binding key listing goes to the message log on tmux 3.7 through 3.7c](#a-one-binding-key-listing-goes-to-the-message-log-on-tmux-37-through-37c)
 - [tmux cannot withdraw a queued `wait-for` client](#tmux-cannot-withdraw-a-queued-wait-for-client)
 - [Poll loops and deadlines that made tests flaky under load](#poll-loops-and-deadlines-that-made-tests-flaky-under-load)
@@ -151,6 +152,27 @@ dead server the same way it reports a refused command, so the assertion blamed
 the arguments. `TestServer::daemon_state` was added for this: a test cannot
 tell the two apart from the reply, but the fixture is the daemon's parent and
 can.
+
+## Asking for the clipboard kills tmux 3.3a
+
+`refresh-client -l` asks an attached client's terminal for its clipboard. On
+3.3a, with a client attached from an `xterm-256color` or `tmux-256color`
+terminal, the command never answers: the caller reads `server exited
+unexpectedly` and the server is gone. The same request with `screen` or `vt100`
+as the terminal leaves 3.3a up, and 3.4, 3.5a, 3.6b, 3.7c and 3.8 answer it
+from an `xterm-256color` terminal. 3.2a and 3.3, below the supported floor,
+stop the same way. With no client attached the command only reports that there
+is no current client, so the defect needs a real terminal to show.
+
+The crate has no typed clipboard request, so the guard sits on the raw path: a
+command whose name tmux resolves to `refresh-client` and that carries `-l` is
+refused below `since::CLIPBOARD_QUERY` before anything in its batch runs. The
+registry entry is `clipboard-query`.
+
+The range was measured by attaching a client through a pseudo-terminal and
+sending the command from a second process. `cmd_refresh_client_clipboard` is
+the same in 3.3 and 3.5a, so the fault lies in the terminal query it starts,
+not in the command; the exact cause was not traced.
 
 ## A one-binding key listing goes to the message log on tmux 3.7 through 3.7c
 
@@ -553,13 +575,46 @@ default every sender starts from.
 
 ## Which tmux releases the lanes build
 
-The lanes build the final patch of each series: 3.2a, 3.5a, 3.6b and 3.7b,
-which are what a distribution ships and a user runs. 3.4 is built too: that
-series has no later patch, and 3.4 is one of the two releases that wrapped
-command output in `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH`.
+The lanes, and the tmux release each one builds, are defined in
+`scripts/test-tmux-format-compat.sh`. Each runs the workspace.
+Positive control fixtures require 3.7 or newer, while ordinary
+operations, codecs and
+polling still run on the older supported daemons. Separate 3.2a and raw 3.3
+lanes prove the core refusal boundary. An exact 3.7 lane proves the known
+`break-pane` refusal without treating that defect as a higher core minimum.
 
-`3.6` still appears in the source as a behaviour boundary, because the dialect
-restore landed in 3.6 itself. That says nothing about which build CI runs.
+`optional_features` pins two native buffer defects: 3.3a falls back to the top
+buffer when an explicit `-b` name is absent in `delete-buffer` or
+`set-buffer -n`. Both require 3.4. `paste-buffer -b ... -d` explicitly checks
+absence on 3.3a and remains available; managed staging requires safe abort
+cleanup before creating its buffer. The same target exercises exact 3.7
+`break-pane`, which can crash without a name and ignores an explicit name in
+the multi-pane branch, and 3.4's broken `split-window -p` interval. Typed
+percentage splits retain the portable `-l N%` lowering.
+
+tmux 3.3a leaves its layout error cause uninitialized when the serialized
+header cannot be read, then formats and frees that pointer. Upstream
+[f10854cf](https://github.com/tmux/tmux/commit/f10854cfc5e43f646b02b3031bfc4bc3f5f6c513)
+initializes it; 3.4 is the first release with the fix. Typed window calls and
+plans already validate layouts. Literal commands now reject unsafe operands
+before the whole flat batch: a unique preset is safe unless `-o` skips preset
+lookup, and a four-hex header followed by a comma and body reaches initialized
+native error paths. `-n`, `-p`, `-E` and operand-free calls keep their native
+behavior. This check does not establish that a serialized tree fits its target.
+
+`optional_control` replaces the original socket between preflight and `-C`.
+A version guard in the initial command queue is reached after control
+initialization; the private inode alias prevents the replacement from being
+acquired. The target also checks carrier lifetime, a native-valid long socket,
+cancellation and the shared acquisition deadline.
+
+Native client/daemon compatibility remains a separate boundary. On the pinned
+Linux builds, 3.3a, 3.4 and 3.5 clients exit before control registration against
+an exact 3.7 daemon, with stdin held open and no input sent. The same daemon
+PID/start time remains live after each plain or guarded attempt; 3.7d registers
+and exchanges commands. The mixed-client policy witness therefore uses
+3.7d against exact 3.7: its diagnostic executable version contains the
+`break-pane` fix, while the checked daemon still requires refusal.
 
 ## The macOS lane and what it found
 
@@ -839,8 +894,8 @@ not lost; a `#{pane_dead}` subscription, so a dead pane ends the wait instead
 of holding it to the deadline; and coalescing, because an unbatched burst is
 one notification per character.
 
-tmux supports that design on every release the lanes build. `%output` and
-`%subscription-changed` both arrive on 3.2a, 3.4, 3.5a, 3.6b, 3.7 and 3.7c,
+Historical native measurements received `%output` and
+`%subscription-changed` on 3.2a, 3.4, 3.5a, 3.6b, 3.7 and 3.7c,
 with no errors anywhere, and the `#{pane_dead}` half needs `refresh-client -B`,
 which landed in 3.2.
 

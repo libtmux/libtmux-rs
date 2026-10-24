@@ -1,6 +1,6 @@
 //! One workload, every execution mode, side by side.
 //!
-//! The same plan runs six ways. What changes is the price and what the run
+//! The same plan runs up to six ways. What changes is the price and what the run
 //! can prove; what does not change is the tmux state it leaves or the query
 //! that reads it back. Run it with:
 //!
@@ -12,6 +12,8 @@
 //! The `processes` column is counted, not asserted: every tmux the example
 //! starts goes through a wrapper that logs each start before it runs the real
 //! executable, and a row reports how many lines its run added.
+//! Pass `-- --baseline` to compare only the subprocess modes on every
+//! supported tmux release. Control rows otherwise require tmux 3.7.
 
 #![allow(clippy::expect_used, clippy::print_stdout, reason = "an example")]
 
@@ -213,10 +215,25 @@ enum Connection {
     Routed,
 }
 
-async fn run_control_mode(connection: Connection, name: &str) -> Row {
+async fn run_control_mode(connection: Connection, name: &str) -> Option<Row> {
     let witness = Witness::new();
     let guard = witness.server().start().await.expect("tmux starts");
     let server = guard.server();
+    let report = server
+        .format(None, "tmux #{version}")
+        .await
+        .expect("daemon release");
+    let mut report = report.as_bytes().to_vec();
+    report.push(b'\n');
+    let version = libtmux::TmuxVersion::parse_output(&report).expect("daemon release parses");
+    if !version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
+        println!(
+            "control rows require tmux {}",
+            libtmux::since::CONTROL_ACQUISITION
+        );
+        guard.shutdown().await.expect("fixture closes");
+        return None;
+    }
 
     // Control mode attaches to a session, so the plan cannot be the thing that
     // creates its own connection. One session is made first; the workload then
@@ -273,7 +290,7 @@ async fn run_control_mode(connection: Connection, name: &str) -> Row {
 
     events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux shuts down");
-    row
+    Some(row)
 }
 
 fn run_blocking(name: &str) -> Row {
@@ -291,9 +308,17 @@ async fn main() {
         run_subprocess("async/sequential", Planner::Sequential, "async-seq").await,
         run_subprocess("async/folded", Planner::Folding, "async-fold").await,
         run_subprocess("async/marked-fold", Planner::Marked, "async-marked").await,
-        run_control_mode(Connection::Streaming, "control").await,
-        run_control_mode(Connection::Routed, "routed").await,
     ];
+    if !std::env::args_os().any(|argument| argument == "--baseline") {
+        for (connection, name) in [
+            (Connection::Streaming, "control"),
+            (Connection::Routed, "routed"),
+        ] {
+            if let Some(row) = run_control_mode(connection, name).await {
+                rows.push(row);
+            }
+        }
+    }
     // The blocking runtime owns a reactor, so it cannot be built inside one.
     rows.insert(
         0,

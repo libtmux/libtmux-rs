@@ -256,17 +256,14 @@ async fn outside_tmux_attach_requires_terminal_before_scripts_or_session_mutatio
 }
 
 /// Inside tmux on the target server, an attached load needs no terminal at
-/// all: it switches the client that is already there. A control-mode client
-/// is the only kind that attaches without one, which is what makes the
-/// accepted context testable beside the refused ones.
+/// all: it switches the client that is already there. The fixture gives that
+/// client an owned terminal while the load itself has none.
 #[tokio::test]
 async fn inside_tmux_attach_switches_an_attached_client_without_a_terminal() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
-    let control = libtmux::control::ControlMode::attach(guard.server(), keeper.id())
-        .await
-        .unwrap();
+    let client = AttachedClient::new(&guard, keeper.id().as_ref());
     wait_for_client(guard.server(), keeper.id().as_ref()).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let marker = directory.path().join("before-script-ran");
@@ -295,7 +292,7 @@ async fn inside_tmux_attach_switches_an_attached_client_without_a_terminal() {
         .await
         .unwrap()
         .expect("inside tmux did not build the session");
-    drop(control);
+    drop(client);
     session.kill().await.unwrap();
     guard.shutdown().await.unwrap();
 }
@@ -381,9 +378,7 @@ async fn attach_accepts_matching_explicit_and_inherited_comma_socket_paths() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
-    let control = libtmux::control::ControlMode::attach(guard.server(), keeper.id())
-        .await
-        .unwrap();
+    let client = AttachedClient::new(&guard, keeper.id().as_ref());
     wait_for_client(guard.server(), keeper.id().as_ref()).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let alias = directory.path().join("socket,with,commas");
@@ -417,12 +412,57 @@ async fn attach_accepts_matching_explicit_and_inherited_comma_socket_paths() {
             .is_some(),
         "{stderr}"
     );
-    drop(control);
+    drop(client);
     guard.shutdown().await.unwrap();
 }
 
-/// Waits until tmux lists a client on the session, which attaching reports
-/// separately from registering it.
+/// A native attached client on an owned pseudo-terminal.
+struct AttachedClient(std::process::Child);
+
+impl AttachedClient {
+    fn new(guard: &libtmux::test::TestServer, session: &str) -> Self {
+        let child = Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/terminal_handoff.py"
+            ))
+            .arg("--hold")
+            .arg(guard.server().tmux_executable())
+            .arg("-N")
+            .arg("-u")
+            .arg("-S")
+            .arg(guard.socket_path())
+            .args(["attach-session", "-E", "-t", session])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .env("HOME", guard.socket_path().parent().unwrap())
+            .env("LC_ALL", "C.UTF-8")
+            .env("TERM", "xterm-256color")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        Self(child)
+    }
+}
+
+impl Drop for AttachedClient {
+    fn drop(&mut self) {
+        drop(self.0.stdin.take());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while self.0.try_wait().unwrap().is_none() {
+            if std::time::Instant::now() >= deadline {
+                self.0.kill().unwrap();
+                self.0.wait().unwrap();
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+/// Waits for session attachment after tmux registers its client.
 async fn wait_for_client(server: &libtmux::Server, session: &str) {
     for _ in 0..600 {
         let attached = server
@@ -745,7 +785,7 @@ async fn real_tmux_compat_layout_preflight_corpus_preserves_keeper() {
         .map(|pane| pane.id().clone())
         .collect::<Vec<_>>();
     let version = guard.server().capabilities().await.unwrap().tmux_version();
-    let key = if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+    let key = if version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS) {
         "3.7c"
     } else {
         "3.2a"
@@ -896,12 +936,7 @@ struct PromptDriver<'a> {
 
 impl PromptDriver<'_> {
     async fn ask(&self, load_args: &str, prompt_needle: &str, answer: char) -> libtmux::Pane {
-        // An attached load resolves the client it would switch before it
-        // builds anything, so the pane needs one; control mode is the only
-        // kind that attaches without a terminal of its own.
-        let control = libtmux::control::ControlMode::attach(self.guard.server(), self.keeper.id())
-            .await
-            .unwrap();
+        let client = AttachedClient::new(self.guard, self.keeper.id().as_ref());
         wait_for_client(self.guard.server(), self.keeper.id().as_ref()).await;
         let window = self
             .keeper
@@ -930,7 +965,7 @@ impl PromptDriver<'_> {
         )
         .await
         .unwrap();
-        drop(control);
+        drop(client);
         pane
     }
 }
@@ -4882,9 +4917,7 @@ async fn the_attach_handoff_carries_the_endpoint_flags() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("handoff-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
-    let control = libtmux::control::ControlMode::attach(guard.server(), keeper.id())
-        .await
-        .unwrap();
+    let client = AttachedClient::new(&guard, keeper.id().as_ref());
     wait_for_client(guard.server(), keeper.id().as_ref()).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let trace = directory.path().join("trace");
@@ -4934,7 +4967,7 @@ async fn the_attach_handoff_carries_the_endpoint_flags() {
     assert!(handoff.contains("<-f>"), "{handoff}");
     assert!(handoff.contains("<-N>"), "{handoff}");
     assert!(handoff.contains("<if-shell><-F>"), "{handoff}");
-    drop(control);
+    drop(client);
     guard.shutdown().await.unwrap();
 }
 

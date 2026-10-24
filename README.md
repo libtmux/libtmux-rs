@@ -208,7 +208,8 @@ a CLI, a config file, or an MCP tool call can carry one.
 ### [`Plan::run`]: the same work at different costs
 
 [Three switches], each a Cargo feature, none of them the default. This is the
-same workload under each, printed by `cargo run --example matrix --all-features`.
+baseline workload under each, printed by
+`cargo run --example matrix --all-features -- --baseline`.
 
 - Every column but `wall` is exact and checked against this block by
   `just example-tables`. The timings are one run on one developer machine.
@@ -216,20 +217,18 @@ same workload under each, printed by `cargo run --example matrix --all-features`
   each start.
 - `routed` is [`Plan::run`] on a [`Server::over_control_mode`] handle.
 
-<!-- example-output: matrix --all-features -->
+<!-- example-output: matrix --all-features -- --baseline -->
 
 ```text
 mode                     feature            dispatches processes      wall  attribution  query output
 ----------------------------------------------------------------------------------------------------------------------
 blocking/sequential      plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
 async/sequential         plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
-async/folded             plan                        3         4      9ms  merged       2 panes, 2 windows, 2 active
+async/folded             plan                        3         4     10ms  merged       2 panes, 2 windows, 2 active
 async/marked-fold        plan                        3         4     10ms  merged       2 panes, 2 windows, 2 active
-control-mode/streaming   plan,control-mode           6         3     10ms  per-command  2 panes, 2 windows, 2 active
-control-mode/routed      plan,control-mode           6         3      6ms  per-command  2 panes, 2 windows, 2 active
 
 every mode built the same thing: true
-dispatches ranged 3..6, processes ranged 3..7
+dispatches ranged 3..6, processes ranged 4..7
 
 the same failure, dispatched two ways:
   Sequential   1 dispatch(es) -> [Failed, Skipped]
@@ -243,7 +242,10 @@ The result is the same and the cost differs, and so does the *evidence*:
 - **[Folding]** a chain into one tmux invocation halves the dispatches. tmux
   reports one status for the group, so a failure cannot be blamed on a member,
   and attribution degrades to `unknown` rather than guessing.
-- **[Control mode]** keeps per-command evidence over a single process.
+- **[Control mode]** keeps per-command evidence over one persistent connection
+  after its version probes. Run the example without `-- --baseline` to include
+  control rows with a compatible client and a daemon ranking at 3.7 or
+  newer.
 
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
 has the behavior table, the how-to-turn-it-on table, and the named presets.

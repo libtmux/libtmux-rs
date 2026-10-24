@@ -1,5 +1,5 @@
-//! Every advertised tool is called against a real tmux and answers the schema
-//! it publishes.
+//! Every advertised tool is called against real tmux and returns its published
+//! result schema or a structured version refusal.
 //!
 //! The manifest tests next door check the DECLARED surface: names, toolsets,
 //! annotations, and that each schema is valid and closed. None of them invoke
@@ -18,11 +18,13 @@
 use std::collections::BTreeSet;
 
 use libtmux::test::TestServer;
-use rmcp::model::{CallToolRequestParams, Tool};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
 use serde_json::{Map, Value, json};
 use tmux_mcp::{Selection, TmuxTools};
+
+mod support;
 
 /// Tools deliberately not driven here, each with the reason it cannot be.
 ///
@@ -60,6 +62,27 @@ struct Target {
     session: String,
     window: String,
     pane: String,
+}
+
+impl Target {
+    async fn new(server: &libtmux::Server, tool: &str) -> Self {
+        let session_name = format!("surface-{tool}");
+        let session = server
+            .new_session(session_name.as_str())
+            .await
+            .expect("fixture session");
+        session
+            .new_window("second")
+            .await
+            .expect("fixture second window");
+        let panes = session.panes().await.expect("fixture panes");
+        let pane = panes.first().expect("a new session has a pane");
+        Self {
+            session: session_name,
+            window: pane.window_id().to_string(),
+            pane: pane.id().to_string(),
+        }
+    }
 }
 
 /// Produce a value for one required property from its schema, preferring a live
@@ -155,18 +178,32 @@ fn arguments_for(tool: &Tool, target: &Target) -> Map<String, Value> {
     for (key, value) in semantic_overrides(tool.name.as_ref(), target) {
         arguments.insert(key, value);
     }
-    // Anything that waits must not wait long: the sweep drives 45 tools.
     for bound in ["seconds", "timeout"] {
-        if arguments.contains_key(bound) {
+        if properties.get(bound).is_some() {
             arguments.insert(bound.to_owned(), json!(1));
         }
     }
     arguments
 }
 
+fn is_version_refusal(result: &CallToolResult) -> bool {
+    let content = serde_json::to_value(&result.content).expect("wire content");
+    let detail = content[0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+    result.is_error.unwrap_or(false)
+        && detail.is_some_and(|detail| {
+            detail["data"]["kind"] == "unsupported_version"
+                && detail["data"]["retryable"] == false
+                && detail["data"]["stale"] == false
+        })
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn every_advertised_tool_answers_the_schema_it_publishes() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let control = support::supports_control(guard.server()).await;
+    let staging = support::supports(guard.server(), &libtmux::since::NAMED_BUFFER_IDENTITY).await;
     let selection =
         Selection::parse(Some("inspect,manage,execute,teardown"), None, None).expect("selection");
     let offered = TmuxTools::builder(guard.server().clone())
@@ -198,33 +235,27 @@ async fn every_advertised_tool_answers_the_schema_it_publishes() {
             continue;
         }
 
-        // Its own session, so a destructive tool destroys only its own target.
-        let session_name = format!("surface-{name}");
-        let session = guard
-            .server()
-            .new_session(session_name.as_str())
-            .await
-            .expect("fixture session");
-        // Two windows: the tools that move or select by direction have nowhere
-        // to go on a session with one.
-        session
-            .new_window("second")
-            .await
-            .expect("fixture second window");
-        let panes = session.panes().await.expect("fixture panes");
-        let pane = panes.first().expect("a new session has a pane");
-        let target = Target {
-            session: session_name.clone(),
-            window: pane.window_id().to_string(),
-            pane: pane.id().to_string(),
-        };
+        let target = Target::new(guard.server(), &name).await;
 
         let arguments = arguments_for(tool, &target);
+        let restricted = match name.as_str() {
+            "capture_since" | "run_shell_command" => !control,
+            "paste_text" => !staging,
+            _ => false,
+        };
         let request = CallToolRequestParams::new(name.clone()).with_arguments(arguments.clone());
         match wire.client.call_tool(request).await {
             Err(error) => failures.push(format!("{name}: transport error: {error}")),
             Ok(result) => {
                 called.insert(name.clone());
+                if restricted {
+                    if !is_version_refusal(&result) {
+                        failures.push(format!(
+                            "{name}: expected a typed version refusal: {result:?}"
+                        ));
+                    }
+                    continue;
+                }
                 if result.is_error.unwrap_or(false) {
                     failures.push(format!(
                         "{name}: refused its own schema's arguments {}: {:?}",

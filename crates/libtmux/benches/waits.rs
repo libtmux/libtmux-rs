@@ -172,6 +172,14 @@ fn waits(criterion: &mut Criterion) {
 
     let fixture = runtime.block_on(build());
     let pane = &fixture.pane;
+    let report = runtime
+        .block_on(fixture.guard.server().format(None, "tmux #{version}"))
+        .expect("daemon release");
+    let mut report = report.as_bytes().to_vec();
+    report.push(b'\n');
+    let eligible = libtmux::TmuxVersion::parse_output(&report)
+        .expect("daemon release parses")
+        .has_behavior(&libtmux::since::CONTROL_ACQUISITION);
 
     let mut group = criterion.benchmark_group("marker");
     // Every sample dispatches a command into a real shell, so the default
@@ -198,20 +206,21 @@ fn waits(criterion: &mut Criterion) {
     // the pane it watches stops producing. Left open across the polled lanes
     // that turns them into timeouts rather than measurements. Attaching is
     // outside the accumulated span, so it costs wall-clock, not the number.
-    group.bench_function("streamed", |bench| {
-        bench
-            .to_async(&runtime)
-            .iter_custom(|iterations| async move {
-                let mut output = subscribe(pane).await;
-                let mut total = Duration::ZERO;
-                for _ in 0..iterations {
-                    total += streamed(pane, &mut output).await;
-                }
-                unsubscribe(output).await;
-                total
-            });
-    });
-
+    if eligible {
+        group.bench_function("streamed", |bench| {
+            bench
+                .to_async(&runtime)
+                .iter_custom(|iterations| async move {
+                    let mut output = subscribe(pane).await;
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iterations {
+                        total += streamed(pane, &mut output).await;
+                    }
+                    unsubscribe(output).await;
+                    total
+                });
+        });
+    }
     group.finish();
 
     let mut group = criterion.benchmark_group("flood");
@@ -235,24 +244,26 @@ fn waits(criterion: &mut Criterion) {
                 });
         });
 
-        group.bench_with_input(
-            BenchmarkId::new("streamed", lines),
-            &lines,
-            |bench, lines| {
-                let lines = *lines;
-                bench
-                    .to_async(&runtime)
-                    .iter_custom(move |iterations| async move {
-                        let mut output = subscribe(pane).await;
-                        let mut total = Duration::ZERO;
-                        for _ in 0..iterations {
-                            total += flooded_stream(pane, &mut output, lines).await;
-                        }
-                        unsubscribe(output).await;
-                        total
-                    });
-            },
-        );
+        if eligible {
+            group.bench_with_input(
+                BenchmarkId::new("streamed", lines),
+                &lines,
+                |bench, lines| {
+                    let lines = *lines;
+                    bench
+                        .to_async(&runtime)
+                        .iter_custom(move |iterations| async move {
+                            let mut output = subscribe(pane).await;
+                            let mut total = Duration::ZERO;
+                            for _ in 0..iterations {
+                                total += flooded_stream(pane, &mut output, lines).await;
+                            }
+                            unsubscribe(output).await;
+                            total
+                        });
+                },
+            );
+        }
     }
 
     group.finish();

@@ -353,10 +353,12 @@ impl TmuxTools {
                        run_shell_command's own dispatch -- is discounted from a match for a \
                        short time afterward, so waiting for text you just sent does not match \
                        its own echo; output that happens to repeat the same words still does. A \
-                       submitted line that wrapped across terminal rows when it was typed is not \
-                       discounted. A pattern still on the row being typed into, not yet \
+                       submitted line that wrapped across terminal rows is discounted as one line. \
+                       A pattern still on the row being typed into, not yet \
                        submitted, reports outcome pending instead of matched, and one already on \
-                       a completed row before this call attached reports present_at_entry. \
+                       a completed row before this call attached reports present_at_entry. A \
+                       pane or server that ends reports pane_closed; an observer stream that \
+                       drops while the pane lives reports stream_lost. \
                        Waiting owns an observer client until the wait ends. Each list accepts \
                        at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time \
                        regex engine.",
@@ -413,6 +415,7 @@ impl TmuxTools {
             reporter,
             "still watching for the pattern",
             exec::wait_for_text(
+                &self.server,
                 &target,
                 &wanted,
                 &stops,
@@ -716,6 +719,9 @@ mod tests {
             ("caller", "refusing to send input", "self_protection"),
         ] {
             let guard = TestServer::builder().start().await.expect("tmux starts");
+            let Some(guard) = crate::test_support::control_fixture(guard).await else {
+                return;
+            };
             let server = guard.server();
             let session = server
                 .new_session(format!("run-final-{transition}"))

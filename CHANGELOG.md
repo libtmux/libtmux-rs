@@ -16,11 +16,78 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `tmux-mcp` `wait_for_text` now runs on tmux 3.3a through 3.6 by reading the
+  screen with `capture-pane` every 120 ms, where it used to refuse with
+  `unsupported_version`. A pattern that appears and scrolls off between two
+  reads is missed. `capture_since` and `run_shell_command` still need 3.7. (#72)
+
+- A capability registry, `capabilities.json` at the workspace root, lists each
+  optional tmux operation with the release it needs, how a caller is refused
+  below it, the public APIs it affects and the releases with a known defect.
+  It is emitted from the tables the refusals read, and a test fails when the
+  committed file differs from them. (#72)
+
 ### Changed
 
 - CI no longer runs the test suite on macOS. macOS stays supported on a
   best-effort basis, and the release workflow still builds and attaches the
   macOS binaries. (#87)
+
+- Control acquisition, pane streams, subscriptions and the MCP tools that
+  require them need tmux 3.7 or newer and a compatible native client. A daemon
+  ranking below 3.7 final (`next-3.7`, `3.7-rc*`) refuses acquisition;
+  `3.8-rc2` and `next-3.8` are eligible. Ordinary subprocess operations and
+  polling keep the tmux 3.3a minimum. (#72)
+
+- Named-buffer deletion, rename and managed paste staging require tmux 3.4.
+  Command chains refuse `break-pane` on exactly 3.7, `split-window -p` on 3.4
+  and a layout operand tmux 3.3a cannot parse before any command runs; typed
+  percentage splits keep using `-l N%`. (#72)
+
+- Captured `run-shell` output requires tmux 3.5, and a literal
+  `capture-pane -T` or `-F` requires 3.4 or 3.7. A daemon below the floor
+  refuses the call before dispatch. (#72)
+
+- A session or window name holding `:` or `.` is refused on exactly tmux 3.7,
+  which fails the command after it has partly run. 3.7a and every other
+  release accept or refuse it cleanly. (#72)
+
+- A command chain that sends `refresh-client -l` is refused below tmux 3.4:
+  on 3.3a, asking an attached terminal for its clipboard stops the server.
+  `since::CLIPBOARD_QUERY` names the release, and the registry lists it as
+  `clipboard-query`. (#72)
+
+- `tmux-workspace` Python extensions and `shell` require
+  `libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION` to be an integer of
+  at least 2. Runtime discovery and builder children refuse an older backend
+  before importing extension hooks. (#72)
+
+### Fixed
+
+- `tmux-mcp` `capture_last_command` chooses its `capture-pane` flags from the
+  daemon's version rather than the `tmux` executable's, so a newer client
+  against a 3.3a daemon no longer sends flags the daemon rejects. (#72)
+
+- `tmux-mcp` `wait_for_text` joins rows the pane wrapped, so a match split
+  across a wrap is found, and a line this server submitted that wrapped is
+  discounted as its own echo. (#72)
+
+- `Pane::wait_for_text` and the other pane waits answer `PaneWait::Dead` when
+  tmux removes the pane or the server exits mid-wait, where they returned two
+  different errors. The answer carries no output. (#72)
+
+- `tmux-mcp` `wait_for_text` reports `stream_lost` when its control stream
+  ends while the pane is still alive, where it reported `pane_closed`. A pane
+  or server that ends still reports `pane_closed`, with the output seen so
+  far. (#72)
+
+- Control acquisition no longer runs a user's `after-display-message` hook
+  while it reads the daemon's identity. (#72)
+
+- A file at the socket path that is not a socket reads as an absent server on
+  macOS, as it already did elsewhere. (#72)
 
 ### Security
 

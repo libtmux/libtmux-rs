@@ -637,38 +637,130 @@ impl Core {
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
-    ) -> Result<(PersistentChild, TmuxVersion), Error> {
-        let version = self.endpoint_version().await?;
-        version.ensure_supported()?;
-        let mut global_argv = self.configuration.global_argv.clone();
-        global_argv.push(OsString::from("-N"));
-        global_argv.push(OsString::from("-C"));
-        let request = CommandRequest::with_global_argv(
-            self.next_request_id(),
-            &global_argv,
-            // Opening an observer must not copy this process's environment
-            // into the session it is inspecting.
-            Command::new("attach")
-                .arg("-E")
-                .arg("-t")
-                .arg(session.to_string()),
-        )
-        .fence_version(&version);
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<PersistentChild, Error> {
+        let request_id = self.next_request_id();
+        let command = Command::new("attach")
+            .arg("-E")
+            .arg("-t")
+            .arg(session.to_string());
+        let summary = command.summary();
         let reservation = self
             .persistent_clients
-            .reserve(
-                request.request_id(),
-                request.summary().clone(),
-                tokio::time::Instant::now().checked_add(self.configuration.timeout),
-            )
+            .reserve(request_id, summary.clone(), deadline)
             .await?;
-        let child = PersistentChild::spawn(
-            &self.configuration.launch,
-            &request,
-            reservation,
-            Arc::clone(&self.control_client_pids),
+        let mut stopped = reservation.stopped();
+        let prepare = async {
+            let native = SubprocessExecutor::new(
+                self.configuration.executable(),
+                self.configuration.timeout,
+            )
+            .with_launch_context(self.configuration.launch.clone())
+            .with_output_limits(self.configuration.output_limits)
+            .with_dispatch_limits(self.configuration.dispatch_limits);
+            let identity = self
+                .control_identity(&native, self.configuration.global_argv())
+                .await?;
+            let carrier = super::control_socket::PinnedSocket::new(
+                self.configuration.identity.socket_path(),
+            )?;
+            let mut global_argv = carrier.arguments(self.configuration.global_argv());
+            let pinned = self.control_identity(&native, &global_argv).await?;
+            if pinned != identity {
+                return Err(Error::control_mode(std::io::Error::other(
+                    "control daemon changed while pinning",
+                )));
+            }
+            let version = TmuxVersion::parse_output(&identity.0)?;
+            self.server_version.remember(version.clone());
+            global_argv.push(OsString::from("-N"));
+            global_argv.push(OsString::from("-C"));
+            // Opening an observer must not copy this process's environment
+            // into the session it is inspecting.
+            let request = CommandRequest::with_global_argv(request_id, &global_argv, command)
+                .fence_version(&version);
+            PersistentChild::spawn(
+                &self.configuration.launch,
+                &request,
+                reservation,
+                Arc::clone(&self.control_client_pids),
+                carrier.into_directory(),
+                version,
+            )
+        };
+        let acquisition = async {
+            tokio::select! {
+                biased;
+                _ = stopped.changed() => {
+                    Err(Error::executor_shutdown(request_id.get(), summary.clone()))
+                }
+                result = prepare => result,
+            }
+        };
+        super::support::versions::within(
+            acquisition,
+            deadline,
+            request_id,
+            &summary,
+            self.configuration.timeout,
+            false,
+        )
+        .await
+    }
+
+    #[cfg(feature = "control-mode")]
+    async fn control_identity(
+        &self,
+        native: &SubprocessExecutor,
+        global: &[OsString],
+    ) -> Result<(Vec<u8>, u64, u64), Error> {
+        let mut arguments = global.to_vec();
+        arguments.push(OsString::from("-N"));
+        // `run-shell -C` runs no user hook; `display-message` would fire
+        // `after-display-message` before this client has decided to attach.
+        // tmux reports only the first word it fails to parse as a command, so
+        // the fields are joined with commas rather than spaces.
+        let probe = crate::layout::VersionProbe::new();
+        let request = CommandRequest::with_global_argv(
+            self.next_request_id(),
+            &arguments,
+            probe.command_for("#{version},#{pid},#{start_time}"),
+        );
+        let result = native.execute(request).await?;
+        if result.success() {
+            return Err(Error::control_mode(std::io::Error::other(
+                "invalid control daemon identity",
+            )));
+        }
+        let Some(fields) = probe.report(result.stderr()) else {
+            return Err(Error::control_mode_closed());
+        };
+        let parts: Vec<_> = fields.split(|byte| *byte == b',').collect();
+        if parts.len() != 3 {
+            return Err(Error::control_mode(std::io::Error::other(
+                "invalid control daemon identity",
+            )));
+        }
+        let mut report = b"tmux ".to_vec();
+        report.extend_from_slice(parts[0]);
+        report.push(b'\n');
+        let version = TmuxVersion::parse_output(&report)?;
+        version.ensure_supported()?;
+        version.require(
+            "managed control acquisition",
+            crate::since::CONTROL_ACQUISITION,
         )?;
-        Ok((child, version))
+        let number = |bytes: &[u8]| {
+            std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|text| text.parse::<u64>().ok())
+        };
+        let (Some(pid), Some(start)) = (number(parts[1]), number(parts[2])) else {
+            return Err(Error::control_mode(std::io::Error::other(
+                "invalid control daemon generation",
+            )));
+        };
+        Ok((report, pid, start))
     }
 
     /// Report whether this process itself spawned the control client with

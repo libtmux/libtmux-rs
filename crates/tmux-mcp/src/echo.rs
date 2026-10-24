@@ -370,11 +370,9 @@ const fn is_word_byte(byte: u8) -> bool {
 /// word along with it; a wait for exactly that text is not one a screen can
 /// answer, whichever side wrote it.
 ///
-/// A submitted line that wrapped across terminal rows when it was typed is
-/// not found here and is a known gap: `above` inserts a real newline at
-/// every captured row, wrapped or not, because this crate does not join
-/// wrapped lines (`-J` breaks the cursor arithmetic `wait_for_text` relies
-/// on), so a wrapped echo's recorded text never matches the broken-up rows.
+/// A submitted line that wrapped across terminal rows is found as one line:
+/// the screen is captured with wrapped rows joined, so the recorded text
+/// matches the joined row.
 fn without_echo(haystack: &[u8], needle: &[u8]) -> Vec<u8> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return haystack.to_vec();

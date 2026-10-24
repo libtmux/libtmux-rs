@@ -180,10 +180,16 @@ impl Server {
 
     /// Briefly show each pane's number on a client.
     ///
+    /// From tmux 3.8, `display-panes` is a pane mode rather than an overlay
+    /// on the client: tmux accepts it with no client attached and shows the
+    /// numbers in the target pane until `display-panes-time` passes or a key
+    /// is pressed.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::ServerMismatch`] when the client belongs to another
-    /// server, or an error when no suitable client exists or tmux refuses.
+    /// server, or an error when tmux refuses, including below 3.8 when no
+    /// suitable client exists.
     pub async fn display_panes(&self, client: Option<&Client>) -> Result<(), Error> {
         let mut request = Command::new("display-panes");
         if let Some(client) = client {

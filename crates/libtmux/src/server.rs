@@ -14,12 +14,13 @@ use crate::internal::listing;
 #[cfg(feature = "control-mode")]
 use crate::internal::process::PersistentChild;
 use crate::internal::scoped;
+use crate::internal::support::capabilities::RUN_SHELL_OUTPUT_IN_COPY_MODE;
 use crate::pane::Pane;
 use crate::session::Session;
 use crate::{
     Command, CommandChain, CommandResult, EngineCapabilities, Error, ListingDecodeError,
-    ReleaseSuffix, ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
-    TmuxArg, TmuxVersion,
+    ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, TmuxArg,
+    TmuxVersion,
 };
 
 mod builder;
@@ -309,7 +310,9 @@ impl PromptKind {
 ///
 /// **Things that need a terminal.** [`display_popup`], [`display_menu`],
 /// [`command_prompt`], [`choose`], [`find_window`], and [`display_panes`] all
-/// draw on an attached client, and fail without one.
+/// draw on an attached client. The first three fail without one; tmux accepts
+/// [`choose`] with no client, and [`display_panes`] from tmux 3.8, because
+/// each opens as a mode in a pane.
 ///
 /// Anything tmux can do that is not here is reachable through [`cmd`], which
 /// runs an arbitrary command and hands back its result.
@@ -479,8 +482,9 @@ impl Server {
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
-    ) -> Result<(PersistentChild, TmuxVersion), Error> {
-        self.core.spawn_control(session).await
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<PersistentChild, Error> {
+        self.core.spawn_control(session, deadline).await
     }
 
     /// Report whether this process itself opened the control client with
@@ -1365,39 +1369,7 @@ impl Server {
         capability: &'static str,
         needs: ReleaseVersion,
     ) -> Result<(), Error> {
-        self.capabilities()
-            .await?
-            .tmux_version()
-            .require(capability, needs)
-    }
-
-    /// Refuse when the running release is inside a range that gets it wrong.
-    ///
-    /// `require` cannot express this: it asks for a floor, and a floor would
-    /// refuse the older releases that work.
-    async fn refuse_if_defective(
-        &self,
-        capability: &'static str,
-        broken_in: ReleaseVersion,
-        fixed_in: ReleaseVersion,
-    ) -> Result<(), Error> {
-        let found = self.capabilities().await?.tmux_version();
-        // A development build carries no numbered release to place in the
-        // range, so it is taken at its word rather than refused, as in
-        // `require`.
-        if found
-            .behavior_release()
-            .is_some_and(|release| release >= broken_in && release < fixed_in)
-        {
-            return Err(Error::CapabilityDefective {
-                capability,
-                found: found.clone(),
-                broken_in,
-                fixed_in,
-            });
-        }
-
-        Ok(())
+        self.core.format_version().await?.require(capability, needs)
     }
 
     /// The entries tmux remembers for one kind of prompt.
@@ -1630,16 +1602,14 @@ impl Server {
     /// command runs under the tmux server, not this dispatch, so a dropped
     /// call stops waiting for it without stopping it, and its output is lost.
     pub async fn run_shell(&self, command: impl Into<OsString>) -> Result<Vec<TmuxText>, Error> {
-        self.refuse_if_defective(
-            "run-shell output",
-            ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL),
-            ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
-        )
-        .await?;
-
         let result = self
             .cmd(
                 Command::new("run-shell")
+                    .refusing_interval(
+                        "run-shell output",
+                        RUN_SHELL_OUTPUT_IN_COPY_MODE.broken_in,
+                        RUN_SHELL_OUTPUT_IN_COPY_MODE.fixed_in,
+                    )
                     .arg("--")
                     .sensitive_arg(command.into()),
             )
@@ -1840,6 +1810,12 @@ impl Server {
     /// use libtmux::test::TestServer;
     ///
     /// let guard = TestServer::new().await?;
+    /// # let version = guard.server().capabilities().await?.tmux_version().clone();
+    /// # let eligible = version.has_behavior(&libtmux::since::CONTROL_ACQUISITION);
+    /// # if !eligible {
+    /// #     guard.shutdown().await?;
+    /// #     return Ok(());
+    /// # }
     /// let session = guard.server().new_session("routed").await?;
     ///
     /// let (sender, events) = ControlMode::attach(guard.server(), session.id())
@@ -1926,9 +1902,7 @@ mod tests {
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
     use crate::{Error, ErrorKind, TmuxVersion};
 
-    struct RefusingExecutor {
-        calls: AtomicUsize,
-    }
+    struct RefusingExecutor;
 
     #[derive(Clone, Copy)]
     enum SessionFollowup {
@@ -2020,21 +1994,14 @@ mod tests {
 
     impl Executor for RefusingExecutor {
         fn execute(&self, request: CommandRequest) -> DispatchFuture {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
             DispatchFuture::new(async move {
-                let (status, stdout, stderr) = if call == 0 {
-                    (0, b"tmux 3.7b\n".to_vec(), Vec::new())
-                } else {
-                    assert_eq!(call, 1, "one probe and one run-shell dispatch");
-                    assert_eq!(request.summary().sensitive_argument_count(), 1);
-                    (1 << 8, Vec::new(), b"sentinel-run-shell-output\n".to_vec())
-                };
+                assert_eq!(request.summary().sensitive_argument_count(), 1);
                 Ok(CommandResult::new(
                     request.request_id(),
                     request.summary().clone(),
-                    ProcessStatus::from_exit_status(ExitStatus::from_raw(status)),
-                    stdout,
-                    stderr,
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(1 << 8)),
+                    Vec::new(),
+                    b"sentinel-run-shell-output\n".to_vec(),
                 ))
             })
         }
@@ -2118,9 +2085,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_shell_failure_withholds_sensitive_output() {
-        let server = Server::from_executor_for_test(Arc::new(RefusingExecutor {
-            calls: AtomicUsize::new(0),
-        }));
+        let server = Server::from_executor_for_test(Arc::new(RefusingExecutor));
 
         let error = server
             .run_shell("sentinel-run-shell-command")

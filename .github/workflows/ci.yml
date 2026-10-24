@@ -270,7 +270,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: tmux-python/libtmux
-          ref: 26123fe7e4fc497a9ddb454ce654e468afe916ab
+          ref: 93eab7341f7dac39c7706f88cc3512c855dfcab2
           path: .bridge-python
 
       - name: Install tmux build dependencies

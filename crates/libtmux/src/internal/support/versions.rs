@@ -103,6 +103,7 @@ pub(crate) fn dispatch(
                 Vec::new(),
             ));
         };
+        request.require_features(&version)?;
         let request = if allow_start {
             request
         } else {
@@ -158,7 +159,7 @@ pub(crate) fn dispatch(
     })
 }
 
-async fn within<T>(
+pub(in crate::internal) async fn within<T>(
     future: impl Future<Output = Result<T, Error>>,
     deadline: Option<Instant>,
     request_id: RequestId,
@@ -334,12 +335,17 @@ fn is_pre_probe_usage(stderr: &[u8]) -> bool {
         || reason.starts_with(b"tmux: unknown option")
 }
 
+/// Whether tmux found no daemon at the endpoint.
+///
+/// A file that is not a socket answers `ECONNREFUSED` on Linux but `ENOTSOCK`
+/// on macOS, so both spellings mean the same stale path.
 fn is_cold(stderr: &[u8]) -> bool {
     let reason = stderr.trim_ascii();
     reason.starts_with(b"no server running on ")
         || (reason.starts_with(b"error connecting to ")
             && (reason.ends_with(b" (No such file or directory)")
-                || reason.ends_with(b" (Connection refused)")))
+                || reason.ends_with(b" (Connection refused)")
+                || reason.ends_with(b" (Socket operation on non-socket)")))
 }
 
 #[cfg(test)]
@@ -372,6 +378,7 @@ mod tests {
             b"no server running on /socket\n".as_slice(),
             b"error connecting to /socket (No such file or directory)\n",
             b"error connecting to /socket (Connection refused)\n",
+            b"error connecting to /socket (Socket operation on non-socket)\n",
         ] {
             assert!(is_cold(reason));
         }

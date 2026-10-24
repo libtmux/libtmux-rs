@@ -1807,6 +1807,12 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
     const EXPECTED_RAW_STDOUT: [u8; 13] = [
         0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x3d, 0x0a,
     ];
+    // 3.8-rc added the newline to the quoted set, so it arrives escaped.
+    const EXPECTED_ESCAPED_NEWLINE_STDOUT: [u8; 14] = [
+        0x3a, 0x5c, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x3d, 0x0a,
+    ];
+    const ESCAPED_NEWLINE: ReleaseVersion =
+        ReleaseVersion::new(3, 8, ReleaseSuffix::RELEASE_CANDIDATE);
     const EXPECTED_VIS_STDOUT: [u8; 19] = [
         0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x5c, 0x32, 0x30, 0x30, 0x5c, 0x33,
         0x37, 0x37, 0x3d, 0x0a,
@@ -1876,7 +1882,9 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
             assert!(result.stdout_utf8().is_ok());
         }
         TransportDialect::RawQ => {
-            if frozen {
+            if frozen && version.has_behavior(&ESCAPED_NEWLINE) {
+                assert_eq!(result.stdout(), EXPECTED_ESCAPED_NEWLINE_STDOUT);
+            } else if frozen {
                 assert_eq!(result.stdout(), EXPECTED_RAW_STDOUT);
             }
             assert!(result.stdout_utf8().is_err());

@@ -478,8 +478,7 @@ impl Window {
                 OsString::from(named.as_str())
             }
             LayoutSpec::Saved(saved) => {
-                let server = crate::Server::from_core(Arc::clone(&self.core));
-                Self::validate_saved_layout(server.capabilities().await?.tmux_version(), saved)?
+                Self::validate_saved_layout(&self.core.format_version().await?, saved)?
             }
         };
         crate::Server::from_core(Arc::clone(&self.core))

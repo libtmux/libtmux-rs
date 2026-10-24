@@ -143,16 +143,19 @@ Python-extension loads fail before touching tmux; other commands work.
 
 `plugins` and `workspace_builder` run through a bridge to tmuxp: a nonempty
 plugin list or builder string needs tmuxp 1.74.x and Python libtmux declaring a
-hard tmux minimum of 3.3a or newer with per-command daemon version check. Select
-the environment through `TMUX_WORKSPACE_PYTHON` or `PATH`. Runtime discovery and
-each builder or shell child check the backend before tmuxp imports. An absent or
+hard tmux minimum of 3.3a or newer with per-command daemon version check, plus
+`libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION >= 2`. Select the
+environment through `TMUX_WORKSPACE_PYTHON` or `PATH`. Runtime discovery and
+each builder or shell child check both contracts before tmuxp imports; the
+Python backend then enforces each operation's daemon requirements. An absent or
 empty plugin/builder value keeps the native builder. The bridge's request
 travels in an environment variable rather than the child's command line. `shell`
 also runs tmuxp's Python shell.
 
 The backend depends on the coordinated [Python libtmux tmux-support
-change](https://github.com/tmux-python/libtmux/pull/779), which has not been
-released. CI qualifies its pinned source with tmux 3.3a. Released tmuxp 1.74.0
+change](https://github.com/tmux-python/libtmux/pull/779) and [optional-feature
+policy](https://github.com/tmux-python/libtmux/pull/780), which have not been
+released. CI qualifies the pinned feature-policy source with tmux 3.3a. Released tmuxp 1.74.0
 pins libtmux below 0.62, so installing that release alone does not qualify the
 bridge. Use a compatible tmuxp environment carrying the updated Python library,
 and select it with `TMUX_WORKSPACE_PYTHON`.

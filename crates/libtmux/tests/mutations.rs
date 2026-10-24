@@ -75,7 +75,7 @@ async fn real_tmux_compat_layout_preflight_uses_daemon_version() {
     let mirrored = selected
         .validate_layouts([(OsStr::new("main-horizontal-mirrored"), 1)])
         .await;
-    if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+    if version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS) {
         assert_eq!(abbreviated.unwrap_err().kind(), ErrorKind::InvalidInput);
         mirrored.unwrap();
     } else {
@@ -97,7 +97,7 @@ async fn real_tmux_compat_layout_preflight_cold_and_empty_daemons() {
         format!("tmux {}\n", observed.to_string_lossy()).as_bytes(),
     )
     .unwrap();
-    let layout = if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+    let layout = if version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS) {
         "main-horizontal-m"
     } else {
         "main-h"
@@ -1323,11 +1323,11 @@ async fn a_failure_says_what_to_do_about_it() {
             .is_empty(),
     );
 
-    // tmux answering "no" is a different thing: the arguments were wrong.
+    // A popup needs an attached client, and this fixture has none.
     let refused = server
-        .delete_buffer("never-existed")
+        .display_popup(None, "true")
         .await
-        .expect_err("tmux refuses to delete a buffer it does not have");
+        .expect_err("tmux refuses a popup without a client");
     assert_eq!(refused.kind(), ErrorKind::Refused);
     assert!(
         !refused.is_transient(),

@@ -377,6 +377,13 @@ pub(crate) struct PersistentReservation {
 }
 
 #[cfg(feature = "control-mode")]
+impl PersistentReservation {
+    pub(crate) fn stopped(&self) -> watch::Receiver<bool> {
+        self.stopped.clone()
+    }
+}
+
+#[cfg(feature = "control-mode")]
 struct PersistentRegistration {
     shared: Arc<PersistentShared>,
     _permit: OwnedSemaphorePermit,
@@ -432,6 +439,8 @@ pub(crate) struct PersistentChild {
     // relative to the other fields does not matter, since nothing here reads
     // it back.
     _pid_guard: Option<ControlClientPidGuard>,
+    _socket_carrier: tempfile::TempDir,
+    version: crate::TmuxVersion,
 }
 
 #[cfg(feature = "control-mode")]
@@ -441,6 +450,8 @@ impl PersistentChild {
         request: &CommandRequest,
         reservation: PersistentReservation,
         control_client_pids: Arc<Mutex<std::collections::HashSet<u32>>>,
+        socket_carrier: tempfile::TempDir,
+        version: crate::TmuxVersion,
     ) -> Result<Self, Error> {
         validate_request(launch, request)?;
         let mut command = launch.command(request.argv());
@@ -488,7 +499,13 @@ impl PersistentChild {
             command: request.summary().clone(),
             _registration: reservation.registration,
             _pid_guard: pid_guard,
+            _socket_carrier: socket_carrier,
+            version,
         })
+    }
+
+    pub(crate) const fn version(&self) -> &crate::TmuxVersion {
+        &self.version
     }
 
     pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {

@@ -2,6 +2,9 @@
 
 #![cfg(feature = "test-support")]
 
+#[path = "support/versions.rs"]
+mod versions;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,14 +42,32 @@ async fn a_listed_buffer_name_passes_back_unchanged() {
     names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     assert_eq!(names, expected);
 
+    let safe_delete = versions::supports(server, &libtmux::since::NAMED_BUFFER_IDENTITY).await;
     for name in &names {
         assert!(
             server.buffer(name).await.expect("read").is_some(),
             "{name:?}"
         );
-        server.delete_buffer(name).await.expect("buffer is deleted");
+        if safe_delete {
+            server.delete_buffer(name).await.expect("buffer is deleted");
+        } else {
+            assert!(matches!(
+                server.delete_buffer(name).await,
+                Err(libtmux::Error::UnsupportedCapability { .. })
+            ));
+            assert!(
+                server
+                    .buffer(name)
+                    .await
+                    .expect("retained buffer")
+                    .is_some()
+            );
+        }
     }
-    assert!(server.buffer_names().await.expect("names").is_empty());
+    assert_eq!(
+        server.buffer_names().await.expect("names").is_empty(),
+        safe_delete
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -76,15 +97,17 @@ async fn buffers_hold_exact_bytes_and_report_absence() {
     let names = server.buffer_names().await.expect("names");
     assert_eq!(names, ["payload"]);
 
-    server
-        .delete_buffer("payload")
-        .await
-        .expect("buffer is deleted");
-    assert!(server.buffer("payload").await.expect("read").is_none());
-    assert!(
-        server.delete_buffer("payload").await.is_err(),
-        "deleting a buffer that is gone is a failure, not a silent success",
-    );
+    if versions::supports(server, &libtmux::since::NAMED_BUFFER_IDENTITY).await {
+        server
+            .delete_buffer("payload")
+            .await
+            .expect("buffer is deleted");
+        assert!(server.buffer("payload").await.expect("read").is_none());
+        assert!(
+            server.delete_buffer("payload").await.is_err(),
+            "deleting a buffer that is gone is a failure, not a silent success",
+        );
+    }
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -668,6 +691,9 @@ async fn a_client_reports_itself_while_it_is_attached() {
     use std::time::Duration;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let first = server.new_session("client-one").await.expect("session");
     let second = server.new_session("client-two").await.expect("session");
@@ -746,6 +772,15 @@ async fn server_operations_reject_foreign_handles() {
     let left_session = left.new_session("left").await.expect("left session");
     let right_session = right.new_session("right").await.expect("right session");
     let right_pane = right_session.panes().await.expect("right panes").remove(0);
+    assert_eq!(
+        error_kind!(left.format(Some(&right_pane), "#{session_name}")),
+        ErrorKind::InvalidInput
+    );
+    if !versions::supports_control(right).await {
+        left_guard.shutdown().await.expect("left fixture closes");
+        right_guard.shutdown().await.expect("right fixture closes");
+        return;
+    }
     let control = ControlMode::attach(right, right_session.id())
         .await
         .expect("control mode attaches");
@@ -1163,6 +1198,9 @@ async fn a_client_reports_its_own_terminal_and_type() {
     use libtmux::control::ControlMode;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("client-fields").await.expect("session");
     let control = ControlMode::attach(server, session.id())
@@ -1251,6 +1289,9 @@ async fn timestamps_are_system_times_that_agree_with_their_handles() {
     let before = UNIX_EPOCH + Duration::from_secs(since_epoch.as_secs());
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let mut session = server.new_session("clock").await.expect("session");
     let control = ControlMode::attach(server, session.id())
@@ -1675,8 +1716,16 @@ async fn interactive_commands_need_a_client() {
     server.new_session("interactive").await.expect("session");
 
     // A headless server has no terminal, so commands that draw on one fail
-    // loudly rather than reporting a success nobody could see.
-    assert!(server.display_panes(None).await.is_err());
+    // loudly rather than reporting a success nobody could see. From 3.8-rc,
+    // display-panes is a pane mode instead of a client overlay: tmux opens it
+    // in the target pane with no client and closes it after
+    // display-panes-time.
+    let panes_mode = versions::supports(
+        server,
+        &libtmux::ReleaseVersion::new(3, 8, libtmux::ReleaseSuffix::RELEASE_CANDIDATE),
+    )
+    .await;
+    assert_eq!(server.display_panes(None).await.is_ok(), panes_mode);
     assert!(
         server
             .display_menu(
@@ -2416,6 +2465,9 @@ async fn a_predicate_wait_runs_over_a_control_connection() {
     use libtmux::control::ControlMode;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let session = guard.server().new_session("routed").await.expect("session");
     let (sender, events) = ControlMode::attach(guard.server(), session.id())
         .await

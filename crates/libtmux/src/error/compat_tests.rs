@@ -105,7 +105,18 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
         .delete_buffer("never-existed")
         .await
         .expect_err("tmux has no such buffer");
-    assert_eq!(refused.kind(), ErrorKind::Refused, "{refused}");
+    let expected = match server
+        .require(
+            "exact named-buffer deletion",
+            crate::since::NAMED_BUFFER_IDENTITY,
+        )
+        .await
+    {
+        Ok(()) => ErrorKind::Refused,
+        Err(crate::Error::UnsupportedCapability { .. }) => ErrorKind::UnsupportedVersion,
+        Err(error) => panic!("feature probe failed: {error}"),
+    };
+    assert_eq!(refused.kind(), expected, "{refused}");
 
     // With no session left, tmux cannot resolve a current target and says
     // so instead, for the same request. Both wordings mean gone.

@@ -313,7 +313,7 @@ fn real_tmux_compat_mcp_layout_wire_preserves_keeper_and_native_errors() {
         .expect("native version")
     });
     eprintln!("MCP layout wire daemon: {}", version.raw());
-    let mirrored = version.meets(&libtmux::since::MIRRORED_LAYOUTS);
+    let mirrored = version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS);
     let cases = [
         ("not-a-layout", Some("invalid_input")),
         ("-E", Some("invalid_input")),
