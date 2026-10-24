@@ -347,8 +347,10 @@ inspect the pane before sending more input.
 ### [`wait_for_text`][wait_for_text]: wait for what a pane prints
 
 [`wait_for_text`][wait_for_text] watches the pane's output stream for a
-pattern, with stop patterns for the failures you already know. A line that
-scrolls past between looks is still seen, because it reads the stream.
+pattern, with stop patterns for the failures you already know. On tmux 3.7 or
+newer a line that scrolls past between looks is still seen, because it reads
+the stream. Below 3.7 it polls the visible screen, and a line that scrolls off
+between two reads is missed.
 
 The same example starts a background job that prints `server is ready` a second
 later, waits for that line, and prints `waited: Matched`.
@@ -683,9 +685,9 @@ README][workspace-agent] has the two commands.
 - **Alpha.** Any release may change the tool surface. Pin an exact version.
 - **tmux 3.3a or newer**, on `PATH`.
 - **Rust 1.88 to build.** The libraries under it build on 1.85.
-- **Linux, including WSL.** CI runs the workspace's tests on Linux. On macOS,
-  CI runs them against Homebrew's current tmux on pushes to `master` and manual
-  runs, and not on pull requests.
+- **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS is
+  supported on a best-effort basis, and CI coverage for it is highly limited:
+  CI does not run the tests there.
 - **Windows.** Native Windows is unsupported because tmux is unavailable
   there.
 

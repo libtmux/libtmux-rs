@@ -16,6 +16,13 @@ full.
 
 ## Unreleased
 
+### Fixed
+
+- The `wait_for_text` tool text, its README section and the `libtmux`
+  migration guide no longer promise that text scrolling past between checks
+  is seen below tmux 3.7, and the crate READMEs no longer claim macOS test
+  runs in CI. (#97)
+
 ## 0.1.0-alpha.17 - 2026-10-24
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.17;
