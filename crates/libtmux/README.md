@@ -942,9 +942,9 @@ may change or remove exported identifiers. Pin an exact version.
 - **tmux 3.3a or newer.** CI builds 3.3a, 3.4, 3.5a, 3.6b, and 3.7b from
   source and runs the whole workspace against each. 3.4 and 3.5a wrap command
   output differently, which is why the format codec carries a second dialect.
-- **Linux, including WSL.** CI runs the tests on Linux. macOS is supported on a
-  best-effort basis, and CI coverage for it is highly limited: CI does not run
-  the tests there.
+- **Linux, including WSL.** CI runs the tests on Linux. macOS is supported
+  on a best-effort basis; the release workflow builds binaries there, and CI
+  does not run the tests.
 - **Unix only.** Native Windows is unsupported because tmux is unavailable
   there.
 
