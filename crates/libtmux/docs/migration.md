@@ -27,10 +27,20 @@ Typed percentage splits already use that spelling. A literal
 for its clipboard. On 3.3a, use a unique
 layout preset, a serialized layout with a four-hex header and nonempty body,
 or the validated `Window::select_layout` API. The guard checks the command
-it is given. It does not look inside tmux command strings nested in another
-command (`if-shell`, `run-shell -C`, brace blocks) or inside alias bodies, so
-do not nest a command a gate refuses: on an affected release it is sent as
-written.
+it is given. It does not look inside a command carried in the text of
+another command (`if-shell`, `run-shell -C`, `bind-key`, `set-hook`,
+`confirm-before`, menus, prompt and `choose-*` templates, brace blocks) or
+inside alias bodies, so a refused command nested that way is sent as
+written. Nested `break-pane` without `-n` ends the server on exactly 3.7
+(fixed in 3.7a), as does an invalid, checksum-less `select-layout` string on
+3.3 and 3.3a and `refresh-client -l` below 3.6a when an attached client
+leaves or does not answer. Nested `delete-buffer -b NAME` and
+`set-buffer -b NAME -n` below 3.4 act on the most recent buffer when `NAME`
+does not exist. Nested `split-window -p` on exactly 3.4, and `:` or `.` in a
+session or window name on exactly 3.7, only produce a tmux error. On exact
+3.7, name every nested or bound `break-pane` with `-n NAME`, including the
+one `prefix !` runs, or upgrade to 3.7a; the
+[README](../README.md#quick-start) has the table.
 
 ### Upgrade the workspace Python backend
 

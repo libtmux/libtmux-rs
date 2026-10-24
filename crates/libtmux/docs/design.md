@@ -897,10 +897,30 @@ failure refuses acquisition without an unpinned retry.
 Feature requirements are carried on commands and folded over a complete
 chain before any member is sent. The direct control sender applies the same
 literal-argv policy with its pinned daemon version. The guard checks the
-command it is given. It does not look inside tmux command strings nested in
-another command (`if-shell`, `run-shell -C`, brace blocks) or inside alias
-bodies, and a second parser for them is out of scope (ADR 0002). Do not nest
-a command a gate refuses: on an affected release it is sent as written.
+command it is given. It does not look inside a command carried in the text of
+another command (`if-shell`, `run-shell -C`, `bind-key`, `set-hook`,
+`confirm-before`, menus, prompt and `choose-*` templates, brace blocks) or
+inside alias bodies, and a second parser for them is out of scope (ADR 0002).
+A refused command nested that way is sent as written, and the result depends
+on the release:
+
+- The server exits: `break-pane` without `-n` on exactly 3.7 (fixed in
+  3.7a); `select-layout` with an invalid string that has no checksum on 3.3
+  and 3.3a (3.2a and 3.4 answer with an error and stay up); `refresh-client
+  -l` below 3.6a, when an attached client leaves or does not answer the
+  clipboard query.
+- A silent wrong buffer: `delete-buffer -b NAME` and `set-buffer -b NAME -n`
+  below 3.4 act on the most recent buffer when `NAME` does not exist.
+- A tmux error and no change: `split-window -p` on exactly 3.4, and `:` or
+  `.` in a session or window name on exactly 3.7.
+
+On exact tmux 3.7, name every `break-pane` you nest or bind with `-n NAME`,
+including the one the `prefix !` binding runs, or upgrade to 3.7a. A direct
+literal `break-pane` is refused there whatever its flags. Sources: the 3.7a
+[`CHANGES`](https://github.com/tmux/tmux/blob/3.7a/CHANGES#L3), the 3.7
+[`break-pane` code](https://github.com/tmux/tmux/blob/3.7/cmd-break-pane.c#L117-L124),
+the 3.7 [`prefix !` binding](https://github.com/tmux/tmux/blob/3.7/key-bindings.c#L358)
+and the 3.6a [clipboard query](https://github.com/tmux/tmux/blob/3.6a/CHANGES#L21).
 Subprocess operations and polling stay available from 3.3a.
 
 The `control-mode` feature opens one tmux connection and keeps it. A task owns

@@ -55,7 +55,7 @@
       "id": "buffer-delete-named",
       "name": "Named buffer deletion",
       "since": "3.4",
-      "summary": "Delete one paste buffer by name without risking another buffer."
+      "summary": "Delete one paste buffer by name. Nested below 3.4, a missing name deletes the most recent buffer."
     },
     {
       "apis": [
@@ -75,7 +75,7 @@
       "id": "buffer-rename",
       "name": "Buffer rename",
       "since": "3.4",
-      "summary": "Rename a paste buffer without risking another buffer."
+      "summary": "Rename a paste buffer. Nested below 3.4, a missing name renames the most recent buffer."
     },
     {
       "apis": [
@@ -91,7 +91,7 @@
       "id": "layout-without-checksum",
       "name": "Layouts without a checksum",
       "since": "3.4",
-      "summary": "Apply a layout string or a named layout that tmux validates before use."
+      "summary": "Apply a layout string or a named layout that tmux validates before use. Nested, an invalid string without a checksum ends the server on 3.3 and 3.3a."
     },
     {
       "apis": [
@@ -223,7 +223,7 @@
       "id": "clipboard-query",
       "name": "Clipboard query",
       "since": "3.6a",
-      "summary": "Ask an attached client's terminal for its clipboard with refresh-client -l."
+      "summary": "Ask an attached client's terminal for its clipboard with refresh-client -l. Nested below 3.6a, the server exits when the client leaves or does not answer."
     }
   ],
   "floor": {
@@ -265,7 +265,7 @@
       "releases": [
         "3.7"
       ],
-      "summary": "break-pane gets the new window wrong on exactly tmux 3.7; libtmux refuses it."
+      "summary": "break-pane gets the new window wrong on exactly tmux 3.7; libtmux refuses it. Nested without -n, it ends the server there; name it with -n or use 3.7a."
     },
     {
       "apis": [
@@ -286,7 +286,7 @@
       "releases": [
         "3.4"
       ],
-      "summary": "split-window -p is broken on tmux 3.4; use -l N%."
+      "summary": "split-window -p is broken on tmux 3.4; use -l N%. Nested, tmux reports an error and nothing changes."
     },
     {
       "apis": [
@@ -321,7 +321,7 @@
       "releases": [
         "3.7"
       ],
-      "summary": "tmux 3.7 rejects ':' and '.' in session and window names after partly running."
+      "summary": "tmux 3.7 rejects ':' and '.' in session and window names and creates nothing. Nested, tmux reports an error and nothing changes."
     }
   ]
 }

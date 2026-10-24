@@ -111,7 +111,7 @@ pub(crate) const CONTROL_PANE_OFF: Capability = Capability {
 pub(crate) const BUFFER_DELETE_NAMED: Capability = Capability {
     id: "buffer-delete-named",
     name: "Named buffer deletion",
-    summary: "Delete one paste buffer by name without risking another buffer.",
+    summary: "Delete one paste buffer by name. Nested below 3.4, a missing name deletes the most recent buffer.",
     since: since::NAMED_BUFFER_IDENTITY,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
@@ -122,7 +122,7 @@ pub(crate) const BUFFER_DELETE_NAMED: Capability = Capability {
 pub(crate) const BUFFER_RENAME: Capability = Capability {
     id: "buffer-rename",
     name: "Buffer rename",
-    summary: "Rename a paste buffer without risking another buffer.",
+    summary: "Rename a paste buffer. Nested below 3.4, a missing name renames the most recent buffer.",
     since: since::NAMED_BUFFER_IDENTITY,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
@@ -133,7 +133,7 @@ pub(crate) const BUFFER_RENAME: Capability = Capability {
 pub(crate) const LAYOUT_WITHOUT_CHECKSUM: Capability = Capability {
     id: "layout-without-checksum",
     name: "Layouts without a checksum",
-    summary: "Apply a layout string or a named layout that tmux validates before use.",
+    summary: "Apply a layout string or a named layout that tmux validates before use. Nested, an invalid string without a checksum ends the server on 3.3 and 3.3a.",
     since: ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL),
     handling: Handling::Refuse,
     error: "error.Error.InvalidLayout",
@@ -217,7 +217,7 @@ pub(crate) const PANE_BORDER_STYLE_PER_PANE: Capability = Capability {
 pub(crate) const CLIPBOARD_QUERY: Capability = Capability {
     id: "clipboard-query",
     name: "Clipboard query",
-    summary: "Ask an attached client's terminal for its clipboard with refresh-client -l.",
+    summary: "Ask an attached client's terminal for its clipboard with refresh-client -l. Nested below 3.6a, the server exits when the client leaves or does not answer.",
     since: since::CLIPBOARD_QUERY,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
@@ -243,7 +243,7 @@ pub(crate) const CAPABILITIES: &[&Capability] = &[
 pub(crate) const BREAK_PANE_MISNAMES_WINDOWS: Workaround = Workaround {
     id: "break-pane-misnames-windows",
     name: "break-pane window naming",
-    summary: "break-pane gets the new window wrong on exactly tmux 3.7; libtmux refuses it.",
+    summary: "break-pane gets the new window wrong on exactly tmux 3.7; libtmux refuses it. Nested without -n, it ends the server there; name it with -n or use 3.7a.",
     broken_in: BREAK_BROKEN,
     fixed_in: BREAK_FIXED,
     apis: &["pane.Pane.break_out"],
@@ -253,7 +253,7 @@ pub(crate) const BREAK_PANE_MISNAMES_WINDOWS: Workaround = Workaround {
 pub(crate) const SPLIT_WINDOW_PERCENT_SIZE: Workaround = Workaround {
     id: "split-window-percent-size",
     name: "split-window -p",
-    summary: "split-window -p is broken on tmux 3.4; use -l N%.",
+    summary: "split-window -p is broken on tmux 3.4; use -l N%. Nested, tmux reports an error and nothing changes.",
     broken_in: ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL),
     fixed_in: ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
     apis: COMMAND_PATHS,
@@ -263,7 +263,7 @@ pub(crate) const SPLIT_WINDOW_PERCENT_SIZE: Workaround = Workaround {
 pub(crate) const NAME_SEPARATORS_REJECTED: Workaround = Workaround {
     id: "name-separators-rejected",
     name: "Colon and dot in names",
-    summary: "tmux 3.7 rejects ':' and '.' in session and window names after partly running.",
+    summary: "tmux 3.7 rejects ':' and '.' in session and window names and creates nothing. Nested, tmux reports an error and nothing changes.",
     broken_in: BREAK_BROKEN,
     fixed_in: BREAK_FIXED,
     apis: &[

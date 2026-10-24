@@ -136,11 +136,35 @@ refuse.
 Eligibility comes from the checked daemon and assumes a natively compatible
 client/daemon pair. Direct literal argv commands and
 flat batches are checked before dispatch; `Command::requires_tmux` carries a
-managed staging requirement across the whole chain. The guard checks the
-command it is given. It does not look inside tmux command strings nested in
-another command (`if-shell`, `run-shell -C`, brace blocks) or inside alias
-bodies, and shell programs keep native semantics. Do not nest a command a gate
-refuses; on an affected release it is sent as written. On the
+managed staging requirement across the whole chain. Alias bodies are not
+read, and shell programs keep native semantics.
+
+**Refused commands nested in another command.** The guard reads the command
+it is given and nothing nested in it. A refused command carried in the text of
+another command reaches the daemon as written: inside `if-shell`,
+`run-shell -C`, `bind-key`, `set-hook`, `confirm-before`, a menu, a prompt or
+`choose-*` template, or a brace block. What happens then depends on the
+command and the release:
+
+| Nested command | Releases | Result |
+| --- | --- | --- |
+| `break-pane` without `-n` | exactly 3.7 | The server exits. Fixed in 3.7a. |
+| `select-layout` with an invalid string that has no checksum | 3.3 and 3.3a | The server exits. 3.2a and 3.4 answer with an error and stay up. |
+| `refresh-client -l` | below 3.6a | The server exits when an attached client leaves or does not answer the clipboard query. |
+| `delete-buffer -b NAME`, `set-buffer -b NAME -n` | below 3.4 | Silently acts on the most recent buffer when `NAME` does not exist. |
+| `split-window -p` | exactly 3.4 | tmux reports an error and nothing changes. |
+| `:` or `.` in a session or window name | exactly 3.7 | tmux reports an error and nothing changes. |
+
+On exact tmux 3.7, name every `break-pane` you nest or bind with `-n NAME`,
+including the one the `prefix !` binding runs, or upgrade to 3.7a or later.
+A direct literal `break-pane` is refused on exact 3.7 whatever its flags.
+Upstream: the
+[`break-pane` fix](https://github.com/tmux/tmux/blob/3.7a/CHANGES#L3) in 3.7a,
+its [cause](https://github.com/tmux/tmux/blob/3.7/cmd-break-pane.c#L117-L124),
+the [`prefix !` binding](https://github.com/tmux/tmux/blob/3.7/key-bindings.c#L358)
+and the [clipboard query](https://github.com/tmux/tmux/blob/3.6a/CHANGES#L21).
+
+On the
 pinned Linux builds, 3.3a, 3.4 and 3.5 clients cannot register a control connection to
 an exact 3.7 daemon; 3.7d can. Those older clients exit without changing the
 daemon, including on a plain native attachment. Use a compatible client for

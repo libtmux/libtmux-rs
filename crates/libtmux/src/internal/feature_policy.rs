@@ -110,9 +110,9 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
     Ok(())
 }
 
-/// Exactly tmux 3.7 rejects a session or window name holding `:` or `.`
-/// after the command has partly run; 3.7a and every other release accept or
-/// refuse it cleanly. Refused before dispatch so nothing runs.
+/// Exactly tmux 3.7 rejects a session or window name holding `:` or `.` and
+/// creates nothing; 3.7a and every other release accept or refuse it
+/// cleanly. Refused before dispatch so the command never reaches tmux.
 fn refuse_name_characters(
     version: &TmuxVersion,
     found: &[(u8, Option<&[u8]>)],
