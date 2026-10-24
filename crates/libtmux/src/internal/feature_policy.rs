@@ -235,7 +235,7 @@ mod tests {
     /// `-l` may lead the flags, follow a valued flag or share a cluster;
     /// every spelling tmux resolves to refresh-client is checked.
     #[test]
-    fn clipboard_query_is_refused_below_3_4() {
+    fn clipboard_query_is_refused_below_3_6a() {
         let commands: [&[&str]; 5] = [
             &["refresh-client", "-l"],
             &["refresh", "-l"],
@@ -244,11 +244,13 @@ mod tests {
             &["refresh-client", "-l%1"],
         ];
         for command in commands {
-            assert!(
-                require(command, &version("3.3a")).is_err(),
-                "{command:?} on 3.3a"
-            );
-            for raw in ["3.4", "3.5a", "3.7c", "3.8", "next-3.9"] {
+            for raw in ["3.3a", "3.4", "3.5", "3.5a", "3.6"] {
+                assert!(
+                    require(command, &version(raw)).is_err(),
+                    "{command:?} on {raw}"
+                );
+            }
+            for raw in ["3.6a", "3.6b", "3.7c", "3.8", "next-3.9"] {
                 assert!(
                     require(command, &version(raw)).is_ok(),
                     "{command:?} on {raw}"

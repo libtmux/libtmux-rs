@@ -54,10 +54,11 @@ full.
   which fails the command after it has partly run. 3.7a and every other
   release accept or refuse it cleanly. (#72)
 
-- A command chain that sends `refresh-client -l` is refused below tmux 3.4:
-  on 3.3a, asking an attached terminal for its clipboard stops the server.
-  `since::CLIPBOARD_QUERY` names the release, and the registry lists it as
-  `clipboard-query`. (#72)
+- A command chain that sends `refresh-client -l` is refused below tmux 3.6a:
+  on 3.3a, asking an attached terminal for its clipboard stops the server,
+  and on 3.4 through 3.6 the server stops when that client leaves before its
+  terminal answers. `since::CLIPBOARD_QUERY` names the release, and the
+  registry lists it as `clipboard-query`. (#72, #94)
 
 - `tmux-workspace` Python extensions and `shell` require
   `libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION` to be an integer of

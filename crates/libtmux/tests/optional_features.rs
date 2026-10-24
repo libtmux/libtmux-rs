@@ -345,19 +345,52 @@ async fn real_tmux_compat_optional_literal_refresh_client_pane_off_refuses_befor
     assert!(control.0, "pane on leaves the chain running");
 }
 
-/// With an attached client whose terminal is `xterm-256color`, 3.3a stops on
-/// `refresh-client -l`. The refusal comes before dispatch, so it holds with or
-/// without a client, and nothing earlier in the chain runs.
+/// With an attached `xterm-256color` client, 3.3a stops on `refresh-client
+/// -l`, and 3.4 through 3.6 stop when that client leaves before its terminal
+/// answers. The refusal comes before dispatch, so it holds with or without a
+/// client, and nothing earlier in the chain runs.
 #[tokio::test]
 async fn real_tmux_compat_optional_literal_clipboard_query_refuses_before_a_prior_effect() {
     let Some(minimum) = binary("LIBTMUX_TEST_MINIMUM_TMUX") else {
         return;
     };
+    clipboard_query_refused(minimum).await;
+}
+
+/// The lane's own tmux: refused on the releases that stop on it, sent on the
+/// rest. The list is written out rather than read from the crate, so moving
+/// the floor fails this test.
+#[tokio::test]
+async fn real_tmux_compat_clipboard_query_follows_the_lane_release() {
+    const STOPS: &[&str] = &["3.3a", "3.4", "3.5", "3.5a", "3.6"];
+    let guard = TestServer::new().await.expect("tmux starts");
+    let server = guard.server();
+    server.new_session("keeper").await.expect("session");
+    let version = server.format(None, "#{version}").await.expect("version");
+    let refused = STOPS.contains(&version.to_string_lossy().trim());
+    let result = server.cmd(Command::new("refresh-client").arg("-l")).await;
+    let live = server.format(None, "#{pid}").await;
+    guard.shutdown().await.expect("fixture closes");
+    if refused {
+        assert!(
+            matches!(result, Err(Error::UnsupportedCapability { .. })),
+            "refused below 3.6a: {result:?}"
+        );
+    } else {
+        assert!(
+            !matches!(result, Err(Error::UnsupportedCapability { .. })),
+            "sent from 3.6a: {result:?}"
+        );
+    }
+    assert!(live.is_ok(), "the daemon stayed up: {live:?}");
+}
+
+async fn clipboard_query_refused(tmux: PathBuf) {
     let guard = TestServer::builder()
-        .tmux_executable(minimum)
+        .tmux_executable(tmux)
         .start()
         .await
-        .expect("3.3a starts");
+        .expect("tmux starts");
     let server = guard.server();
     server.new_session("keeper").await.expect("session");
     let mut refused = Vec::new();

@@ -222,7 +222,7 @@
       "handling": "refuse",
       "id": "clipboard-query",
       "name": "Clipboard query",
-      "since": "3.4",
+      "since": "3.6a",
       "summary": "Ask an attached client's terminal for its clipboard with refresh-client -l."
     }
   ],
