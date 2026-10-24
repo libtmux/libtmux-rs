@@ -66,7 +66,7 @@ Add the crate, and Tokio to drive it:
 
 ```toml
 [dependencies]
-libtmux = "0.1.0-alpha.16"
+libtmux = "0.1.0-alpha.17"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The examples on this page run as written, against a throwaway tmux. To run
 them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.0-alpha.16", features = ["test-support"] }`.
+`libtmux = { version = "0.1.0-alpha.17", features = ["test-support"] }`.
 
 [`Pane::send_line`] types a line and presses Enter, and [`Pane::capture`]
 reads what the pane shows. Every method that reaches tmux is `async`.
@@ -734,7 +734,7 @@ crate's own suite uses:
 
 ```toml
 [dev-dependencies]
-libtmux = { version = "0.1.0-alpha.16", features = ["test-support"] }
+libtmux = { version = "0.1.0-alpha.17", features = ["test-support"] }
 ```
 
 Each guard owns a tmux child on a private socket with an empty config, so tests
@@ -848,7 +848,7 @@ Python.
 
 ```console
 $ cargo install tmux-workspace \
-    --version 0.1.0-alpha.16 \
+    --version 0.1.0-alpha.17 \
     --locked
 ```
 
@@ -873,7 +873,7 @@ tool that changes state names what it changes.
 [Connect a client][mcp-connect] · [Guide][mcp-guide]
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.17
+$ cargo install tmux-mcp --version 0.1.0-alpha.18
 ```
 
 Register it with Claude Code. The guide has the same step for the other

@@ -16,6 +16,16 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.17 - 2026-10-24
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.17;
+`tmux-mcp` is 0.1.0-alpha.18.
+
+tmux 3.7 is now the floor for control acquisition and the tools built on it;
+everything else keeps the 3.3a minimum, with each operation naming the release
+it needs and refusing below it. `wait_for_text` now works on tmux 3.3a
+through 3.6, and `capabilities.json` lists every optional operation.
+
 ### Added
 
 - `tmux-mcp` `wait_for_text` now runs on tmux 3.3a through 3.6 by reading the
