@@ -4,15 +4,16 @@ Each section is one release: what a caller has to change to build against it.
 Start at the section for the version you are on and work up. Changes that
 need no edit on your side are in the changelog, not here.
 
-## Unreleased
+## From 0.1.0-alpha.16 to 0.1.0-alpha.17
 
 ### Select a qualified daemon for optional operations
 
 Control connections, pane streams and subscriptions require tmux 3.7 or
 newer (a build ranking at or above 3.7 final) and a compatible native client.
-`next-3.7` and `3.7-rc*` rank below it and refuse acquisition. MCP `capture_since`,
-`wait_for_text` and `run_shell_command` have the same requirement. Use ordinary
-capture, `Pane::wait_for_text` polling and direct input on older supported daemons.
+`next-3.7` and `3.7-rc*` rank below it and refuse acquisition. MCP `capture_since` and
+`run_shell_command` have the same requirement. MCP `wait_for_text` streams on
+3.7 or newer and polls the visible screen below it. Use ordinary capture,
+`Pane::wait_for_text` polling and direct input on older supported daemons.
 
 Named-buffer deletion, rename and managed paste staging require tmux 3.4 or
 newer; captured `run-shell` output requires 3.5 or newer. Refused operations
