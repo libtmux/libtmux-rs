@@ -782,10 +782,11 @@ pub mod since {
     /// clipboard.
     ///
     /// On 3.3a the request stops the server when the client's terminal is
-    /// `xterm-256color` or `tmux-256color`, and every later command reports
-    /// `server exited unexpectedly`; 3.4 answers it. Raw commands carrying
-    /// `-l` are refused below this release.
-    pub const CLIPBOARD_QUERY: ReleaseVersion = ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
+    /// `xterm-256color` or `tmux-256color`. On 3.4 through 3.6 the request
+    /// returns, but the server stops if the client leaves before its terminal
+    /// answers. 3.6a is the first release where neither happens. Raw commands
+    /// carrying `-l` are refused below this release.
+    pub const CLIPBOARD_QUERY: ReleaseVersion = ReleaseVersion::new(3, 6, ReleaseSuffix::PATCH_A);
 
     /// Managed control acquisition, decided before `-C`.
     ///
