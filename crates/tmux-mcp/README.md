@@ -347,8 +347,10 @@ inspect the pane before sending more input.
 ### [`wait_for_text`][wait_for_text]: wait for what a pane prints
 
 [`wait_for_text`][wait_for_text] watches the pane's output stream for a
-pattern, with stop patterns for the failures you already know. A line that
-scrolls past between looks is still seen, because it reads the stream.
+pattern, with stop patterns for the failures you already know. On tmux 3.7 or
+newer a line that scrolls past between looks is still seen, because it reads
+the stream. Below 3.7 it polls the visible screen, and a line that scrolls off
+between two reads is missed.
 
 The same example starts a background job that prints `server is ready` a second
 later, waits for that line, and prints `waited: Matched`.
