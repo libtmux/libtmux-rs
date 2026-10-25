@@ -20,11 +20,9 @@ Derive it on a struct, then [filter a list of that struct](#quick-start) with
 the expressions `libtmux` uses for panes. A comparison that has no meaning for
 a field does not compile.
 
-> **Alpha.** The API changes between releases, including in ways that will not
-> be called out as breaking, because nothing here is stable yet. Cargo will not
-> resolve a prerelease unless the requirement names one, so a plain `0.1`
-> requirement does not pick this up: depend on the exact version below, and
-> expect to edit it.
+> Releases are numbered `0.1.N`, and each release increments `N`. The API is
+> not settled: any release may change or remove exported identifiers, and the
+> changelog marks each break. Pin an exact version to avoid one.
 
 **Contents** — [Quick start](#quick-start) · [Relations](#relations) ·
 [Attributes](#attributes) · [Packages](#packages) ·
@@ -161,7 +159,8 @@ filters tmux objects with the same expressions.
 
 ## Support and status
 
-- **Alpha.** Pin an exact version.
+- **Versions.** Releases are numbered `0.1.N`, and any release may change the
+  API. Pin an exact version.
 - **One version with `libtmux`.** The derive expands to paths into a hidden
   core surface, so `libtmux` pins this crate to its own exact version.
 - **No tmux needed.** The derive is compile-time code, and the examples above

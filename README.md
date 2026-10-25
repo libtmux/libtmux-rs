@@ -35,9 +35,9 @@ server holds with typed expressions, [load tmuxp workspaces][workspace-cli-load]
 from YAML, and [let an agent drive tmux][mcp-tools] over the Model Context
 Protocol.
 
-> **Alpha.** Releases carry an `-alpha` prerelease tag. The API is not
-> settled, and any release may change or remove exported identifiers without a
-> deprecation period. Pin an exact version. Not recommended for production.
+> Releases are numbered `0.1.N`, and each release increments `N`. The API is
+> not settled: any release may change or remove exported identifiers, and the
+> changelog marks each break. Pin an exact version to avoid one.
 
 **Contents** — [Quick start](#quick-start) ·
 [Is this for you?](#is-this-for-you) ·

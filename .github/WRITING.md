@@ -90,7 +90,11 @@ what using it feels like, how to install it, and where everything else lives.
   are, and says that adding a README means wiring it in.
 - Badges: CI, the published crates, MSRV, license. That is the set.
 
-The alpha warning is worded the same in every libtmux port. Do not reword it.
+The version warning is worded the same in every libtmux port. Do not reword it:
+
+> Releases are numbered `0.1.N`, and each release increments `N`. The API is not
+> settled: any release may change or remove exported identifiers, and the
+> changelog marks each break. Pin an exact version to avoid one.
 
 ## API documentation
 
@@ -264,9 +268,9 @@ The shape already in the file, and to keep:
 - A heading prefixed with the crate name when only that crate moved, as in
   `## tmux-mcp 0.1.0-alpha.4 - 2026-08-14`, and an opening line saying which
   crate got which number whenever the versions diverge.
-- `**Breaking.**` as an inline lead-in on the bullet. While the version is
-  `0.1.0-alpha.*` nothing is stable and breaks are expected, so the marker
-  flags the ones a caller has to act on rather than every API change.
+- `**Breaking.**` as an inline lead-in on the bullet. Any `0.1.N` release may
+  break the API, so the marker flags each break a caller has to act on, and the
+  changelog is where a reader finds them.
 
 Writing an entry:
 
@@ -298,9 +302,8 @@ breaking changes first, then new capability, then anything with a measured
 effect. Implementation improvements appear only where a caller observes the
 result. Link to the changelog for the rest; do not paste it.
 
-The publish workflow writes a short note from the tag and marks the release a
-prerelease. Expanding it by hand is worthwhile for a release with a break in
-it, and unnecessary otherwise.
+The publish workflow writes a short note from the tag. Expanding it by hand is
+worthwhile for a release with a break in it, and unnecessary otherwise.
 
 No emoji, in release notes or anywhere else.
 

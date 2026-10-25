@@ -22,10 +22,10 @@ back into one, [import][cli-import] a tmuxinator or teamocil project, and
 [search][cli-search] the workspaces you have. The same package is a
 [library](#using-it-from-rust).
 
-> **Alpha.** Commands and flags can change between releases, and changes are
-> listed in the [changelog][changelog] rather than flagged as breaking.
-> `cargo install` skips prereleases unless asked, so the command below names
-> the version.
+> Releases are numbered `0.1.N`, and each release increments `N`. The API is
+> not settled: any release may change or remove exported identifiers, and the
+> changelog marks each break. Pin an exact version to avoid one. This includes
+> commands and flags; the [changelog][changelog] lists each change.
 
 **Contents** — [Quick start](#quick-start) ·
 [Load sessions](#load-sessions) ·
@@ -368,8 +368,8 @@ Lets an MCP client read the sessions a workspace built, as
 
 ## Support and status
 
-- **Alpha.** Commands and flags can change between releases. Pin an exact
-  version.
+- **Versions.** Releases are numbered `0.1.N`, and any release may change
+  commands and flags. Pin an exact version.
 - **tmux 3.3a or newer**, on `PATH`, and **Rust 1.85** to build.
 - **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS
   is supported on a best-effort basis; the release workflow builds binaries

@@ -59,10 +59,11 @@ jobs:
 
       - run: just check
 
-  # There is no automated semver gate while every version is a prerelease:
-  # `cargo-semver-checks` skips every lint on a prerelease-to-prerelease step
-  # and then reports success. This does not judge whether a change is allowed,
-  # it says one happened, which is what review needs.
+  # A semver gate applies from 0.1.0 on, and none runs here yet. Through the
+  # alphas `cargo-semver-checks` skipped every lint on a prerelease-to-
+  # prerelease step and then reported success. A 0.1.N release may break the
+  # API, so this does not judge whether a change is allowed, it says one
+  # happened, which is what review needs.
   api:
     name: public API surface
     runs-on: ubuntu-latest

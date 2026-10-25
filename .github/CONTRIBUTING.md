@@ -300,12 +300,15 @@ gated API, break it once and confirm it fails.
 every public item with its signature and each non-blanket trait
 implementation. `just api` regenerates it; `just api-check` fails when the tree
 disagrees. Adding or changing public API means committing the regenerated
-file, and that diff is the review artefact. There is no semver gate while the
-crates are prerelease: `cargo-semver-checks` treats a prerelease-to-prerelease
-step as a major change and skips every lint, reporting `0 checks: 0 pass, 254
-skip` and then `no semver update required`, which reads like a clean bill of
-health and is not one. The changelog is the record until the first
-non-prerelease version.
+file, and that diff is the review artefact. A semver gate applies from `0.1.0`
+on. Before it, every version was a prerelease, and `cargo-semver-checks` treats
+a prerelease-to-prerelease step as a major change and skips every lint,
+reporting `0 checks: 0 pass, 254 skip` and then `no semver update required`,
+which reads like a clean bill of health and is not one. `0.1.0` is the first
+non-prerelease version, so the tool has a release to compare against. No
+recipe runs it yet. Because any `0.1.N` release may break the API, a break it
+reports is not a failure; it has to be marked `**Breaking.**` in the
+changelog.
 
 **Every crate-root type has a runnable example.**
 `just example-coverage-check` fails on a type added without one. It reads
@@ -495,7 +498,9 @@ released. The tag also orders the work: publishing a crate before the
 from the registry rather than from the tree. Tags go out leaves-first, and
 each waits for the previous to appear on crates.io.
 
-To cut a release:
+Releases are numbered `0.1.N` (`0.1.0`, `0.1.1`, and so on), with no
+`-alpha` or other prerelease tag unless the maintainer asks for one. To cut a
+release:
 
 1. Bump `[workspace.package] version` and the `libtmux` pin in
    `[workspace.dependencies]` together — they are the same number, and a
@@ -571,7 +576,8 @@ Run the lane locally with `just compat`, which builds each release from
 source. It is slow, and it is the only thing that catches a version-specific
 break before CI does.
 
-While the version is `0.1.0-alpha.*` the API is not settled and any release
-may change or remove exported identifiers without a deprecation period. That
-is stated in `README.md` and `CHANGELOG.md` in the wording every libtmux port
-uses; keep the three in agreement.
+Releases are numbered `0.1.N`, and each release increments `N`. The API is not
+settled: any release may change or remove exported identifiers, without a
+deprecation period, and the changelog marks each break. That is stated in
+`README.md` and the crate READMEs in the wording every libtmux port uses; keep
+them in agreement with the sentence in [`WRITING.md`](WRITING.md).
