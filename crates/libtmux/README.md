@@ -872,9 +872,7 @@ Python.
 [docs.rs][workspace-docsrs] · [Guide][workspace-guide]
 
 ```console
-$ cargo install tmux-workspace \
-    --version 0.1.0-alpha.17 \
-    --locked
+$ cargo install tmux-workspace --locked
 ```
 
 Build the session a workspace file describes, and attach to it:
@@ -898,7 +896,7 @@ tool that changes state names what it changes.
 [Connect a client][mcp-connect] · [Guide][mcp-guide]
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.18
+$ cargo install tmux-mcp
 ```
 
 Register it with Claude Code. The guide has the same step for the other

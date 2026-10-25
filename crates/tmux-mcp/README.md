@@ -59,14 +59,14 @@ acquire a control client; unavailable operations return an
 `unsupported_version` refusal before control acquisition or paste staging.
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.18
+$ cargo install tmux-mcp
 ```
 
 [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
 prebuilt binary for Linux or macOS instead, when the release carries one:
 
 ```console
-$ cargo binstall tmux-mcp --version 0.1.0-alpha.18
+$ cargo binstall tmux-mcp
 ```
 
 Either puts a `tmux-mcp` binary on your path. A client starts it as a

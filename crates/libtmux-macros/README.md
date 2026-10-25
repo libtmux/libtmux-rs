@@ -35,7 +35,7 @@ You do not depend on this crate. `libtmux` re-exports the macro behind its
 `derive` feature:
 
 ```console
-$ cargo add libtmux@0.1.0-alpha.17 --features derive
+$ cargo add libtmux --features derive
 ```
 
 <details>

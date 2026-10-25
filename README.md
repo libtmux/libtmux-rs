@@ -50,11 +50,8 @@ Protocol.
 
 ## Quick start
 
-The version has to be written out in full: Cargo does not resolve a prerelease
-unless the requirement names one, so a plain `0.1` requirement selects nothing.
-
 ```console
-$ cargo add libtmux@0.1.0-alpha.17
+$ cargo add libtmux
 ```
 
 <details>
@@ -260,9 +257,7 @@ running sessions back into them, and [imports][workspace-cli-import]
 tmuxinator and teamocil projects.
 
 ```console
-$ cargo install tmux-workspace \
-    --version 0.1.0-alpha.17 \
-    --locked
+$ cargo install tmux-workspace --locked
 ```
 
 ```console
@@ -280,7 +275,7 @@ server over this API, read-biased, where every tool that changes state names
 exactly what it changes.
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.18
+$ cargo install tmux-mcp
 ```
 
 See [its README](crates/tmux-mcp/README.md) for the tool list and for wiring
@@ -332,7 +327,7 @@ derive behind its `derive` feature.
 [Guide][macros-guide]
 
 ```console
-$ cargo add libtmux@0.1.0-alpha.17 --features derive
+$ cargo add libtmux --features derive
 ```
 
 The example in [its README][macros-guide] derives `Filterable` for a `Job`

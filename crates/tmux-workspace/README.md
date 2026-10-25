@@ -43,9 +43,7 @@ Install the command. It needs tmux 3.3a or newer on `PATH`, and Rust 1.85 to
 build:
 
 ```console
-$ cargo install tmux-workspace \
-    --version 0.1.0-alpha.17 \
-    --locked
+$ cargo install tmux-workspace --locked
 ```
 
 [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
@@ -53,7 +51,7 @@ prebuilt binary for Linux or macOS when the release carries one, and builds
 from source when it does not:
 
 ```console
-$ cargo binstall tmux-workspace --version 0.1.0-alpha.17
+$ cargo binstall tmux-workspace
 ```
 
 Describe a session in `dev.yaml`:
@@ -287,14 +285,14 @@ reads a document the way the command does, tmuxp's way, and the command
 reference lists [where the two differ](docs/cli.md#where-the-command-and-the-library-differ).
 
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.17 --no-default-features
+$ cargo add tmux-workspace --no-default-features
 ```
 
 `--no-default-features` leaves the command and its dependencies out. The
 server handle below comes from `libtmux`, so add that too:
 
 ```console
-$ cargo add libtmux@0.1.0-alpha.17
+$ cargo add libtmux
 ```
 
 ### [`Workspace::from_yaml`]: read a workspace
