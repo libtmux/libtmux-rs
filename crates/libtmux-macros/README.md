@@ -43,7 +43,7 @@ $ cargo add libtmux --features derive
 
 ```toml
 [dependencies]
-libtmux = { version = "0.1.0-alpha.17", features = ["derive"] }
+libtmux = { version = "0.1.0", features = ["derive"] }
 ```
 
 </details>

@@ -13,6 +13,12 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-25
+
+The first final release: `libtmux`, `libtmux-macros`, `tmux-workspace` and
+`tmux-mcp` are all 0.1.0, and `cargo add libtmux` resolves it without naming
+an alpha.
+
 ### Changed
 
 - Releases are numbered `0.1.N` from `0.1.0` on, with no `-alpha` tag unless

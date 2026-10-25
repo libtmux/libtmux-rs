@@ -3,14 +3,14 @@ name = "tmux-mcp"
 # Not inherited. Only this crate has changed since the workspace version was
 # last published, and inheriting would force libtmux and libtmux-macros to be
 # republished byte-identical just so this one's dependency on them resolves.
-version = "0.1.0-alpha.18"
+version = "0.1.0"
 authors.workspace = true
 edition.workspace = true
 # Not inherited. The workspace floor is the libraries' floor, which this
 # crate cannot meet: rmcp and darling require 1.88, so inheriting 1.85 would
 # publish a version that does not build.
 rust-version = "1.88"
-description = "Model Context Protocol server exposing tmux through libtmux (alpha)"
+description = "Model Context Protocol server exposing tmux through libtmux"
 documentation = "https://docs.rs/tmux-mcp"
 repository.workspace = true
 readme = "README.md"
