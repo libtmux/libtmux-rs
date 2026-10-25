@@ -7,14 +7,18 @@ Notable changes to the workspace. The format follows
 Crates are versioned together except `tmux-mcp`, which moves at its own pace
 because its dependencies need a newer compiler than the libraries do.
 
-While the version is `0.1.0-alpha.*`, any release may break the API, and
-breaking changes are not called out as such: nothing here is stable yet. The
-prerelease suffix is load-bearing rather than decorative, because Cargo will
-not resolve a prerelease unless the requirement names one: a plain `0.1`
-requirement selects nothing, so a caller opts in by writing the version out in
-full.
+Releases are numbered `0.1.N`, and each release increments `N`. The API is not
+settled: any release may change or remove exported identifiers, and the
+changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
+
+### Changed
+
+- Releases are numbered `0.1.N` from `0.1.0` on, with no `-alpha` tag unless
+  the maintainer asks for one. Every `0.1.N` release may change the API, and
+  the changelog marks each break with **Breaking.** The READMEs say so in one
+  shared sentence in place of the alpha banner.
 
 ### Fixed
 

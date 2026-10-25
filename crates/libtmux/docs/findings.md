@@ -768,7 +768,7 @@ callable or data signature, plus each non-blanket trait implementation.
 record disagree, naming what moved.
 
 It reports that a change happened and leaves whether it is allowed to the
-person reading the diff. During the alpha every change is allowed, so a semver
+person reading the diff. Any `0.1.N` release may change the API, so a semver
 verdict would add nothing.
 
 It is built from rustdoc's JSON because that needs only the nightly toolchain

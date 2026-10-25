@@ -34,11 +34,9 @@ makes them.
 It suits tools that drive a terminal program, test suites that need a real
 tmux, and agents that share a terminal.
 
-> **Alpha.** The API changes between releases, including in ways that will not
-> be called out as breaking, because nothing here is stable yet. Cargo will not
-> resolve a prerelease unless the requirement names one, so a plain `0.1`
-> requirement does not pick this up: depend on the exact version below, and
-> expect to edit it.
+> Releases are numbered `0.1.N`, and each release increments `N`. The API is
+> not settled: any release may change or remove exported identifiers, and the
+> changelog marks each break. Pin an exact version to avoid one.
 
 See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
 [`libtmux-macros`][pkg-macros], [`tmux-workspace`][pkg-workspace] and
@@ -874,9 +872,7 @@ Python.
 [docs.rs][workspace-docsrs] · [Guide][workspace-guide]
 
 ```console
-$ cargo install tmux-workspace \
-    --version 0.1.0-alpha.17 \
-    --locked
+$ cargo install tmux-workspace --locked
 ```
 
 Build the session a workspace file describes, and attach to it:
@@ -900,7 +896,7 @@ tool that changes state names what it changes.
 [Connect a client][mcp-connect] · [Guide][mcp-guide]
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.18
+$ cargo install tmux-mcp
 ```
 
 Register it with Claude Code. The guide has the same step for the other
@@ -933,8 +929,9 @@ $ claude mcp add tmux \
 
 ## Support and status
 
-While the version is `0.1.0-alpha.*` the API is not settled, and any release
-may change or remove exported identifiers. Pin an exact version.
+Releases are numbered `0.1.N`, and each release increments `N`. The API is not
+settled: any release may change or remove exported identifiers, and the
+changelog marks each break. Pin an exact version to avoid one.
 
 - **Rust 1.85+**, the first compiler to ship Edition 2024. CI runs the whole
   test suite on it, and a raise is a minor version bump named in the release

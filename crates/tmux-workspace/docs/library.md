@@ -2,7 +2,7 @@ Build tmux workspaces from [tmuxp](https://tmuxp.git-pull.com/)-style YAML,
 using [libtmux](https://docs.rs/libtmux).
 
 This is the library. The package also ships the `tmux-workspace` command, a
-native tmuxp: `cargo install tmux-workspace --version 0.1.0-alpha.17`, and
+native tmuxp: `cargo install tmux-workspace`, and
 see its [README](https://crates.io/crates/tmux-workspace) and its
 [reference](crate::command).
 The library reads tmuxp's own example files and, by default, records rather
@@ -10,11 +10,9 @@ than acts on a handful of tmuxp's keys;
 [Reading a tmuxp file](#reading-a-tmuxp-file) names them and says where it
 still departs from tmuxp.
 
-> **Alpha.** The API changes between releases, including in ways that will not
-> be called out as breaking, because nothing here is stable yet. Cargo will not
-> resolve a prerelease unless the requirement names one, so a plain `0.1`
-> requirement does not pick this up: depend on the exact version, and expect
-> to edit it.
+> Releases are numbered `0.1.N`, and each release increments `N`. The API is
+> not settled: any release may change or remove exported identifiers, and the
+> changelog marks each break. Pin an exact version to avoid one.
 
 Describe the workspace:
 
@@ -213,7 +211,7 @@ The command is a default feature; a library dependent leaves it, and clap
 with it, out:
 
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.17 --no-default-features
+$ cargo add tmux-workspace --no-default-features
 ```
 
 <details>

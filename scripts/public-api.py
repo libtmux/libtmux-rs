@@ -7,8 +7,8 @@ stable enough to diff: item signatures and non-blanket trait implementations
 change when a caller-visible contract changes.
 
 It is not a semver oracle. It says what moved, which is what
-`cargo-semver-checks` cannot say while every version is a prerelease and it
-skips every lint.
+`cargo-semver-checks` could not say through the alphas, when it skipped every
+lint, and what a `0.1.N` release is still allowed to change.
 """
 
 from __future__ import annotations

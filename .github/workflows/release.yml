@@ -1,6 +1,6 @@
 name: Release
 
-# One tag names one crate: `libtmux@v0.1.0-alpha.4`. The crates do not share a
+# One tag names one crate: `libtmux@v0.1.0`. The crates do not share a
 # version -- `tmux-mcp` moves at its own pace -- so a single workspace-wide tag
 # could not say what was being released.
 #
@@ -174,11 +174,19 @@ jobs:
             gh release upload "$TAG" "$CRATE_FILE" \
               --repo "$GITHUB_REPOSITORY" --clobber
           else
+            # A version with a `-` suffix is a semver prerelease; a final
+            # version gets an ordinary release.
+            notes="\`$PACKAGE\` $VERSION. See CHANGELOG.md for what changed."
+            flags=()
+            if [[ "$VERSION" == *-* ]]; then
+              notes="$notes This is a prerelease."
+              flags+=(--prerelease)
+            fi
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$PACKAGE $VERSION" \
-              --notes "\`$PACKAGE\` $VERSION. See CHANGELOG.md for what changed. This is a prerelease." \
-              --prerelease \
+              --notes "$notes" \
+              "${flags[@]}" \
               --verify-tag \
               "$CRATE_FILE"
           fi

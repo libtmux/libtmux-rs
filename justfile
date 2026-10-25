@@ -194,7 +194,7 @@ api:
     python3 scripts/public-api.py target/doc/libtmux.json \
         > crates/libtmux/docs/public-api.txt
 
-# There is no automated semver gate while every version is a prerelease, so
+# No automated semver gate runs yet, and a 0.1.N release may break the API, so
 # this is what makes a change to the surface visible. It does not judge whether
 # a change is allowed; it says one happened.
 #

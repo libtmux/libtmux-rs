@@ -26,10 +26,10 @@ for output you did not start, [follow][capture_since] a pane across turns, and
 [find][search_panes] the pane that printed something. For a single
 `tmux send-keys`, shelling out is shorter.
 
-> **Alpha.** The tool surface changes between releases, including in ways that
-> will not be called out as breaking, because nothing here is stable yet.
-> `cargo install` will not pick a prerelease unless asked, so the install
-> command below names the version. Feedback welcome.
+> Releases are numbered `0.1.N`, and each release increments `N`. The API is
+> not settled: any release may change or remove exported identifiers, and the
+> changelog marks each break. Pin an exact version to avoid one. This includes
+> the tool surface.
 
 **Contents** — [Quick start](#quick-start) ·
 [Connect another client](#connect-another-client) ·
@@ -59,14 +59,14 @@ acquire a control client; unavailable operations return an
 `unsupported_version` refusal before control acquisition or paste staging.
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.18
+$ cargo install tmux-mcp
 ```
 
 [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
 prebuilt binary for Linux or macOS instead, when the release carries one:
 
 ```console
-$ cargo binstall tmux-mcp --version 0.1.0-alpha.18
+$ cargo binstall tmux-mcp
 ```
 
 Either puts a `tmux-mcp` binary on your path. A client starts it as a
@@ -682,7 +682,8 @@ README][workspace-agent] has the two commands.
 
 ## Support and status
 
-- **Alpha.** Any release may change the tool surface. Pin an exact version.
+- **Versions.** Releases are numbered `0.1.N`, and any release may change the
+  tool surface. Pin an exact version.
 - **tmux 3.3a or newer**, on `PATH`.
 - **Rust 1.88 to build.** The libraries under it build on 1.85.
 - **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS
