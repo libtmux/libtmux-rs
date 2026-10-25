@@ -22,6 +22,13 @@ full.
   migration guide no longer promise that text scrolling past between checks
   is seen below tmux 3.7, and the crate READMEs no longer claim macOS test
   runs in CI. (#97)
+- The `libtmux` README, design and migration guides, and the capability
+  summaries now say which refused commands the guard does not read when they
+  are nested in another command, on which tmux releases, and whether the
+  result is a server exit, the wrong buffer or a tmux error. The README also
+  says `PaneWait::Dead` carries no text. (#99)
+- `cargo test --test optional_features` now names the missing `test-support`
+  feature instead of reporting `ok. 0 passed`. (#99)
 
 ## 0.1.0-alpha.17 - 2026-10-24
 

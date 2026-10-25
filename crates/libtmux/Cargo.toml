@@ -111,6 +111,11 @@ harness = false
 required-features = ["test-support", "control-mode"]
 
 [[test]]
+name = "optional_features"
+path = "tests/optional_features.rs"
+required-features = ["test-support"]
+
+[[test]]
 name = "filter_derive"
 path = "tests/filter_derive.rs"
 required-features = ["derive"]

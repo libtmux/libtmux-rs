@@ -371,9 +371,9 @@ Lets an MCP client read the sessions a workspace built, as
 - **Alpha.** Commands and flags can change between releases. Pin an exact
   version.
 - **tmux 3.3a or newer**, on `PATH`, and **Rust 1.85** to build.
-- **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS is
-  supported on a best-effort basis, and CI coverage for it is highly limited:
-  CI does not run the tests there.
+- **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS
+  is supported on a best-effort basis; the release workflow builds binaries
+  there, and CI does not run the tests.
 - **Prebuilt binaries** for Linux and macOS come with a release when it
   carries them.
 

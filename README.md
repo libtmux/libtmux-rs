@@ -408,9 +408,9 @@ $ claude mcp add tmux \
   and error wording change between releases.
 - **A refusal on two releases.** [`run_shell`] refuses on 3.3a and 3.4, which
   drop the command's output instead of returning it.
-- **Linux, including WSL.** CI runs the tests on Linux. macOS is supported on a
-  best-effort basis, and CI coverage for it is highly limited: CI does not run
-  the tests there.
+- **Linux, including WSL.** CI runs the tests on Linux. macOS is supported
+  on a best-effort basis; the release workflow builds binaries there, and CI
+  does not run the tests.
 - **Unix only.** Native Windows is unsupported because tmux is unavailable
   there.
 
