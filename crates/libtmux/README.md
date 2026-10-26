@@ -14,7 +14,7 @@
 [![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]
 [![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
 
-[crates.io]: https://img.shields.io/crates/v/libtmux.svg
+[crates.io]: https://img.shields.io/crates/v/libtmux.svg?label=libtmux
 [crate]: https://crates.io/crates/libtmux
 [docs.rs]: https://img.shields.io/docsrs/libtmux
 [docs]: https://docs.rs/libtmux

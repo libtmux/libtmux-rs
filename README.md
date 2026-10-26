@@ -11,9 +11,9 @@
 
 # libtmux for Rust
 
-[![CI]][actions] [![libtmux]][libtmux-crate] [![tmux-mcp]][mcp-crate] [![MSRV]][rust-1.85] [![License]][license]
+[![CI]][actions] [![libtmux]][libtmux-crate]
 [![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
-[![tmux-workspace]][workspace-crate] [![libtmux-macros]][macros-crate]
+[![License]][license] [![MSRV]][rust-1.85]
 
 [CI]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml/badge.svg
 [actions]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml
@@ -24,7 +24,7 @@
 [MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
 [rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
 [License]: https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg
-[license]: #license
+[license]: https://github.com/libtmux/libtmux-rs/blob/master/LICENSE-MIT
 
 **Drive tmux from Rust: typed, async control over servers, sessions, windows,
 and panes — and a query layer that makes "which pane is running the tests?" one
