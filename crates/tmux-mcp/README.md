@@ -15,6 +15,9 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [tmux](https://github.com/tmux/tmux), built on
 [libtmux](https://docs.rs/libtmux).
 
+[![tmux-mcp](https://img.shields.io/crates/v/tmux-mcp.svg?label=tmux-mcp)](https://crates.io/crates/tmux-mcp)
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
+
 </div>
 
 Give an agent typed operations inside the terminal: [inspect][toolset-inspect]

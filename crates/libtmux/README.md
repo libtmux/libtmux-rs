@@ -12,6 +12,7 @@
 # libtmux
 
 [![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
 
 [crates.io]: https://img.shields.io/crates/v/libtmux.svg
 [crate]: https://crates.io/crates/libtmux

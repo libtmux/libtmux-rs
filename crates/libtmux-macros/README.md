@@ -14,6 +14,9 @@
 [`#[derive(Filterable)]`] for [`libtmux`](https://docs.rs/libtmux): give your
 own structs the same [typed query grammar] `libtmux` uses for tmux objects.
 
+[![libtmux-macros](https://img.shields.io/crates/v/libtmux-macros.svg?label=libtmux-macros)](https://crates.io/crates/libtmux-macros)
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
+
 </div>
 
 Derive it on a struct, then [filter a list of that struct](#quick-start) with
