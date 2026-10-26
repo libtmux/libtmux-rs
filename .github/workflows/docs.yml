@@ -1,8 +1,8 @@
 name: docs
 
 # Publishes this port's documentation to libtmux.org: trunk as
-# /en/rs/latest/, and each `libtmux@v*` release tag as its own version plus an
-# alias, `next` for a prerelease and `stable` (the default) for a release.
+# /en/rs/latest/, and each `libtmux@v*` release tag as its own version, which
+# is the default. A prerelease tag also publishes `next`.
 #
 # libtmux/docs builds and publishes the tree, through two reusable workflows
 # pinned to one commit: port-docs.yml decides which versions an event builds

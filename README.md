@@ -12,6 +12,8 @@
 # libtmux for Rust
 
 [![CI]][actions] [![libtmux]][libtmux-crate] [![tmux-mcp]][mcp-crate] [![MSRV]][rust-1.85] [![License]][license]
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
+[![tmux-workspace]][workspace-crate] [![libtmux-macros]][macros-crate]
 
 [CI]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml/badge.svg
 [actions]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml
