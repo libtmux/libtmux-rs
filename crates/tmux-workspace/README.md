@@ -16,7 +16,7 @@ Load tmux sessions from YAML, and save running ones back to it. A native
 them where tmuxp does and takes tmuxp's flags, as one binary with no Python.
 
 [![tmux-workspace](https://img.shields.io/crates/v/tmux-workspace.svg?label=tmux-workspace)](https://crates.io/crates/tmux-workspace)
-[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/latest/workspace/)
 
 </div>
 

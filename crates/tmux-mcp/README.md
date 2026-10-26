@@ -16,7 +16,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [libtmux](https://docs.rs/libtmux).
 
 [![tmux-mcp](https://img.shields.io/crates/v/tmux-mcp.svg?label=tmux-mcp)](https://crates.io/crates/tmux-mcp)
-[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/latest/mcp/)
 
 </div>
 
