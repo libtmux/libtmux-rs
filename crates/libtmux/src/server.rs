@@ -803,7 +803,7 @@ impl Server {
     /// Each item pairs layout bytes with the required pane count. Classic
     /// layouts are checked for checksums, nonempty trees, unsigned fields and
     /// depth up to 256 nested groups. tmux owns geometry correction and pruning.
-    /// JSON layouts require tmux 3.8-rc2 or newer; tmux validates their
+    /// JSON layouts require tmux 3.8 or newer; tmux validates their
     /// contents. The version check queries the daemon even when no layouts need a version
     /// check; a cold endpoint uses the selected executable. Unique name
     /// abbreviations are accepted.

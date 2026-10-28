@@ -56,9 +56,6 @@ impl ReleaseSuffix {
     /// A development build of the release, ranked below its candidates.
     pub(crate) const NEXT: Self = Self(SuffixKind::Next);
 
-    /// The second candidate, the earliest 3.8 build whose layouts are JSON.
-    pub(crate) const RELEASE_CANDIDATE_2: Self = Self(SuffixKind::ReleaseCandidate(2));
-
     pub(crate) const PATCH_A: Self = Self(SuffixKind::Patch(b'a'));
 
     /// Construct a numbered release-candidate suffix.
@@ -791,7 +788,7 @@ pub mod since {
     /// Managed control acquisition, decided before `-C`.
     ///
     /// Any build ranking at or above 3.7 final is eligible, including
-    /// `3.8-rc2` and `next-3.8`; `next-3.7` and `3.7-rc*` rank below it.
+    /// `3.8` and `next-3.8`; `next-3.7` and `3.7-rc*` rank below it.
     /// [`crate::TmuxVersion::has_behavior`] answers by that ranking.
     pub const CONTROL_ACQUISITION: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 
@@ -864,11 +861,8 @@ pub mod since {
     /// unrecognised layout, with no hint that the value is simply from a
     /// newer tmux.
     ///
-    /// The gate is the earliest build measured: 3.8-rc2, 3.8-rc3 and 3.8
-    /// dump JSON, and 3.7c does not. The `3.8-rc` tag no longer exists
-    /// upstream, so a candidate below rc2 cannot be checked.
-    pub const JSON_LAYOUTS: ReleaseVersion =
-        ReleaseVersion::new(3, 8, ReleaseSuffix::RELEASE_CANDIDATE_2);
+    /// 3.8 dumps JSON and 3.7c does not.
+    pub const JSON_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 8, ReleaseSuffix::FINAL);
 }
 
 #[cfg(test)]
