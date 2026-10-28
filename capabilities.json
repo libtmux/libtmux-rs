@@ -125,7 +125,7 @@
       "handling": "refuse",
       "id": "layout-json",
       "name": "JSON layout strings",
-      "since": "3.8-rc2",
+      "since": "3.8",
       "summary": "Apply a layout saved in the JSON form tmux reports."
     },
     {

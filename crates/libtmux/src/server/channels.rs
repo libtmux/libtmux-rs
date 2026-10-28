@@ -113,7 +113,7 @@ impl Server {
     /// because it kills the client: tmux then grants the lock to a client that
     /// is gone and every later lock on the channel blocks forever. A tmux
     /// defect (`cmd_wait_for_unlock` in `cmd-wait-for.c`), measured on 3.2a,
-    /// 3.7d and 3.8-rc.
+    /// 3.7d and 3.8.
     pub async fn lock_channel(&self, channel: &str) -> Result<(), Error> {
         wait_for::lock(&self.core, channel, self.default_timeout()).await
     }

@@ -13,6 +13,13 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
+### Changed
+
+- JSON layouts need tmux 3.8 or newer, the first release that accepts
+  them. On an older server, applying one fails before it reaches tmux with
+  `Error::UnsupportedCapability`, naming 3.8; upgrade to tmux 3.8 to apply
+  a JSON layout. (#110)
+
 ## 0.1.0 - 2026-10-25
 
 The first final release: `libtmux`, `libtmux-macros`, `tmux-workspace` and

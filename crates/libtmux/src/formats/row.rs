@@ -11,7 +11,7 @@ use super::{DecoderKind, FormatDescriptor, ListProfile};
 /// digit or one of the letters `vis` emits, so the two escaping layers below
 /// compose into one unambiguous grammar.
 ///
-/// `{`, `}`, `\n` and `\t` joined the set in 3.8-rc. No earlier release
+/// `{`, `}`, `\n` and `\t` joined the set in 3.8. No earlier release
 /// escapes them, so accepting them here is a safe superset on every version --
 /// no `since::` gate needed.
 pub(super) const QUOTE_SHELL_SPECIALS: &[u8] = b"|&;<>()$`\\\"'*?[# =%{}\n\t";

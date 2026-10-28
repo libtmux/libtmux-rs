@@ -308,24 +308,26 @@ mod tests {
         let new = TmuxVersion::parse_output(b"tmux 3.7c\n").unwrap();
         let json = [(OsStr::new(r#"{"V":2,"L":[]}"#), 1)];
         let pending = prepare(json).unwrap();
-        for output in ["tmux 3.7c\n", "tmux 3.8-rc\n"] {
-            let json_incapable = TmuxVersion::parse_output(output.as_bytes()).unwrap();
-            assert_eq!(
-                resolve(&pending, &json_incapable).unwrap_err().kind(),
-                crate::ErrorKind::UnsupportedVersion,
-                "{output}"
+        assert_eq!(
+            crate::since::JSON_LAYOUTS,
+            crate::ReleaseVersion::new(3, 8, crate::ReleaseSuffix::FINAL),
+            "JSON layouts need tmux 3.8"
+        );
+        // `next-3.8` ranks directly below the floor.
+        for output in ["tmux 3.7c\n", "tmux next-3.8\n"] {
+            let below = TmuxVersion::parse_output(output.as_bytes()).unwrap();
+            let refused = resolve(&pending, &below).unwrap_err();
+            assert_eq!(refused.kind(), crate::ErrorKind::UnsupportedVersion);
+            assert!(
+                matches!(
+                    refused,
+                    Error::UnsupportedCapability { needs, .. }
+                        if needs == crate::since::JSON_LAYOUTS
+                ),
+                "{output}: the refusal names 3.8 as the minimum: {refused:?}"
             );
         }
-        assert_eq!(
-            resolve(&pending, &new).unwrap_err().kind(),
-            crate::ErrorKind::UnsupportedVersion
-        );
-        for output in [
-            "tmux 3.8-rc2\n",
-            "tmux 3.8-rc3\n",
-            "tmux 3.8\n",
-            "tmux next-3.9\n",
-        ] {
+        for output in ["tmux 3.8\n", "tmux next-3.9\n"] {
             let json_capable = TmuxVersion::parse_output(output.as_bytes()).unwrap();
             resolve(&pending, &json_capable).unwrap();
         }
