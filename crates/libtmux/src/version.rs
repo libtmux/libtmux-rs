@@ -969,7 +969,7 @@ mod grammar_tests {
         // Anything ranking at or above 3.7 final may acquire control.
         let control = ReleaseVersion::new(3, 7, crate::ReleaseSuffix::FINAL);
         for (raw, allowed) in [
-            ("3.8-rc2", true),
+            ("3.8", true),
             ("next-3.8", true),
             ("3.7", true),
             ("3.7d", true),

@@ -39,7 +39,7 @@ const Q_SHELL_ESCAPED: [u8; 19] = [
     0x7c, 0x26, 0x3b, 0x3c, 0x3e, 0x28, 0x29, 0x24, 0x60, 0x5c, 0x22, 0x27, 0x2a, 0x3f, 0x5b, 0x23,
     0x20, 0x3d, 0x25,
 ];
-/// `{`, `}`, newline and tab: what 3.8-rc added to the set above.
+/// `{`, `}`, newline and tab: what 3.8 added to the set above.
 const Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS: [u8; 4] = *b"{}\n\t";
 const SHORT_SENTINEL: &str = "zot-private";
 const LONG_SENTINEL: &str = "quartz-private-payload-with-a-distinct-and-deliberately-long-shape";
@@ -705,7 +705,7 @@ fn format_codec_tmux_3_2a_q_escape_set_round_trips_exactly() {
 #[test]
 fn format_codec_next_3_9_q_escape_additions_round_trip_exactly() {
     // Without these bytes in QUOTE_SHELL_SPECIALS this fails with
-    // InvalidEscape at the first backslash -- the failure real 3.8-rc output
+    // InvalidEscape at the first backslash -- the failure real 3.8 output
     // produces for any value holding a brace, a newline or a tab, such as
     // `#{q:window_layout}` or a `#{q:pane_current_path}` with a tab in it.
     let mut stdout = Vec::with_capacity(Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS.len() * 2 + 2);
@@ -1807,12 +1807,11 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
     const EXPECTED_RAW_STDOUT: [u8; 13] = [
         0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x3d, 0x0a,
     ];
-    // 3.8-rc added the newline to the quoted set, so it arrives escaped.
+    // 3.8 added the newline to the quoted set, so it arrives escaped.
     const EXPECTED_ESCAPED_NEWLINE_STDOUT: [u8; 14] = [
         0x3a, 0x5c, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x3d, 0x0a,
     ];
-    const ESCAPED_NEWLINE: ReleaseVersion =
-        ReleaseVersion::new(3, 8, ReleaseSuffix::RELEASE_CANDIDATE);
+    const ESCAPED_NEWLINE: ReleaseVersion = ReleaseVersion::new(3, 8, ReleaseSuffix::FINAL);
     const EXPECTED_VIS_STDOUT: [u8; 19] = [
         0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x5c, 0x32, 0x30, 0x30, 0x5c, 0x33,
         0x37, 0x37, 0x3d, 0x0a,

@@ -197,7 +197,7 @@ on a server with a single binding left. `Server::key_bindings` still sends
 `-T`, because it returns tmux's own lines, and its documentation names the
 defect.
 
-The condition is in the source of 3.7 and 3.7c and gone from 3.8-rc. Measured,
+The condition is in the source of 3.7 and 3.7c and gone from 3.8. Measured,
 3.7c prints nothing for a one-binding table and 3.7d prints it.
 `real_tmux_compat_key_bindings_read_as_fields` binds two one-binding tables,
 and fails on 3.7c when `-T` is sent.
@@ -213,7 +213,7 @@ never touches `wait_channels`. The client leaves the `clients` list, so
 `cmdq_next` never runs its queue again, and the queued item still holds the
 reference `cmdq_append` took, so nothing is freed and nothing dangles: one
 client struct and one queue item leak, and the channel's list keeps an entry
-that can never act. The code is the same from 3.2a through 3.8-rc, and 3.8-rc's
+that can never act. The code is the same from 3.2a through 3.8, and 3.8's
 new `wait-for -l` shows the leak: it lists the entry by name after the client
 is gone.
 

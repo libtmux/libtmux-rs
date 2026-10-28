@@ -220,7 +220,7 @@ async fn real_tmux_compat_optional_control_refuses_builds_ranking_below_3_7() {
 
 #[tokio::test]
 async fn real_tmux_compat_optional_control_accepts_builds_ranking_above_3_7() {
-    for reported in ["3.8-rc2", "next-3.8", "next-3.9"] {
+    for reported in ["3.8", "next-3.8", "next-3.9"] {
         control_acquisition_rank(reported, false).await;
     }
 }

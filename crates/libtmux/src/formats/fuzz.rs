@@ -12,11 +12,11 @@ use crate::{ServerIdentity, TmuxVersion};
 
 /// `format_quote_shell`'s set from 3.2a through 3.7.
 const Q_ESCAPED_BEFORE_3_8: &[u8] = b"|&;<>()$`\\\"'*?[# =%";
-/// `format_quote_shell`'s set from 3.8-rc, which added `{}`, newline and tab.
+/// `format_quote_shell`'s set from 3.8, which added `{}`, newline and tab.
 const Q_ESCAPED_FROM_3_8: &[u8] = b"|&;<>(){}$`\\\"'*?[# =%\n\t";
 
 /// The releases a selector picks, each with the set it quotes with. 3.5 is
-/// the `vis` dialect; `next-3.9` stands for 3.8-rc and later.
+/// the `vis` dialect; `next-3.9` stands for 3.8 and later.
 const RELEASES: [(&[u8], &[u8]); 4] = [
     (b"tmux 3.2a\n", Q_ESCAPED_BEFORE_3_8),
     (b"tmux 3.5\n", Q_ESCAPED_BEFORE_3_8),
