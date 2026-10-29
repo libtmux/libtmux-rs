@@ -61,11 +61,12 @@ See the [migration notes](docs/migration.md) when upgrading from an earlier alph
 
 ## Quick start
 
-Add the crate, and Tokio to drive it:
+Add the crate, and Tokio to drive it. `test-support` supplies the isolated
+server used by the examples:
 
 ```toml
 [dependencies]
-libtmux = "0.1.1"
+libtmux = { version = "0.1.1", features = ["test-support"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -77,8 +78,7 @@ use libtmux::test::TestServer;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Runs for real. `TestServer` is an isolated tmux on its own socket under
-    // `/tmp/libtmux-rs-test/`, torn down at the end. Your own code says
-    // `let server = libtmux::Server::new()?;` instead; nothing else changes.
+    // `/tmp/libtmux-rs-test/`, torn down at the end.
     let guard = TestServer::new().await?;
     let server = guard.server();
 
@@ -97,9 +97,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The examples on this page run as written, against a throwaway tmux. To run
-them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.1", features = ["test-support"] }`.
+The examples on this page run against a throwaway tmux. To connect to an
+existing server, use `libtmux::Server::new()?` instead of creating the guard,
+and omit `guard.shutdown()`. With neither `LIBTMUX_SOCKET_PATH` nor
+`LIBTMUX_SOCKET` set, `Server::new` passes tmux no socket and tmux picks the
+server. That route needs no `test-support` feature; leave the daemon's
+lifetime to its owner.
 
 [`Pane::send_line`] types a line and presses Enter, and [`Pane::capture`]
 reads what the pane shows. Every method that reaches tmux is `async`.

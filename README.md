@@ -52,8 +52,16 @@ Protocol.
 
 ## Quick start
 
+In a Cargo binary project, enable the fixture used by the examples:
+
 ```console
-$ cargo add libtmux
+$ cargo add libtmux --features test-support
+```
+
+Add Tokio to run the async entrypoint:
+
+```console
+$ cargo add tokio --features rt-multi-thread,macros
 ```
 
 <details>
@@ -61,7 +69,7 @@ $ cargo add libtmux
 
 ```toml
 [dependencies]
-libtmux = "0.1.1"
+libtmux = { version = "0.1.1", features = ["test-support"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
@@ -76,8 +84,7 @@ use libtmux::test::TestServer;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // This example runs. `TestServer` is an isolated tmux on its own socket
     // under `/tmp/libtmux-rs-test/`, torn down at the end, so it cannot touch
-    // sessions you are using. In your own code, that line is
-    // `let server = libtmux::Server::new()?;` and the rest is unchanged.
+    // sessions you are using.
     let guard = TestServer::new().await?;
     let server = guard.server();
 
@@ -94,9 +101,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The examples on this page run as written, against a throwaway tmux. To run
-them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.1", features = ["test-support"] }`.
+The examples on this page run against a throwaway tmux. To connect to an
+existing server, use `libtmux::Server::new()?` instead of creating the guard,
+and omit `guard.shutdown()`. With neither `LIBTMUX_SOCKET_PATH` nor
+`LIBTMUX_SOCKET` set, `Server::new` passes tmux no socket and tmux picks the
+server. That route needs no `test-support` feature; leave the daemon's
+lifetime to its owner.
 
 Everything that reaches tmux is `async`. Everything that reads an
 already-taken snapshot is not, so walking a tree you already have costs no
