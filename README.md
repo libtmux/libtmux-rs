@@ -402,7 +402,10 @@ $ claude mcp add tmux \
 - **Rust 1.85 or newer** for the libraries. `tmux-mcp` needs 1.88.
 - **tmux 3.3a or newer.** CI builds pinned tmux 3.3a, 3.4, 3.5a, 3.6b, and 3.7b
   from source and runs the whole workspace against each, because tmux's output
-  and error wording change between releases.
+  and error wording change between releases. tmux release candidates are not
+  supported: a candidate such as `X.Y-rcN` ranks below `X.Y`, and a feature
+  can require one only until its release ships. See
+  [Release candidates](https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates).
 - **A refusal on two releases.** [`run_shell`] refuses on 3.3a and 3.4, which
   drop the command's output instead of returning it.
 - **Linux, including WSL.** CI runs the tests on Linux. macOS is supported

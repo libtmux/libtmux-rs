@@ -115,6 +115,10 @@ nothing. To fix it, upgrade tmux and restart its server, or pin the previous
 release. [The contract][contract-version] covers unrecognized versions, failed
 probes, and the calls that skip the check.
 
+tmux release candidates are not supported: a candidate such as `X.Y-rcN` ranks
+below `X.Y`, and a feature can require one only until its release ships. See
+[Release candidates](https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates).
+
 Optional operations have narrower daemon requirements:
 
 | Operation | Qualified daemon |
