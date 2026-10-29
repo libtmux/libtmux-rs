@@ -17,7 +17,7 @@
   - [Core and executor](#core-and-executor)
   - [Commands and results](#commands-and-results)
   - [IDs, targets, and relationships](#ids-targets-and-relationships)
-  - [Private snapshots and future refresh](#private-snapshots-and-future-refresh)
+  - [Private snapshots and refresh](#private-snapshots-and-refresh)
   - [Native local iteration](#native-local-iteration)
   - [Portable filters](#portable-filters)
   - [What an expression can name](#what-an-expression-can-name)
@@ -38,8 +38,8 @@
 
 ## Outcome
 
-The repository is a Cargo workspace whose members live under `crates/`, and
-all four are published:
+The repository is a Cargo workspace with four published crates under
+`crates/` and a private developer tool, `tools/mcp-swap`:
 
 | Crate            | What it is                                              |
 | ---------------- | ------------------------------------------------------- |
@@ -422,8 +422,8 @@ are not retained because their diagnostics could expose raw output. A non-zero
 status and non-empty stderr remain data at the raw `cmd()` boundary; domain
 wrappers decide which tmux responses are failures.
 
-Batching and structural semicolon chains are deferred. When they are added,
-independent batches return one result per request. A direct subprocess chain is
+`CommandChain` groups structural semicolon chains into one dispatch.
+Independent plan steps can dispatch separately. A direct subprocess chain is
 one Core dispatch request and one result because subprocess output cannot prove
 per-command attribution. A planner that requires individual terminal states
 must dispatch independently unless the executor advertises per-command
@@ -466,7 +466,9 @@ winlink. Underlying object identity and edge identity remain distinct.
 resolution re-queries tmux so move and link operations do not leave traversal
 permanently attached to stale parents.
 
-### Private snapshots and future refresh
+<a id="private-snapshots-and-future-refresh"></a>
+
+### Private snapshots and refresh
 
 The `SessionInfo`, `WindowInfo`, `PaneInfo`, and `ClientInfo` structs,
 projections, format plans, and built-in fields are crate-private. Each field
@@ -501,8 +503,8 @@ tmux permits commas in those names and provides no escaping. Typed
 relationships come from projection rows and IDs, never by splitting those
 display values.
 
-Future handles expose synchronous snapshot getters while live relationships
-and commands remain async. The planned `refresh(&mut self)` replaces the
+Handles expose synchronous snapshot getters while live relationships
+and commands remain async. `refresh(&mut self)` replaces the
 receiver's complete snapshot and returns `&mut Self`; `refreshed(&self)`
 returns a new handle. Clones remain independent snapshots sharing only
 `Core`.
@@ -535,11 +537,10 @@ and `5fd45b38`, "Do not strvis output to terminal from commands", restored
 verbatim output before tag 3.6. A `next-X.Y` identifier resolves through the
 release it precedes; `master` names no release and selects `RawQ`.
 
-Dialect selection is evidence, not trust. The version probe reads the
-configured client executable, but `server_client_print` runs in the daemon that
-owns the socket, so the two can disagree. Each dialect therefore rejects the
-escapes only the other produces: a mismatched pairing fails loudly at the first
-divergent escape instead of decoding into different bytes.
+Dialect selection uses the checked daemon's version, or the configured
+executable's version when the endpoint has no daemon. It does not substitute
+the client version for an already-running daemon. Each dialect also rejects
+escapes only the other produces, so divergent framing fails loudly.
 
 Each decoded field is therefore one callback sample. Dangling escapes,
 missing field terminators, missing row LF, and trailing bytes are framing
@@ -547,10 +548,11 @@ errors. The parser never splices or retries individual fields or rows.
 Tmux still expands fields and rows sequentially, so a byte-exact decoded
 listing is not a transactional snapshot of server state.
 
-There is no aggregate `ServerSnapshot`. Future Session, Window, Pane, and
+There is no aggregate `ServerSnapshot`. Session, Window, Pane, and
 Client listings come from separate tmux commands and cannot form an atomic
-capture. Their return floor is an ordered `Vec<T>`, but no public hierarchy
-listing exists at the current milestone.
+capture. They return ordered `Vec<T>` values. `Server::hierarchy` joins three
+listings into `SessionTree` and `WindowTree` values; it is not an atomic
+snapshot either.
 
 ### Native local iteration
 
@@ -866,9 +868,10 @@ separate version-sensitive format concern. The version is reported by the
 configured executable and does not assert the build of a daemon already
 listening at the selected endpoint.
 
-The initial crate does not expose Statement, Program, planner, registry,
-approval, or retry policy APIs. The public query and command values can later
-be embedded into one immutable graph. When prepared physical work lands, it
+The `plan` feature exposes `Plan` and `Planner` for recording and dispatching
+work. Statement, Program, registry, approval, and retry policy APIs remain
+proposals. The public query and command values can later be embedded into one
+immutable graph. When prepared physical work lands, it
 must bind to the exact capability value and distinguish logical operation and
 node identity, the current Core-scoped dispatch-request identity,
 executor-internal attempt identity, and physical transport correlation. A
@@ -878,7 +881,7 @@ identity; a subprocess PID or control-mode block number is correlation evidence
 for an attempt, not the public request ID. Result shape must match the
 executor's proven correlation granularity.
 
-A future control-mode engine must issue independent requests separately from
+A control-mode engine must issue independent requests separately from
 semicolon chains, keep draining protocol frames after caller cancellation,
 and give each logical node exactly one terminal state: complete, failed,
 skipped, or unknown. It may report per-command states only when retained
@@ -1299,7 +1302,7 @@ MSRV is a promise about the published crates. `libtmux` and `libtmux-macros`
 build and test on 1.85. The consumer crates, `tmux-mcp` and `tmux-workspace`,
 exist to exercise the public API from outside. `tmux-mcp` carries its own MSRV
 of 1.88, because its dependencies need a compiler the libraries do not, and is
-tested on its own lane. Every crate publishes; being published is part of
+tested on its own lane. Those four crates publish; being published is part of
 the consumers' job rather than beside it, since a crate built only inside its
 own workspace never proves its dependency requirements resolve.
 
@@ -1315,9 +1318,9 @@ never above a version whose own `rust-version` exceeds the MSRV -- which is
 what rules out criterion 0.8 and trybuild 1.0.120 today.
 
 The crate uses Edition 2024, Cargo resolver 3, `rust-version = "1.85"`, and
-the repository's MIT license. `rust-toolchain.toml` pins the development
-compiler and installs Rustfmt, Clippy, and rust-src. Rustfmt uses stable
-settings only.
+the repository's `MIT OR Apache-2.0` licence choice. `rust-toolchain.toml` pins
+the development compiler and installs Rustfmt, Clippy, and rust-src. Rustfmt
+uses stable settings only.
 
 The Foundation dependency set stays narrow:
 

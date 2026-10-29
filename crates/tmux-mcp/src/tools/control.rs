@@ -583,10 +583,9 @@ impl TmuxTools {
     /// Empty a pane's scrollback.
     #[tool(
         name = "clear_pane_scrollback",
-        description = "Discard a pane's scrollback, so the next capture_pane returns only \
-                       what happens next. Use this before running something whose output you \
-                       want to read cleanly: it is far cheaper than reading past the old \
-                       output every time. The visible screen is left alone.",
+        description = "Discard a pane's retained scrollback. The visible screen is left \
+                       alone and remains in subsequent capture_pane results. Use capture_since \
+                       to follow later output.",
         title = "Clear Pane History",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup]

@@ -110,7 +110,7 @@ impl Server {
             .map(|info| Session::new(Arc::clone(&self.core), info)))
     }
 
-    /// Find the window with this id, through the first link that reaches it.
+    /// Find the window with this id, preferring an active link then the lowest index.
     ///
     /// A window linked into several sessions is returned once. Use
     /// [`Server::windows`] when the link matters.
@@ -188,8 +188,10 @@ impl Server {
     /// want one branch: they fetch less.
     ///
     /// The three listings are separate tmux commands, so this is not an
-    /// atomic capture. A window created between them appears in one listing
-    /// and not another, and is dropped rather than reported half-formed.
+    /// atomic capture. Only sessions in the session listing become roots,
+    /// and only windows in the window listing join them. A listed session
+    /// or window can remain with no observed children; empty children do
+    /// not prove that the branch was empty at one instant.
     ///
     /// # Errors
     ///
