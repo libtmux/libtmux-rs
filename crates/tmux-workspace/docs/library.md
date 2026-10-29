@@ -25,6 +25,11 @@ windows:
       - htop
 ```
 
+The Rust examples use `libtmux::test::TestServer` to own and clean up their
+daemon. Add `libtmux` with `test-support` alongside this crate and Tokio, as
+shown under [Install](#install). An application connecting to an existing
+server can omit that feature and the guard's shutdown call.
+
 Freeze a session someone built by hand back into one:
 
 ```rust
@@ -220,6 +225,7 @@ $ cargo add tmux-workspace --no-default-features
 ```toml
 [dependencies]
 tmux-workspace = { version = "0.1.0", default-features = false }
+libtmux = { version = "0.1.0", features = ["test-support"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
