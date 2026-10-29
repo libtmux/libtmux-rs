@@ -884,7 +884,8 @@ protocol evidence supports that attribution.
 ## Control mode
 
 Managed control acquisition requires a daemon ranking at or above 3.7 final.
-`next-3.7` and `3.7-rc*` rank below it and refuse before pinning or `-C`.
+`next-3.7` and 3.7 release candidates rank below it and refuse before
+pinning or `-C`.
 The caller reserves client capacity before probing, shares one deadline across
 both metadata probes and the handshake, and links the observed socket inode
 into a private 0700 carrier. A second probe through that alias must match the first daemon's
