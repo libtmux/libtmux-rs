@@ -318,9 +318,9 @@ daemon the server starts.
 ## Run work and wait for it
 
 The server earns its keep once an agent has to wait, look, or avoid breaking
-the terminal it works in. Reading a pane goes through tmux's control mode
-rather than screen captures, so output that scrolled past between calls is
-still seen.
+the terminal it works in. `run_shell_command` and `capture_since` read a
+control-mode stream. `wait_for_text` streams on tmux 3.7 or newer and polls
+the visible screen below that; `capture_pane` reads the rendered screen.
 
 ### [`run_shell_command`][run_shell_command]: run a command and read its exit status
 
@@ -333,8 +333,9 @@ finish, and answers with its exit status and output:
 > with exit status 1. Two failures, both in `test_auth.py` —
 > `test_token_refresh` and `test_expired_session`. Want me to open them?
 
-The agent waited for the command, read its real exit status, and got the
-output the command wrote: no prompt, no echo, and nothing lost to scrollback.
+The agent waited for the command, read its real exit status, and got its
+retained output without the prompt or command echo. Output is a bounded tail;
+check `truncated` before treating it as complete.
 
 [`examples/run_and_wait`][example-run-and-wait] makes the same call through
 the tool a client calls, on a tmux of its own under `/tmp/libtmux-rs-test/`:
@@ -358,10 +359,11 @@ between two reads is missed.
 The same example starts a background job that prints `server is ready` a second
 later, waits for that line, and prints `waited: Matched`.
 
-[`run_shell_command`][run_shell_command], [`wait_for_text`][wait_for_text], and
-[`capture_since`][capture_since] return the output stream with escape
-sequences removed, so a line redrawn in place repeats once per redraw.
-[`capture_pane`][capture_pane] returns what the screen displays.
+Streamed results from [`run_shell_command`][run_shell_command],
+[`wait_for_text`][wait_for_text], and [`capture_since`][capture_since] have
+escape sequences removed, so a line redrawn in place repeats once per redraw.
+The polling `wait_for_text` path returns the last visible screen read.
+[`capture_pane`][capture_pane] also returns what the screen displays.
 
 ### [`capture_since`][capture_since]: follow a pane across turns
 

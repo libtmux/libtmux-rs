@@ -741,7 +741,7 @@ impl Server {
     /// [`Error::UnrecognizedTmuxVersion`] for a daemon libtmux refuses,
     /// [`Error::InvalidVersionOutput`] or [`Error::VersionProbeFailed`] when
     /// no version can be read, and a transport error when tmux cannot be run.
-    /// Nothing is sent to the daemon in any of those cases.
+    /// A version probe may already have reached the daemon before an error.
     ///
     /// # Examples
     ///

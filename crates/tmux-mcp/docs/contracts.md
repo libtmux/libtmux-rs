@@ -62,11 +62,18 @@ Invalid syntax completes with a nonzero shell status. The process-wide
 reservation blocks other MCP pane input until completion is proved. It does
 not lock tmux against an external client changing the pane.
 
-`run_shell_command`, [`wait_for_text`][wait_for_text], and
-[`capture_since`][capture_since] return the output stream with escape
-sequences removed. A line redrawn in place, such as a line editor's echo or a
-progress bar, repeats once per redraw. [`capture_pane`][capture_pane] returns
-what the screen displays.
+`run_shell_command` and [`capture_since`][capture_since] return the output
+stream with escape sequences removed. [`wait_for_text`][wait_for_text] uses
+that stream on tmux 3.7 or newer; below that it polls and returns the last
+visible screen read, so text that appears and scrolls off between reads can
+be missed. A present-at-entry match can also return captured screen text.
+In a streamed result, a line redrawn in place, such as a line editor's echo
+or a progress bar, repeats once per redraw. [`capture_pane`][capture_pane]
+returns what the screen displays.
+
+`run_shell_command` retains a bounded tail of command output. Its `truncated`
+field says whether older output was discarded, and `bytes` reports the size
+before truncation.
 
 ### Batches
 
