@@ -167,8 +167,9 @@ pub struct WaitView {
     pub matched_pattern: Option<String>,
     /// Retained stream text, or captured screen text on the polling path.
     ///
-    /// The stream has escape sequences removed, so a line redrawn in place
-    /// repeats. Below tmux 3.7 this is the last visible screen read instead;
+    /// Streamed results are not the rendered screen: escape sequences are
+    /// removed and a line redrawn in place repeats. `capture_pane` shows the
+    /// screen. Below tmux 3.7 this is the last visible screen read instead;
     /// a present-at-entry match can also return captured screen text.
     pub text: String,
     /// How many bytes arrived, before filtering or truncation.
