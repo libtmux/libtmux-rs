@@ -243,79 +243,129 @@ impl PromptKind {
 /// A tmux server does a great many things, so this type has a great many
 /// methods. They fall into a few groups:
 ///
-/// **Connecting.** [`new`] takes the default socket, [`builder`] configures
-/// one, and [`from_env`] reads the server this process is already inside.
-/// [`is_alive`] and [`check_alive`] answer whether anything is listening. A
-/// socket path does not identify a daemon, so [`generation`] captures the one
-/// answering and [`require_generation`] fails once a different one has taken
-/// the endpoint. [`resolved_tmux_executable`] reports where the configured
-/// tmux resolves, or `None` when it is not on `PATH`. With the `control-mode`
-/// feature, which is off by default, [`over_control_mode`] runs a handle's
-/// commands over an open control connection, and [`owns_control_client`] says
-/// whether a pid is a control client this process opened.
+/// **Connecting.** Reach the default socket, a configured one, or the server
+/// this process is already inside, from `TMUX` or from a value you pass; ask
+/// whether anything is listening. A socket path does not identify a daemon, so
+/// `generation` captures the one answering, and `require_generation` fails once
+/// a different one has taken the endpoint. With the `control-mode` feature,
+/// which is off by default, run a handle's commands over an open control
+/// connection. Shutting down stops accepting clients and waits for the active
+/// ones; it never stops the daemon.
 ///
-/// **Finding one thing.** [`session`] and [`client`] take names;
-/// [`session_by_id`], [`window_by_id`], and [`pane_by_id`] take tmux IDs.
-/// Each reports `Ok(None)` when tmux does not have it.
+/// [`new`], [`builder`], [`from_env`], [`from_env_value`], [`is_alive`],
+/// [`check_alive`], [`generation`], [`require_generation`],
+/// [`over_control_mode`], [`owns_control_client`], [`shutdown`]
 ///
-/// **Listing everything.** [`sessions`], [`windows`], [`panes`], and
-/// [`clients`]. Each keeps the reason it failed, so an outage does not read
-/// as an empty server. [`hierarchy`] gathers the whole tree in
-/// three tmux commands rather than one per object.
+/// **Reading how a handle was built.** Read back the endpoint identity, the
+/// socket by path and by name, the config file, the color mode, the tmux
+/// executable, and the timeout each command gets.
 ///
-/// **Querying things and getting around.** [`has_session`] answers whether a
-/// name exists, and [`attached_sessions`] keeps the ones a client is attached
-/// to. To narrow a listing further, borrow it with `.iter()`, give
-/// [`QueryIteratorExt::matching`] a predicate built from the typed fields
-/// [`Filterable`] provides, and finish with [`QueryIteratorExt::exactly_one`]
-/// or [`QueryIteratorExt::one_or_none`]; [`Session::search_windows`] and
-/// [`Window::search_panes`] apply a matcher to one branch. The `query` feature
-/// supplies all of that, and is on by default. The [`SessionTree`] and
-/// [`WindowTree`] that [`hierarchy`] returns hold their children as fields, so
-/// walking down them costs no further tmux command, and with `query` a
-/// predicate can also ask about a session's windows or a window's panes. To
-/// move between levels, go down with [`Session::windows`] and
-/// [`Window::panes`], to the active child with [`Session::active_window`] and
-/// [`Window::active_pane`], and up with [`Pane::window`], [`Pane::session`],
-/// and [`Window::session`], which re-read tmux and report `Ok(None)` when the
-/// parent has gone.
+/// [`identity`], [`socket_path`], [`socket_name`], [`config_file`], [`colors`],
+/// [`tmux_executable`], [`default_timeout`]
 ///
-/// **Changing things.** [`new_session`], [`kill`], [`lock_all`] to lock every
-/// client, and [`with_session`], which cleans up after itself whether the body
-/// succeeded or not.
+/// **Asking which tmux this is.** Detect what the configured tmux executable
+/// supports, which also describes one below the supported daemon minimum, and
+/// retry after a failed detection. Read the version of the daemon this handle
+/// reaches, which has passed the supported-minimum check and runs no user hook.
+/// Report where the configured tmux resolves.
 ///
-/// **Options and hooks.** [`typed_option`] and [`set_typed_option`] for this
-/// server, [`typed_global_option`] and [`set_typed_global_option`] for the
-/// session defaults, [`typed_global_window_option`] and
-/// [`set_typed_global_window_option`] for the window defaults, [`set_option`]
-/// to send text tmux's option table does not check, and [`set_hook`] and
-/// [`unset_hook`]. An option that holds a numbered set, such as
-/// `command-alias`, is read with [`array_option`] and changed with
-/// [`set_array_option`], [`append_array_option`], and [`unset_array_option`].
+/// [`capabilities`], [`daemon_version`], [`resolved_tmux_executable`]
+///
+/// **Finding one thing.** Look up a session or client by name, or a session,
+/// window or pane by tmux ID. Each reports `Ok(None)` when tmux does not have
+/// it.
+///
+/// [`session`], [`client`], [`session_by_id`], [`window_by_id`],
+/// [`pane_by_id`]
+///
+/// **Listing everything.** List every session, window, pane or client; each
+/// keeps the reason it failed, so an outage does not read as an empty server.
+/// Or gather the whole tree in three tmux commands rather than one per object.
+///
+/// [`sessions`], [`windows`], [`panes`], [`clients`], [`hierarchy`]
+///
+/// **Querying things and getting around.** Ask whether a session exists and
+/// which ones a client is attached to. Narrow a listing with `.iter()` and a
+/// predicate built from the typed fields [`Filterable`] provides, then take
+/// exactly one or one-or-none, or search one branch; the `query` feature
+/// supplies this and is on by default. The [`SessionTree`] and [`WindowTree`]
+/// that `hierarchy` returns hold their children as fields, so walking them
+/// costs no further tmux command. Moving up re-reads tmux and reports
+/// `Ok(None)` when the parent has gone.
+///
+/// - Ask: [`has_session`], [`attached_sessions`]
+/// - Narrow: [`QueryIteratorExt::matching`], [`QueryIteratorExt::exactly_one`],
+///   [`QueryIteratorExt::one_or_none`], [`Session::search_windows`],
+///   [`Window::search_panes`]
+/// - Down: [`Session::windows`], [`Window::panes`],
+///   [`Session::active_window`], [`Window::active_pane`]
+/// - Up: [`Pane::window`], [`Pane::session`], [`Window::session`]
+///
+/// **Changing things.** Create a session, kill the server, lock every client,
+/// or start a server without creating a session. A body can also run in a
+/// session that is killed afterwards: a failure to create it, to run the body
+/// or to kill it comes back as a `ScopeError`, and a cleanup failure carries
+/// [`Error::AfterEffect`]. If the future is dropped, the session is still
+/// killed while the Tokio runtime is alive.
+///
+/// [`new_session`], [`kill`], [`lock_all`], [`start`], [`with_session`]
+///
+/// **Options and hooks.** Read the options set on the server itself, as names
+/// or decoded by their declared kind, or read one by name; the session and
+/// window defaults that sessions inherit have a global read and write of their
+/// own. A typed write checks the value against tmux's option table before
+/// anything is sent, and an unchecked write sends text and leaves tmux to
+/// refuse it. An option that holds a numbered set, such as `command-alias`, has
+/// its own reads and writes. Hooks can be set, written whole, removed, and read
+/// back, either every hook that holds something or one by name.
 /// [`OptionValue`] says how the reads and writes fit together.
 ///
-/// **Everything else tmux keeps.** Paste buffers ([`buffer`], [`set_buffer`],
-/// [`buffer_names`], [`delete_buffer`], and [`load_buffer`] and
-/// [`save_buffer`], which move one through a file), key bindings
-/// ([`bind_key`], [`unbind_key`], [`key_bindings`], and, on tmux 3.7 and
-/// later, [`typed_key_bindings`] for the same bindings as fields), the global
-/// environment ([`environment`], [`environment_all`], [`set_environment`],
-/// [`hide_environment`], [`unset_environment`]), format expansion
-/// ([`format`]), configuration ([`source_file`]), layout validation
-/// ([`validate_layouts`], which checks each layout and its pane count before
-/// any command applies it), shell commands ([`run_shell`], [`spawn_shell`]),
-/// and wait-for channels ([`lock_channel`], [`unlock_channel`],
-/// [`signal_channel`], [`wait_for_channel`], and [`with_channel_lock`], which
-/// unlocks however its body ends).
+/// - Read: [`option_names`], [`options`], [`typed_option`],
+///   [`typed_global_option`], [`typed_global_window_option`]
+/// - Typed write: [`set_typed_option`], [`set_typed_global_option`],
+///   [`set_typed_global_window_option`]
+/// - Unchecked write: [`set_option`], [`set_global_option`],
+///   [`set_global_window_option`]
+/// - Remove: [`unset_option`]
+/// - Arrays: [`array_option`], [`set_array_option`], [`append_array_option`],
+///   [`unset_array_option`]
+/// - Hooks: [`set_hook`], [`set_hooks`], [`unset_hook`], [`hooks`], [`hook`]
 ///
-/// **Things that need a terminal.** [`display_popup`], [`display_menu`],
-/// [`command_prompt`], [`choose`], [`find_window`], and [`display_panes`] all
-/// draw on an attached client. The first three fail without one; tmux accepts
-/// [`choose`] with no client, and [`display_panes`] from tmux 3.8, because
-/// each opens as a mode in a pane.
+/// **Everything else tmux keeps.** Paste buffers, including moving one through
+/// a file; key bindings, also as typed fields on tmux 3.7 and later; the
+/// global environment; format expansion, configuration, and layout
+/// validation, which checks each layout and its pane count before any command
+/// applies it; shell commands; wait-for channels, including a lock held for
+/// the length of a body, which is released when the body returns, fails or
+/// panics, or when the scope is dropped; the history of each kind of prompt,
+/// which clearing forgets for every kind at once; and the access list, whose
+/// owner is always present and writable, so a caller cannot lock itself out.
+///
+/// - Buffers: [`buffer`], [`set_buffer`], [`buffer_names`], [`delete_buffer`],
+///   [`load_buffer`], [`save_buffer`]
+/// - Keys: [`bind_key`], [`unbind_key`], [`key_bindings`],
+///   [`typed_key_bindings`]
+/// - Environment: [`environment`], [`environment_all`], [`set_environment`],
+///   [`hide_environment`], [`unset_environment`]
+/// - Formats and config: [`format`], [`source_file`], [`validate_layouts`]
+/// - Shell: [`run_shell`], [`spawn_shell`]
+/// - Channels: [`lock_channel`], [`unlock_channel`], [`signal_channel`],
+///   [`wait_for_channel`], [`with_channel_lock`]
+/// - Prompts: [`prompt_history`], [`clear_prompt_history`]
+/// - Access: [`access_rules`], [`grant_access`], [`revoke_access`]
+///
+/// **Things that need a terminal.** Draw a popup, menu, prompt, chooser,
+/// window finder or pane numbers on an attached client. Popups, menus and
+/// prompts fail without one; tmux accepts the chooser with no client, and pane
+/// numbers from tmux 3.8, because each opens as a mode in a pane.
+///
+/// [`display_popup`], [`display_menu`], [`command_prompt`], [`choose`],
+/// [`find_window`], [`display_panes`]
 ///
 /// Anything tmux can do that is not here is reachable through [`cmd`], which
-/// runs an arbitrary command and hands back its result.
+/// runs an arbitrary command and hands back its result, or [`chain`], which
+/// dispatches several as one invocation that stops at the first failure and
+/// cannot say which one failed.
 ///
 /// [`new`]: Server::new
 /// [`builder`]: Server::builder
@@ -327,6 +377,17 @@ impl PromptKind {
 /// [`resolved_tmux_executable`]: Server::resolved_tmux_executable
 /// [`over_control_mode`]: Server::over_control_mode
 /// [`owns_control_client`]: Server::owns_control_client
+/// [`from_env_value`]: Server::from_env_value
+/// [`shutdown`]: Server::shutdown
+/// [`identity`]: Server::identity
+/// [`socket_path`]: Server::socket_path
+/// [`socket_name`]: Server::socket_name
+/// [`config_file`]: Server::config_file
+/// [`colors`]: Server::colors
+/// [`tmux_executable`]: Server::tmux_executable
+/// [`default_timeout`]: Server::default_timeout
+/// [`capabilities`]: Server::capabilities
+/// [`daemon_version`]: Server::daemon_version
 /// [`session`]: Server::session
 /// [`client`]: Server::client
 /// [`session_by_id`]: Server::session_by_id
@@ -358,6 +419,13 @@ impl PromptKind {
 /// [`kill`]: Server::kill
 /// [`lock_all`]: Server::lock_all
 /// [`with_session`]: Server::with_session
+/// [`start`]: Server::start
+/// [`Error::AfterEffect`]: crate::Error::AfterEffect
+/// [`option_names`]: Server::option_names
+/// [`options`]: Server::options
+/// [`unset_option`]: Server::unset_option
+/// [`set_global_option`]: Server::set_global_option
+/// [`set_global_window_option`]: Server::set_global_window_option
 /// [`typed_option`]: Server::typed_option
 /// [`set_typed_option`]: Server::set_typed_option
 /// [`typed_global_option`]: Server::typed_global_option
@@ -368,6 +436,9 @@ impl PromptKind {
 /// [`OptionValue`]: crate::OptionValue
 /// [`set_hook`]: Server::set_hook
 /// [`unset_hook`]: Server::unset_hook
+/// [`set_hooks`]: Server::set_hooks
+/// [`hooks`]: Server::hooks
+/// [`hook`]: Server::hook
 /// [`array_option`]: Server::array_option
 /// [`set_array_option`]: Server::set_array_option
 /// [`append_array_option`]: Server::append_array_option
@@ -397,6 +468,11 @@ impl PromptKind {
 /// [`signal_channel`]: Server::signal_channel
 /// [`wait_for_channel`]: Server::wait_for_channel
 /// [`with_channel_lock`]: Server::with_channel_lock
+/// [`prompt_history`]: Server::prompt_history
+/// [`clear_prompt_history`]: Server::clear_prompt_history
+/// [`access_rules`]: Server::access_rules
+/// [`grant_access`]: Server::grant_access
+/// [`revoke_access`]: Server::revoke_access
 /// [`display_popup`]: Server::display_popup
 /// [`display_menu`]: Server::display_menu
 /// [`command_prompt`]: Server::command_prompt
@@ -404,6 +480,7 @@ impl PromptKind {
 /// [`find_window`]: Server::find_window
 /// [`display_panes`]: Server::display_panes
 /// [`cmd`]: Server::cmd
+/// [`chain`]: Server::chain
 ///
 /// # Examples
 ///
