@@ -125,7 +125,7 @@ export TMUX="$socket,$server_pid,0"
 # Positive control examples need a daemon ranking at or above 3.7 final, the
 # rule `since::CONTROL_ACQUISITION` states: `3.7` and later numbered releases,
 # plus a development build of a later minor, such as `next-3.9`. `next-3.7`
-# and `3.7-rc*` rank below 3.7 final.
+# and 3.7 release candidates rank below 3.7 final.
 control_qualified=$(tmux -S "$socket" display-message -p '#{version}' | python3 -c '
 import re, sys
 match = re.fullmatch(r"(next-)?([0-9]+)\.([0-9]+)([a-z]|-rc[0-9]*)?", sys.stdin.read().strip())

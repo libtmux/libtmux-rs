@@ -115,6 +115,10 @@ nothing. To fix it, upgrade tmux and restart its server, or pin the previous
 release. [The contract][contract-version] covers unrecognized versions, failed
 probes, and the calls that skip the check.
 
+tmux release candidates are not supported: a candidate such as `X.Y-rcN` ranks
+below `X.Y`, and a feature can require one only until its release ships. See
+[Release candidates](https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates).
+
 Optional operations have narrower daemon requirements:
 
 | Operation | Qualified daemon |
@@ -130,8 +134,8 @@ Optional operations have narrower daemon requirements:
 | Literal `refresh-client -l` (clipboard query) | 3.6a or newer; earlier releases can stop the server |
 
 Managed control acquisition accepts a daemon ranking at or above 3.7 final,
-including `3.8` and `next-3.8`; `next-3.7` and `3.7-rc*` rank below it and
-refuse.
+including `3.8` and `next-3.8`; `next-3.7` and 3.7 release candidates rank below
+it and refuse.
 Eligibility comes from the checked daemon and assumes a natively compatible
 client/daemon pair. Direct literal argv commands and
 flat batches are checked before dispatch; `Command::requires_tmux` carries a

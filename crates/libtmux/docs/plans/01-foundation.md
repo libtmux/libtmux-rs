@@ -166,19 +166,19 @@ fn parses_release_suffixes_without_losing_order() {
 }
 ```
 
-Add cases for `1.10`, `3.2`, `3.2a`, `3.1c`, `3.7b`, `3.7-rc2`, `master`,
-and `next-3.3`. Cover a renamed tmux 3.2a executable because supported tmux
-versions used `getprogname()` as the output prefix. Reject missing or extra
-tokens, extra lines, invalid UTF-8, controls, numeric overflow, uppercase or
-repeated suffixes, release candidate zero, noncanonical leading zeroes, missing
-newlines, CRLF, and trailing garbage. The minimum-version test must prove that
-3.2 is below 3.2a, 3.2a meets the floor, `next-3.2` does not meet the floor,
-and `next-3.3` does.
+Add cases for `1.10`, `3.2`, `3.2a`, `3.1c`, `3.7b`, a numbered 3.7 release
+candidate, `master`, and `next-3.3`. Cover a renamed tmux 3.2a executable
+because supported tmux versions used `getprogname()` as the output prefix.
+Reject missing or extra tokens, extra lines, invalid UTF-8, controls, numeric
+overflow, uppercase or repeated suffixes, release candidate zero, noncanonical
+leading zeroes, missing newlines, CRLF, and trailing garbage. The
+minimum-version test must prove that 3.2 is below 3.2a, 3.2a meets the floor,
+`next-3.2` does not meet the floor, and `next-3.3` does.
 
 The framing contract follows tmux 3.2a's pinned
 [`-V` implementation](https://github.com/tmux/tmux/blob/3.2a/tmux.c#L387-L389).
 Numbered release-candidate support follows the upstream
-[`3.7-rc2` version bump](https://github.com/tmux/tmux/blob/aa1f065/configure.ac#L1-L4).
+[`X.Y-rcN` version bump](https://github.com/tmux/tmux/blob/aa1f065/configure.ac#L1-L4).
 
 Run the test before creating the modules:
 
