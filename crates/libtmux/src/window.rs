@@ -89,6 +89,180 @@ impl PaneDirection {
 /// window. Getters that describe its place in a session, such as
 /// [`Window::index`] and [`Window::is_active`], read the link.
 ///
+/// # What is on here
+///
+/// The methods on a `Window` fall into a few groups:
+///
+/// **Finding the window you are in.** Resolve the window this process is
+/// running in, through the pane `TMUX_PANE` names or through a value you pass.
+/// Both report `Ok(None)` when tmux no longer has that pane, and fail when the
+/// value is absent or not a pane ID.
+///
+/// [`from_env`], [`from_env_value`]
+///
+/// **Reading the snapshot.** Getters are synchronous: they read the snapshot
+/// this handle owns and send nothing to tmux. `last_activity` is when the
+/// window last produced output, whatever its options say, while `has_activity`
+/// is an alert that stays false unless `monitor-activity` is on, which it is
+/// not by default. Refreshing updates this handle in place or returns a new
+/// one, keeps following the same link, and fails with [`Error::ObjectGone`]
+/// when the session no longer links the window; `get` reads any snapshot
+/// field, including those with no getter, and needs the `query` feature, which
+/// is on by default.
+///
+/// - Identity: [`id`], [`session_id`], [`index`], [`name`]
+/// - Shape: [`pane_count`], [`width`], [`height`], [`layout`], [`is_zoomed`]
+/// - State: [`is_active`], [`is_linked`], [`has_activity`], [`has_bell`],
+///   [`last_activity`]
+/// - Any field: [`get`]
+/// - Refresh: [`refresh`], [`refreshed`]
+///
+/// **Panes and sessions.** `panes` returns the same panes through every link
+/// to the window, and a failed listing is an error, not an empty list;
+/// `search_panes` needs the `query` feature, which is on by default. `pane_at`
+/// reports `Ok(None)` when nothing matches, and `active_pane` does so only when
+/// the window has gone, because a window always has an active pane; `session`
+/// re-reads tmux and reports `Ok(None)` when the session is gone. Focus follows
+/// the layout rather than pane order: `focus_direction` wraps at the edge and
+/// always returns a pane, and `last_pane` reports `Ok(None)` when no other pane
+/// has been active.
+///
+/// - List: [`panes`]
+/// - Find one: [`pane_at`], [`active_pane`]
+/// - Narrow: [`search_panes`]
+/// - Move focus: [`focus_direction`], [`last_pane`]
+/// - Sessions: [`session`], [`linked_sessions`]
+///
+/// **Adding and arranging panes.** `split` returns the new pane, takes a
+/// [`SplitOptions`] or a bare [`SplitDirection`], and leaves focus where it was
+/// unless asked. `with_pane` creates a pane, runs an operation with it, and
+/// kills the pane afterwards: a failure to create it, to run the operation or
+/// to kill it comes back as a `ScopeError`, and a cleanup failure carries
+/// [`Error::AfterEffect`]. If the future is dropped, the pane is still killed
+/// while the Tokio runtime is alive. A layout is a [`Layout`] by name, or a
+/// saved string from [`Window::layout`] that restores pane sizes exactly; the
+/// mirrored layouts need tmux 3.5, and a saved string that tmux 3.8 produced
+/// is refused by an older tmux. `rotate` moves the panes round one position and
+/// keeps the layout.
+///
+/// - Add: [`split`], [`with_pane`]
+/// - Layout: [`select_layout`], [`next_layout`], [`previous_layout`]
+/// - Order: [`rotate`]
+///
+/// **Changing the window.** Renaming changes the name for every session that
+/// links the window. A name is sent as text, and only a [`TmuxArg::format`]
+/// value is expanded: see
+/// [the crate documentation][crate#a-name-reaches-tmux-as-text]. Selecting
+/// makes the window active in the session this handle came through;
+/// respawning restarts the window's command and replaces every pane with the
+/// one it runs in, and fails while a pane is still running unless
+/// [`Respawn::Replacing`] says to kill it. `resize` sets the window to an
+/// exact size in cells, and `resize_by` moves one of its edges. Killing
+/// consumes the handle and closes the window in every session that links it.
+///
+/// [`rename`], [`select`], [`resize`], [`resize_by`], [`respawn`], [`kill`]
+///
+/// **Linking and moving.** Linking puts the same window in another session, so
+/// a rename or a split shows in both; unlinking removes only this session's
+/// link, and tmux refuses when only one session holds the window. Moving
+/// places the window at an index, possibly in another session, and fails when
+/// the destination is occupied or absent; swapping trades places with another
+/// window. Linking, moving and swapping return [`Error::ServerMismatch`] for a
+/// window or session on another server.
+///
+/// [`link_to`], [`unlink`], [`move_to`], [`swap_with`]
+///
+/// **Options and hooks.** Read and set options at this window's scope:
+/// listings report what this window has set, not what it inherits, and
+/// `typed_option` reads `Ok(None)` for an option that holds nothing here.
+/// `set_typed_option` checks the value against tmux's option table before
+/// anything is sent, `set_option` sends text and leaves tmux to refuse it, and
+/// [`OptionValue`] says how the reads and writes fit together. tmux does not
+/// enumerate the hooks set on a window, so there is no listing: read one by
+/// name with `hook`, which gives `Ok(None)` when it holds nothing.
+///
+/// - Read: [`option_names`], [`options`], [`typed_option`]
+/// - Write: [`set_typed_option`], [`set_option`], [`append_option`],
+///   [`unset_option`]
+/// - Hooks: [`set_hook`], [`unset_hook`], [`set_hooks`], [`hook`]
+///
+/// **Formats and messages.** Expand a tmux format in this window's context and
+/// get the text back, or show a message to the clients viewing it. Both read
+/// their text as a format, so command and recursive formats can run shell
+/// commands, and `display` succeeds when nobody is watching.
+///
+/// [`format`], [`display`]
+///
+/// Anything tmux can do to a window that is not here is reachable through
+/// [`cmd`], which runs an arbitrary command against it and hands back its
+/// result.
+///
+/// [`from_env`]: Window::from_env
+/// [`from_env_value`]: Window::from_env_value
+/// [`id`]: Window::id
+/// [`session_id`]: Window::session_id
+/// [`index`]: Window::index
+/// [`name`]: Window::name
+/// [`pane_count`]: Window::pane_count
+/// [`width`]: Window::width
+/// [`height`]: Window::height
+/// [`layout`]: Window::layout
+/// [`is_zoomed`]: Window::is_zoomed
+/// [`is_active`]: Window::is_active
+/// [`is_linked`]: Window::is_linked
+/// [`has_activity`]: Window::has_activity
+/// [`has_bell`]: Window::has_bell
+/// [`last_activity`]: Window::last_activity
+/// [`get`]: Window::get
+/// [`refresh`]: Window::refresh
+/// [`refreshed`]: Window::refreshed
+/// [`panes`]: Window::panes
+/// [`pane_at`]: Window::pane_at
+/// [`active_pane`]: Window::active_pane
+/// [`search_panes`]: Window::search_panes
+/// [`focus_direction`]: Window::focus_direction
+/// [`last_pane`]: Window::last_pane
+/// [`session`]: Window::session
+/// [`linked_sessions`]: Window::linked_sessions
+/// [`split`]: Window::split
+/// [`with_pane`]: Window::with_pane
+/// [`select_layout`]: Window::select_layout
+/// [`next_layout`]: Window::next_layout
+/// [`previous_layout`]: Window::previous_layout
+/// [`rotate`]: Window::rotate
+/// [`resize`]: Window::resize
+/// [`resize_by`]: Window::resize_by
+/// [`rename`]: Window::rename
+/// [`select`]: Window::select
+/// [`respawn`]: Window::respawn
+/// [`kill`]: Window::kill
+/// [`link_to`]: Window::link_to
+/// [`unlink`]: Window::unlink
+/// [`move_to`]: Window::move_to
+/// [`swap_with`]: Window::swap_with
+/// [`option_names`]: Window::option_names
+/// [`options`]: Window::options
+/// [`typed_option`]: Window::typed_option
+/// [`set_typed_option`]: Window::set_typed_option
+/// [`set_option`]: Window::set_option
+/// [`append_option`]: Window::append_option
+/// [`unset_option`]: Window::unset_option
+/// [`set_hook`]: Window::set_hook
+/// [`unset_hook`]: Window::unset_hook
+/// [`set_hooks`]: Window::set_hooks
+/// [`hook`]: Window::hook
+/// [`format`]: Window::format
+/// [`display`]: Window::display
+/// [`cmd`]: Window::cmd
+/// [`Error::ObjectGone`]: crate::Error::ObjectGone
+/// [`Error::ServerMismatch`]: crate::Error::ServerMismatch
+/// [`Error::AfterEffect`]: crate::Error::AfterEffect
+/// [`SplitOptions`]: crate::SplitOptions
+/// [`SplitDirection`]: crate::SplitDirection
+/// [`Layout`]: crate::Layout
+/// [`Respawn::Replacing`]: crate::Respawn::Replacing
+/// [`OptionValue`]: crate::OptionValue
+///
 /// # Examples
 ///
 /// ```
