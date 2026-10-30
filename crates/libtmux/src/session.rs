@@ -484,13 +484,15 @@ impl Session {
 
     /// Create a window in this session and return it.
     ///
+    /// A name given as text reaches tmux as that text, `#` included. Only a
+    /// name built with [`TmuxArg::format`], through [`NewWindowOptions::new`],
+    /// is expanded as a format, so `#(command)` in one runs a shell command.
+    /// See [the crate documentation][crate#a-name-reaches-tmux-as-text].
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command or its output cannot be
     /// decoded.
-    /// tmux expands the name as a format before it checks it, so `#(command)`
-    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
-    /// before passing text a caller supplied.
     pub async fn new_window(&self, options: impl Into<NewWindowOptions>) -> Result<Window, Error> {
         let options = options.into();
         let session = self.id().to_string();
@@ -503,13 +505,15 @@ impl Session {
 
     /// Rename the session and update this handle.
     ///
+    /// A name given as text reaches tmux as that text, `#` included. Only a
+    /// [`TmuxArg::format`] value is expanded as a format, so `#(command)` in
+    /// one runs a shell command. See
+    /// [the crate documentation][crate#a-name-reaches-tmux-as-text].
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the name, which includes one that
     /// is empty or already taken.
-    /// tmux expands the name as a format before it checks it, so `#(command)`
-    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
-    /// before passing text a caller supplied.
     pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,

@@ -375,12 +375,14 @@ impl Window {
     /// The name belongs to the window, so every session linking it sees the
     /// change.
     ///
+    /// A name given as text reaches tmux as that text, `#` included. Only a
+    /// [`TmuxArg::format`] value is expanded as a format, so `#(command)` in
+    /// one runs a shell command. See
+    /// [the crate documentation][crate#a-name-reaches-tmux-as-text].
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the name.
-    /// tmux expands the name as a format before it checks it, so `#(command)`
-    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
-    /// before passing text a caller supplied.
     pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,

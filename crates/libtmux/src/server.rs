@@ -1000,9 +1000,10 @@ impl Server {
     /// listing, so this costs one round trip rather than a create followed by
     /// a lookup.
     ///
-    /// tmux expands the name as a format before it checks it, so `#(command)`
-    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
-    /// before passing text a caller supplied.
+    /// A name given as text reaches tmux as that text, `#` included. Only a
+    /// name built with [`TmuxArg::format`], through [`NewSessionOptions::new`],
+    /// is expanded as a format, so `#(command)` in one runs a shell command.
+    /// See [the crate documentation][crate#a-name-reaches-tmux-as-text].
     ///
     /// # Errors
     ///
