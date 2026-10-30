@@ -83,6 +83,149 @@ pub enum EnvironmentEntry {
 /// Getters are synchronous because they read the owned snapshot. Anything that
 /// consults tmux is `async`.
 ///
+/// # What is on here
+///
+/// The methods on a `Session` fall into a few groups:
+///
+/// **Finding the session you are in.** Resolve the session this process is
+/// running in, from `TMUX_PANE` or from a value you pass. Both go through the
+/// pane, report `Ok(None)` when tmux no longer has it, and fail when the value
+/// is absent or not a pane ID.
+///
+/// [`from_env`], [`from_env_value`]
+///
+/// **Reading the snapshot.** Getters are synchronous: they read the snapshot
+/// this handle owns and send nothing to tmux, so a value is as old as the
+/// snapshot. Refreshing updates this handle in place or returns a new one,
+/// leaves other handles with the snapshot they have, and fails with
+/// [`Error::ObjectGone`] once the session no longer exists. With the `query`
+/// feature, which is on by default, `get` reads any snapshot field, including
+/// those with no getter.
+///
+/// - Identity: [`id`], [`name`], [`path`]
+/// - State: [`window_count`], [`attached_client_count`], [`is_attached`]
+/// - Times: [`created`], [`last_attached`]
+/// - Any field: [`get`]
+/// - Refresh: [`refresh`], [`refreshed`]
+///
+/// **Windows and panes.** List the session's windows, or every pane in it; a
+/// failed listing returns an error, not an empty list. `window` and
+/// `window_at` report `Ok(None)` when nothing matches, and `active_window` does
+/// so only when the session has gone, because a session always has an active
+/// window. Moving to the next, previous or last window returns the one that
+/// became active, and `Ok(None)` where there is none, which is not a failure;
+/// `search_windows` needs the `query` feature, which is on by default.
+///
+/// - List: [`windows`], [`panes`]
+/// - Find one: [`window`], [`window_at`], [`active_window`]
+/// - Narrow: [`search_windows`]
+/// - Move: [`next_window`], [`previous_window`], [`last_window`]
+///
+/// **Changing things.** Create a window from [`NewWindowOptions`] or a bare
+/// name, or run an operation in a window that is killed afterwards. A failure
+/// to create it, to run the operation or to kill it comes back as a
+/// `ScopeError`, and a cleanup failure carries [`Error::AfterEffect`]. If the
+/// future is dropped, the window is still killed while the Tokio runtime is
+/// alive. Renaming updates this handle and killing consumes it, so every other
+/// handle to the session goes stale; locking and detaching act on the attached
+/// clients, and detaching succeeds when none is attached. A name is sent as
+/// text, and only a [`TmuxArg::format`] value is expanded: see
+/// [the crate documentation][crate#a-name-reaches-tmux-as-text].
+///
+/// - Windows: [`new_window`], [`with_window`]
+/// - Session: [`rename`], [`kill`]
+/// - Clients: [`lock`], [`detach_clients`]
+///
+/// **Options and hooks.** Read and set options at this session's scope:
+/// listings report what this session has set, not what it inherits, and
+/// `typed_option` reads `Ok(None)` for an option that holds nothing here.
+/// `set_typed_option` checks the value against tmux's option table before
+/// anything is sent, `set_option` sends text and leaves tmux to refuse it, and
+/// [`OptionValue`] says how the reads and writes fit together. A hook is an
+/// array option: `hooks` lists only those holding something, and `hook` reads
+/// one, `Ok(None)` when it holds nothing.
+///
+/// - Read: [`option_names`], [`options`], [`typed_option`]
+/// - Write: [`set_typed_option`], [`set_option`], [`append_option`],
+///   [`unset_option`]
+/// - Hooks: [`set_hook`], [`unset_hook`], [`set_hooks`], [`hooks`], [`hook`]
+///
+/// **Environment.** Set variables for the processes this session starts;
+/// panes already running keep the environment they were started with. tmux can
+/// also hold a mark saying a process must not inherit a name at all, which is
+/// not the same as absence: [`EnvironmentEntry`] keeps value and mark apart,
+/// `hide_environment` sets the mark, and `unset_environment` deletes this
+/// session's own entry and lets what tmux inherited show through. A read
+/// returns `Ok(None)` only when tmux holds nothing under the name.
+///
+/// [`environment`], [`environment_all`], [`set_environment`],
+/// [`hide_environment`], [`unset_environment`]
+///
+/// **Formats and messages.** Expand a tmux format in this session's context
+/// and get the text back, or show a message to the clients viewing it. Both
+/// read their text as a format, so command and recursive formats can run shell
+/// commands, and `display` succeeds when nobody is watching.
+///
+/// [`format`], [`display`]
+///
+/// Anything tmux can do to a session that is not here is reachable through
+/// [`cmd`], which runs an arbitrary command against it and hands back its
+/// result.
+///
+/// [`from_env`]: Session::from_env
+/// [`from_env_value`]: Session::from_env_value
+/// [`id`]: Session::id
+/// [`name`]: Session::name
+/// [`path`]: Session::path
+/// [`window_count`]: Session::window_count
+/// [`attached_client_count`]: Session::attached_client_count
+/// [`is_attached`]: Session::is_attached
+/// [`created`]: Session::created
+/// [`last_attached`]: Session::last_attached
+/// [`get`]: Session::get
+/// [`refresh`]: Session::refresh
+/// [`refreshed`]: Session::refreshed
+/// [`windows`]: Session::windows
+/// [`panes`]: Session::panes
+/// [`window`]: Session::window
+/// [`window_at`]: Session::window_at
+/// [`active_window`]: Session::active_window
+/// [`search_windows`]: Session::search_windows
+/// [`next_window`]: Session::next_window
+/// [`previous_window`]: Session::previous_window
+/// [`last_window`]: Session::last_window
+/// [`new_window`]: Session::new_window
+/// [`with_window`]: Session::with_window
+/// [`rename`]: Session::rename
+/// [`kill`]: Session::kill
+/// [`lock`]: Session::lock
+/// [`detach_clients`]: Session::detach_clients
+/// [`option_names`]: Session::option_names
+/// [`options`]: Session::options
+/// [`typed_option`]: Session::typed_option
+/// [`set_typed_option`]: Session::set_typed_option
+/// [`set_option`]: Session::set_option
+/// [`append_option`]: Session::append_option
+/// [`unset_option`]: Session::unset_option
+/// [`set_hook`]: Session::set_hook
+/// [`unset_hook`]: Session::unset_hook
+/// [`set_hooks`]: Session::set_hooks
+/// [`hooks`]: Session::hooks
+/// [`hook`]: Session::hook
+/// [`environment`]: Session::environment
+/// [`environment_all`]: Session::environment_all
+/// [`set_environment`]: Session::set_environment
+/// [`hide_environment`]: Session::hide_environment
+/// [`unset_environment`]: Session::unset_environment
+/// [`format`]: Session::format
+/// [`display`]: Session::display
+/// [`cmd`]: Session::cmd
+/// [`Error::ObjectGone`]: crate::Error::ObjectGone
+/// [`Error::AfterEffect`]: crate::Error::AfterEffect
+/// [`NewWindowOptions`]: crate::NewWindowOptions
+/// [`OptionValue`]: crate::OptionValue
+/// [`EnvironmentEntry`]: crate::EnvironmentEntry
+///
 /// [`Server`]: crate::Server
 ///
 /// # Examples
