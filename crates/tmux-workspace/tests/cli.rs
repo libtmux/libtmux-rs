@@ -881,7 +881,9 @@ fn command_at(arguments: &[&str], directory: &Path) -> Command {
         .env("TMUXP_CONFIGDIR", directory.join(".tmuxp"))
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env_remove("TMUX")
-        .env_remove("TMUX_PANE");
+        .env_remove("TMUX_PANE")
+        .env_remove("LIBTMUX_SOCKET")
+        .env_remove("LIBTMUX_SOCKET_PATH");
     command
 }
 
@@ -1328,6 +1330,209 @@ async fn empty_tmux_context_allows_freezing_an_isolated_default_endpoint() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
 }
 
+/// Make `name` in a private `TMUX_TMPDIR` under `directory` reach `target`.
+fn link_socket(directory: &Path, name: &str, target: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sockets = directory.join(format!("tmux-{}", rustix::process::getuid().as_raw()));
+    std::fs::create_dir(&sockets).unwrap();
+    std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink(target, sockets.join(name)).unwrap();
+}
+
+/// Freeze `borrowed` on a command line that names no socket, in an
+/// environment whose private `TMUX_TMPDIR` holds no server of its own.
+fn freeze_without_a_flag(directory: &Path, variables: &[(&str, &std::ffi::OsStr)]) -> Output {
+    let mut command = command_at(&["freeze", "borrowed", "--json"], directory);
+    command.env("TMUX_TMPDIR", directory);
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    command.output().unwrap()
+}
+
+#[tokio::test]
+async fn the_socket_path_variable_chooses_the_server_when_no_flag_is_given() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard.session("borrowed").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let output = freeze_without_a_flag(
+        directory.path(),
+        &[
+            ("LIBTMUX_SOCKET_PATH", guard.socket_path().as_os_str()),
+            ("LIBTMUX_SOCKET", "name-that-loses".as_ref()),
+        ],
+    );
+    guard.shutdown().await.unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+}
+
+#[tokio::test]
+async fn the_socket_name_variable_chooses_the_server_when_no_flag_is_given() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard.session("borrowed").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    link_socket(directory.path(), "named", guard.socket_path());
+    let output = freeze_without_a_flag(directory.path(), &[("LIBTMUX_SOCKET", "named".as_ref())]);
+    guard.shutdown().await.unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+}
+
+#[tokio::test]
+async fn a_socket_flag_leaves_both_socket_variables_unread() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard.session("borrowed").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let output = command_at(
+        &[
+            "freeze",
+            "borrowed",
+            "--json",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+        ],
+        directory.path(),
+    )
+    .env("TMUX_TMPDIR", directory.path())
+    .env(
+        "LIBTMUX_SOCKET_PATH",
+        "/tmp/libtmux-rs-test/never-read.sock",
+    )
+    .env("LIBTMUX_SOCKET", "never-read")
+    .output()
+    .unwrap();
+    guard.shutdown().await.unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+}
+
+#[tokio::test]
+async fn a_tmux_variable_that_describes_no_server_is_refused_unless_a_flag_names_one() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard.session("borrowed").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let refused = freeze_without_a_flag(directory.path(), &[("TMUX", "not-a-context".as_ref())]);
+    let named = command_at(
+        &[
+            "freeze",
+            "borrowed",
+            "--json",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+        ],
+        directory.path(),
+    )
+    .env("TMUX", "not-a-context")
+    .output()
+    .unwrap();
+    guard.shutdown().await.unwrap();
+    assert_eq!(refused.status.code(), Some(2), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("TMUX is set to something other than"),
+        "{refused:?}"
+    );
+    assert!(named.status.success(), "{named:?}");
+}
+
+#[tokio::test]
+async fn a_socket_variable_names_the_server_so_a_malformed_tmux_is_not_read() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard.session("borrowed").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    link_socket(directory.path(), "named", guard.socket_path());
+    let malformed = ("TMUX", "not-a-context".as_ref());
+    let by_path = freeze_without_a_flag(
+        directory.path(),
+        &[
+            malformed,
+            ("LIBTMUX_SOCKET_PATH", guard.socket_path().as_os_str()),
+        ],
+    );
+    let by_name = freeze_without_a_flag(
+        directory.path(),
+        &[malformed, ("LIBTMUX_SOCKET", "named".as_ref())],
+    );
+    let blank = freeze_without_a_flag(
+        directory.path(),
+        &[
+            malformed,
+            ("LIBTMUX_SOCKET_PATH", "  ".as_ref()),
+            ("LIBTMUX_SOCKET", "".as_ref()),
+        ],
+    );
+    guard.shutdown().await.unwrap();
+    for (case, output) in [("path", &by_path), ("name", &by_name)] {
+        assert!(output.status.success(), "{case}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+    }
+    assert_eq!(
+        blank.status.code(),
+        Some(2),
+        "a blank variable names nothing: {blank:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_socket_variable_wins_over_the_server_tmux_names() {
+    let inside = libtmux::test::TestServer::new().await.unwrap();
+    inside.session("elsewhere").await.unwrap();
+    let chosen = libtmux::test::TestServer::new().await.unwrap();
+    chosen.session("borrowed").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let context = format!(
+        "{},{},0",
+        inside.socket_path().display(),
+        inside.daemon_pid()
+    );
+    let output = freeze_without_a_flag(
+        directory.path(),
+        &[
+            ("TMUX", context.as_ref()),
+            ("LIBTMUX_SOCKET_PATH", chosen.socket_path().as_os_str()),
+        ],
+    );
+    inside.shutdown().await.unwrap();
+    chosen.shutdown().await.unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+}
+
+#[tokio::test]
+async fn with_no_flag_and_no_variable_the_tmux_server_is_the_one_the_pane_is_in() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let session = guard.session("borrowed").await.unwrap();
+    let pane = current_pane(&session).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let context = format!("{},{},0", guard.socket_path().display(), guard.daemon_pid());
+    let output = freeze_without_a_flag(
+        directory.path(),
+        &[("TMUX", context.as_ref()), ("TMUX_PANE", pane.as_ref())],
+    );
+    guard.shutdown().await.unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+}
+
+#[test]
+fn help_says_where_the_socket_comes_from_without_a_flag() {
+    let help = |command: &str| {
+        let text = String::from_utf8(cli(&[command, "--help"]).stdout).unwrap();
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    for command in ["load", "freeze"] {
+        let help = help(command);
+        assert!(
+            help.contains("$LIBTMUX_SOCKET_PATH, then $LIBTMUX_SOCKET, else the server tmux picks"),
+            "{command}: {help}"
+        );
+    }
+    let shell = help("shell");
+    assert!(shell.contains("the TMUX socket inside tmux"), "{shell}");
+    assert!(!shell.contains("LIBTMUX_SOCKET"), "{shell}");
+}
+
 #[tokio::test]
 async fn freeze_defaults_to_this_panes_session_only_on_its_own_server() {
     let here = libtmux::test::TestServer::new().await.unwrap();
@@ -1503,6 +1708,8 @@ fn cli(arguments: &[&str]) -> Output {
         .env_remove("LIBTMUX_TEST_TMUX")
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
+        .env_remove("LIBTMUX_SOCKET")
+        .env_remove("LIBTMUX_SOCKET_PATH")
         .output()
         .expect("run workspace CLI")
 }

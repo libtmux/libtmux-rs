@@ -252,17 +252,25 @@ fn value(name: &'static str, short: Option<char>, help: &'static str) -> Arg {
     }
 }
 
-fn sockets(command: Command) -> Command {
+/// What the socket flags fall back to when neither is given.
+const SOCKET_FALLBACK: &str =
+    "Without -S or -L, $LIBTMUX_SOCKET_PATH, then $LIBTMUX_SOCKET, else the server tmux picks";
+
+/// What `shell` falls back to, which tmuxp decides.
+const SHELL_SOCKET_FALLBACK: &str =
+    "Without -S or -L, the TMUX socket inside tmux, else tmux's default socket";
+
+fn sockets(command: Command, fallback: &'static str) -> Command {
     command
         .arg(
             Arg::new("socket-path")
                 .short('S')
-                .help("Use this tmux socket path"),
+                .help(format!("Use this tmux socket path. {fallback}")),
         )
         .arg(
             Arg::new("socket-name")
                 .short('L')
-                .help("Use this tmux socket name"),
+                .help(format!("Use this tmux socket name. {fallback}")),
         )
 }
 
@@ -303,6 +311,7 @@ fn shell(declarations: &mut Declarations) -> Command {
         Command::new("shell")
             .about("Run a version-checked tmuxp Python shell")
             .after_help(examples(SHELL_EXAMPLES)),
+        SHELL_SOCKET_FALLBACK,
     )
     .arg(
         Arg::new("session_name")
@@ -523,6 +532,7 @@ fn freeze() -> Command {
         Command::new("freeze")
             .about("Capture a live session; human mode requires --save-to")
             .after_help(examples(FREEZE_EXAMPLES)),
+        SOCKET_FALLBACK,
     )
     .arg(
         Arg::new("session_name")
@@ -606,6 +616,7 @@ fn load(declarations: &mut Declarations) -> Command {
                  and ~/.tmuxp that exists. Write ./dev for a file in this directory.",
             )
             .after_help(examples(LOAD_EXAMPLES)),
+        SOCKET_FALLBACK,
     )
     .arg(
         Arg::new("workspace_files")

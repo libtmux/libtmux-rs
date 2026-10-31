@@ -137,16 +137,32 @@ fn flag(args: &ArgMatches, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `LIBTMUX_SOCKET_PATH` or `LIBTMUX_SOCKET` names the server, which
+/// then decides in place of `TMUX`. As in the core, a value that is empty or
+/// only whitespace counts as unset.
+fn variable_names_a_socket() -> bool {
+    ["LIBTMUX_SOCKET_PATH", "LIBTMUX_SOCKET"]
+        .iter()
+        .any(|name| {
+            std::env::var_os(name)
+                .is_some_and(|value| !value.as_encoded_bytes().iter().all(u8::is_ascii_whitespace))
+        })
+}
+
 pub(super) fn server(args: &ArgMatches) -> Result<Server> {
     let mut builder = Server::builder();
     if let Some(path) = option(args, "socket-path") {
         builder = builder.socket_path(discovery::expand(path));
     } else if let Some(name) = option(args, "socket-name") {
         builder = builder.socket_name(name);
-    } else if let Ok(context) = std::env::var("TMUX") {
-        if !context.is_empty() {
-            let (socket, _) = tmux_context(&context)?;
-            builder = builder.socket_path(socket);
+    } else if !variable_names_a_socket() {
+        // The core leaves the choice to tmux, which reads this. A `TMUX` that
+        // does not describe a server is a rewritten environment, not an
+        // answer, so it is refused rather than guessed past.
+        if let Ok(context) = std::env::var("TMUX") {
+            if !context.is_empty() {
+                tmux_context(&context)?;
+            }
         }
     }
     if let Some(config) = option(args, "tmux-config") {
