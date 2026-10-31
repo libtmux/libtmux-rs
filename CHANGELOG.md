@@ -13,6 +13,14 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
+## 0.1.1 - 2026-10-31
+
+`libtmux`, `libtmux-macros`, `tmux-workspace` and `tmux-mcp` are all 0.1.1.
+`libtmux`, `tmux-workspace` and `tmux-mcp` now pass tmux neither `-L` nor `-S`
+when no socket is named in code or on the command line and neither
+`LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET` is set, so tmux picks the server.
+To pin one, name its socket or set either variable. JSON layouts need tmux 3.8.
+
 ### Changed
 
 - **Behaviour change.** `Server::new` and `Server::builder` now pass tmux
