@@ -28,6 +28,7 @@ SPEC.loader.exec_module(ci_plan)
 
 CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 JOB = re.compile(r"^  ([a-z][a-z-]*):\s*$", re.MULTILINE)
+RELEASE = re.compile(r"\b\d+\.\d+[a-z]?\b")
 TMATE = "mxschmitt/action-tmate@"
 
 
@@ -133,6 +134,31 @@ class TmateTests(unittest.TestCase):
                 continue
             with self.subTest(path.name):
                 self.assertNotIn("action-tmate", path.read_text(encoding="utf-8"))
+
+
+class DocumentTests(unittest.TestCase):
+    lanes = ci_plan.parse_manifest(
+        (ROOT / ".github" / "ci-matrix.txt").read_text(encoding="utf-8")
+    )
+
+    def tags(self, *kinds: str) -> set[str]:
+        return {lane.tag for lane in self.lanes if lane.kind in kinds}
+
+    def test_the_readme_states_the_supported_releases_the_manifest_tests(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        start = readme.index("- **tmux 3.3a or newer.**")
+        bullet = readme[start : readme.index("\n- **", start + 1)]
+        self.assertEqual(set(RELEASE.findall(bullet)), self.tags("supported"))
+
+    def test_contributing_states_every_release_the_manifest_builds(self) -> None:
+        text = (ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        start = text.index("\n## Compatibility\n")
+        end = text.find("\n## ", start + 1)
+        section = text[start:] if end == -1 else text[start:end]
+        bold = " ".join(re.findall(r"\*\*([^*]+)\*\*", section))
+        self.assertEqual(
+            set(RELEASE.findall(bold)), self.tags("supported", "witness", "refused")
+        )
 
 
 if __name__ == "__main__":

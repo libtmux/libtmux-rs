@@ -19,6 +19,12 @@ changelog marks each break. Pin an exact version to avoid one.
   them. On an older server, applying one fails before it reaches tmux with
   `Error::UnsupportedCapability`, naming 3.8; upgrade to tmux 3.8 to apply
   a JSON layout. (#110)
+- CI builds tmux 3.3a and 3.8 on each push and pull request, and every lane
+  in `.github/ci-matrix.txt` on the weekly schedule and on a dispatch with
+  `scope=full`. A dispatch also takes `tmux-ref`, `rust-toolchain`, `os` and
+  `tmate`, so any branch can build any tmux version, tag, branch or commit.
+  `LIBTMUX_COMPAT_LANES="3.3a 3.8" just compat` builds chosen lanes locally.
+  (#117)
 
 ## 0.1.0 - 2026-10-25
 

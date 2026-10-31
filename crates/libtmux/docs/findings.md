@@ -583,8 +583,8 @@ default every sender starts from.
 
 ## Which tmux releases the lanes build
 
-The lanes, and the tmux release each one builds, are defined in
-`scripts/test-tmux-format-compat.sh`. Each runs the workspace.
+The lanes, and the tmux release each one builds, are listed in
+`.github/ci-matrix.txt`. Each runs the workspace.
 Positive control fixtures require 3.7 or newer, while ordinary
 operations, codecs and
 polling still run on the older supported daemons. Separate 3.2a and raw 3.3

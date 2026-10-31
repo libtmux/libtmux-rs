@@ -400,9 +400,10 @@ $ claude mcp add tmux \
 ## Support and status
 
 - **Rust 1.85 or newer** for the libraries. `tmux-mcp` needs 1.88.
-- **tmux 3.3a or newer.** CI builds pinned tmux 3.3a, 3.4, 3.5a, 3.6b, and 3.7b
-  from source and runs the whole workspace against each, because tmux's output
-  and error wording change between releases. tmux release candidates are not
+- **tmux 3.3a or newer.** CI builds pinned tmux 3.3a and 3.8 from source on each
+  push, and 3.3a, 3.4, 3.5a, 3.6b, 3.7b, and 3.8 every week and on demand, and
+  runs the whole workspace against each, because tmux's output and error
+  wording change between releases. tmux release candidates are not
   supported: a candidate such as `X.Y-rcN` ranks below `X.Y`, and a feature
   can require one only until its release ships. See
   [Release candidates](https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates).
