@@ -1,17 +1,14 @@
 //! Waiting on and locking a `wait-for` channel, and the state that takes.
 //!
-//! tmux queues a `wait-for` client on the channel and has no way to withdraw
-//! it: `cmd_wait_for_signal` releases every waiter it finds and keeps the
-//! signal only when it finds none, `cmd_wait_for_unlock` hands the lock to the
-//! first queued locker, and `server_client_lost` removes neither. A client
-//! killed for running out of time therefore stays in tmux's list, where it
-//! eats the channel's next signal or takes its lock and never gives it back.
+//! On affected older tmux releases, `server_client_lost` leaves waiters and
+//! lockers queued. A disconnected client can consume a later signal or lock
+//! without running again. tmux 3.8 removes these entries on disconnect.
 //!
-//! So a client is never killed for running out of time. It is parked instead:
-//! the caller stops waiting, the client stays until tmux releases it, and what
-//! tmux released it with is accounted for here -- a signal with no caller left
-//! to hear it is kept for the next wait, and a lock with no caller left to
-//! hold it is released at once.
+//! This module parks a client instead of killing it when its caller's budget
+//! ends. The caller stops waiting, the client stays until tmux releases it,
+//! and what tmux released it with is accounted for here -- a signal with no
+//! caller left to hear it is kept for the next wait, and a lock with no caller
+//! left to hold it is released at once.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -253,9 +250,9 @@ fn park(core: &Arc<Core>, channel: &str) {
 
 /// Lock `channel`, giving up after `budget` without leaving it wedged.
 ///
-/// tmux grants a released lock to the first client queued for it, dead or
-/// alive, so the client stays queued after the caller gives up and unlocks as
-/// soon as it is granted.
+/// On affected older tmux releases, a disconnected locker can retain its
+/// place. This call keeps the client queued when the caller gives up and
+/// unlocks as soon as the lock is granted.
 pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> Result<(), Error> {
     #[cfg(feature = "control-mode")]
     refuse_if_routed(core)?;

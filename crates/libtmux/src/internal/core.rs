@@ -463,9 +463,9 @@ impl Core {
 
     /// Start a dispatch with no deadline of its own, and name it.
     ///
-    /// For `wait-for` only, where a client killed part-way stays in tmux's
-    /// waiter or locker list: this one ends when tmux answers or the executor
-    /// shuts down. The caller bounds its own wait and names this dispatch when
+    /// For `wait-for` only, where older tmux releases retain a disconnected
+    /// waiter or locker: this ends when tmux answers or the executor shuts
+    /// down. The caller bounds its own wait and names this dispatch when
     /// it gives up, so the id comes back with the future.
     pub(crate) fn dispatch_without_deadline(
         &self,

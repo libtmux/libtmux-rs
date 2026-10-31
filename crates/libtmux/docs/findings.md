@@ -12,12 +12,12 @@ is shaped the way it is.
 - [Muting a control-mode pane kills the server before tmux 3.7](#muting-a-control-mode-pane-kills-the-server-before-tmux-37)
 - [Asking for the clipboard can kill tmux before 3.6a](#asking-for-the-clipboard-can-kill-tmux-before-36a)
 - [A one-binding key listing goes to the message log on tmux 3.7 through 3.7c](#a-one-binding-key-listing-goes-to-the-message-log-on-tmux-37-through-37c)
-- [tmux cannot withdraw a queued `wait-for` client](#tmux-cannot-withdraw-a-queued-wait-for-client)
+- [Older tmux releases retain disconnected `wait-for` clients](#older-tmux-releases-retain-disconnected-wait-for-clients)
 - [Poll loops and deadlines that made tests flaky under load](#poll-loops-and-deadlines-that-made-tests-flaky-under-load)
 - [How a fixture process idles without burning a core](#how-a-fixture-process-idles-without-burning-a-core)
 - [`Client` reads its attached session, window and pane by id](#client-reads-its-attached-session-window-and-pane-by-id)
 - [A session named with `:` or `.` needs a trailing `:` to be targeted](#a-session-named-with--or--needs-a-trailing--to-be-targeted)
-- [`list-clients` omits suspended, locked and exiting clients](#list-clients-omits-suspended-locked-and-exiting-clients)
+- [`list-clients` can omit suspended, locked and exiting clients](#list-clients-can-omit-suspended-locked-and-exiting-clients)
 - [`display-message` falls back to the current pane when `-t` does not resolve](#display-message-falls-back-to-the-current-pane-when--t-does-not-resolve)
 - [A socket path does not identify a tmux server](#a-socket-path-does-not-identify-a-tmux-server)
 - [Limits on tmux output and concurrent dispatches](#limits-on-tmux-output-and-concurrent-dispatches)
@@ -202,23 +202,28 @@ The condition is in the source of 3.7 and 3.7c and gone from 3.8. Measured,
 `real_tmux_compat_key_bindings_read_as_fields` binds two one-binding tables,
 and fails on 3.7c when `-T` is sent.
 
-## tmux cannot withdraw a queued `wait-for` client
+<a id="tmux-cannot-withdraw-a-queued-wait-for-client"></a>
 
-tmux queues a `wait-for` client on the channel and offers nothing to withdraw
-it. `cmd_wait_for_signal` releases every waiter it finds and keeps the signal
+## Older tmux releases retain disconnected `wait-for` clients
+
+tmux queues a `wait-for` client on the channel. On affected older releases,
+`cmd_wait_for_signal` releases every waiter it finds and keeps the signal
 only when it finds none; `cmd_wait_for_unlock` grants the lock to the first
-client queued for it. `server_client_lost` frees every other structure a lost
-client owns (its files, its overlay, its prompt, `input_cancel_requests`) and
-never touches `wait_channels`. The client leaves the `clients` list, so
+client queued for it. The older `server_client_lost` cleanup leaves
+`wait_channels` untouched. The client leaves the `clients` list, so
 `cmdq_next` never runs its queue again, and the queued item still holds the
-reference `cmdq_append` took, so nothing is freed and nothing dangles: one
-client struct and one queue item leak, and the channel's list keeps an entry
-that can never act. The code is the same from 3.2a through 3.8, and 3.8's
-new `wait-for -l` shows the leak: it lists the entry by name after the client
-is gone.
+reference `cmdq_append` took: one client struct and one queue item leak,
+and the channel keeps an entry that can never act.
 
-A client killed for running out of time therefore takes the channel's next
-signal, or its next lock, with it. `internal::wait_for` never kills one. Its
+tmux 3.8 fixes disconnected-client cleanup. Its
+[`server_client_lost`](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/server-client.c#L505-L506)
+calls
+[`cmd_wait_for_client_lost`](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/cmd-wait-for.c#L483-L515),
+which removes the client's queued waiters and lockers.
+
+On affected older releases, a client killed for running out of time takes
+the channel's next signal, or its next lock, with it. `internal::wait_for`
+retains its client instead of killing it on every supported release. Its
 dispatch has no deadline of its own (`CommandRequest::without_deadline`, the
 only request without one), and the caller's deadline ends the wait while the
 client stays. A lock granted after its caller gave up unlocks at once. A wait's
@@ -231,8 +236,9 @@ client has no caller.
 That leaves two gaps. Another process that waits on the channel afterwards does
 not see a signal kept this way: tmux spent it on the parked client, and the only
 way to put it back is `wait-for -S`, which would release somebody else's wait.
-And `Server::shutdown` kills parked clients instead of waiting on tmux, which
-leaves the tmux leak behind on any channel that still had one parked.
+And `Server::shutdown` kills parked clients instead of waiting on tmux; on
+affected older releases, the tmux registration remains on any channel that
+still had one parked.
 
 A blocking `wait-for` over control mode is refused for a different reason.
 `cmdq_fire_command` writes the block's `end` guard as soon as `entry->exec`
@@ -392,18 +398,20 @@ workspace again if most tooling cannot address its session. Code in this crate
 that must build a `-t` target from something other than an ID resolves the
 session first and targets it by `SessionId`, which parses with no split at all.
 
-## `list-clients` omits suspended, locked and exiting clients
+<a id="list-clients-omits-suspended-locked-and-exiting-clients"></a>
 
-A client that is suspended, locked, dying or already gone is absent from
-`list-clients` in every case. `sort.c`'s `sort_get_clients` skips any client
-carrying `CLIENT_UNATTACHEDFLAGS`, and `tmux.h` defines that as
-`CLIENT_DEAD|CLIENT_SUSPENDED|CLIENT_EXIT`. The listing answers "not attached
-right now", and the crate used to read it as "gone".
+## `list-clients` can omit suspended, locked and exiting clients
+
+Whether a suspended or locked client appears in `list-clients` depends on the
+tmux release. Releases using `sort.c`'s `sort_get_clients` skip clients carrying
+`CLIENT_UNATTACHEDFLAGS`, defined in `tmux.h` as
+`CLIENT_DEAD|CLIENT_SUSPENDED|CLIENT_EXIT`. There, absence can mean temporarily
+stopped rather than gone.
 
 A caller acts on the difference. `Error::is_object_gone` decides whether to
-discard a handle, and a suspended client is listed again the moment its process
-continues: on `SIGCONT` for a suspended one, and when the `lock-command` exits
-for a locked one. Locking is the more common route. It sets the same flag
+discard a handle, and a client omitted while suspended is listed again when
+its process continues: on `SIGCONT` for a suspended one, and when the
+`lock-command` exits for a locked one. Locking is the more common route. It sets the same flag
 through `server_lock_client`, so `Client::lock`, `Session::lock` and
 `Server::lock_all` all reach it, and so does `lock-after-time`, with nobody
 asking.
@@ -423,8 +431,9 @@ version gate. The listing filter differs by release: 3.2a and 3.5a screen
 `list-clients` on `c->session == NULL` alone, and `server_client_suspend` never
 clears the session, so a suspended client stays listed there and the miss path
 never runs. That was read from their sources, not measured. Because releases
-disagree about whether a suspended client is listed, the crate keys on the flag
-instead of on the absence.
+disagree about whether a suspended client is listed, `Client::refresh` can
+succeed on a stopped client that remains listed. The `ClientSuspended` error
+comes from the missing-row probe; absence alone does not establish it.
 
 ## `display-message` falls back to the current pane when `-t` does not resolve
 

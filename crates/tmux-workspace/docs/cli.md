@@ -112,11 +112,13 @@ An append that fails names the windows it kept.
 ### Pane readiness
 
 `workspace_builder_options` accepts only `pane_readiness`; an unknown field is
-a warning and the document still loads. The default, `auto`, waits for the
-shell prompt only when the session's `default-shell` is zsh, whose prompt
-redraw the wait exists for. `always` or `true` waits for any shell; `never` or
-`false` never waits. Commands are typed either way: waiting only delays them
-until the prompt has redrawn.
+a warning and the document still loads. `auto`, the default, and `always` or
+`true` enable a readiness probe for panes using the default shell. A pane's
+explicit `shell`, including an inherited `window_shell`, skips the probe.
+`never` or `false` disables it. The probe observes the cursor moving from
+`0,0`, not a verified shell prompt or application-ready state. If the probe
+cannot read the cursor or reaches its two-second budget, it emits a warning
+and continues typing commands.
 
 ## Bootstrap scripts
 
@@ -189,8 +191,9 @@ not need tmux or Python.
 line and takes precedence. Machine output never contains ANSI escapes, and a
 load under either needs `-d` unless it appends. Every record carries
 `schema_version`. A failure writes
-`{"schema_version":1,"code":"...","message":"..."}` to stderr, and stdout
-stays empty:
+`{"schema_version":1,"code":"...","message":"..."}` to stderr.
+NDJSON events already written to stdout remain available after a failure;
+nonempty stdout does not imply success:
 
 | Exit | `code` | Meaning |
 | --- | --- | --- |

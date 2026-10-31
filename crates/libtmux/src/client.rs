@@ -156,10 +156,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ObjectGone`] when the client has detached, and
-    /// [`Error::ClientSuspended`] when it is stopped rather than gone --
-    /// suspended or locked, which tmux leaves out of the same listing. Keep
-    /// the handle for the second: the client is listed again once it resumes.
+    /// Returns [`Error::ObjectGone`] when the client has detached. If tmux
+    /// omits a stopped client from the listing, a probe can distinguish it as
+    /// [`Error::ClientSuspended`]. Releases that keep it listed can refresh
+    /// successfully instead. Keep the handle when the client is suspended.
     /// Returns a listing error when tmux could not be read.
     pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
         let listed = listing::clients(&self.core, None)
@@ -177,9 +177,9 @@ impl Client {
 
     /// Say why this client is not in the listing.
     ///
-    /// `list-clients` leaves out the dead, the exiting and the suspended
-    /// alike, so absence from it does not say which happened. A suspended
-    /// client is still resolvable as a command target and reports itself,
+    /// Some releases leave out the dead, the exiting and the suspended
+    /// alike, so absence from the listing does not say which happened. A
+    /// suspended client still resolves as a command target and reports itself,
     /// which is what tells the temporary case from the permanent one.
     ///
     /// Only the miss path pays for this, and only tmux's own answer is
@@ -248,11 +248,9 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ObjectGone`] when the client has detached, and
-    /// [`Error::ClientSuspended`] when it is stopped rather than gone. The
-    /// two are worth telling apart: [`Error::is_object_gone`] answers false
-    /// for the second, because the same handle works again once the client
-    /// resumes. Returns a listing error when tmux could not be read.
+    /// Returns the same errors as [`Self::refresh`], including
+    /// [`Error::ClientSuspended`] when an omitted client is found stopped.
+    /// A stopped client that remains listed can refresh successfully instead.
     pub async fn refreshed(&self) -> Result<Self, Error> {
         let mut refreshed = self.clone();
         refreshed.refresh().await?;
@@ -390,19 +388,17 @@ impl Client {
     /// Suspend this client, as if its user pressed the suspend key.
     ///
     /// The handle survives, and deliberately: unlike [`Self::detach`], this
-    /// stops the client rather than ending it. tmux stops listing a suspended
-    /// client, so [`Server::clients`] will not show it and the session stops
-    /// counting it as attached, but it is still there. It returns when its
-    /// process continues, which for a suspended client is `SIGCONT`.
+    /// stops the client rather than ending it. Some tmux releases omit a
+    /// suspended client from [`Server::clients`]; others keep it listed.
+    /// The client resumes when its process continues with `SIGCONT`.
     ///
     /// [`Server::clients`]: crate::Server::clients
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command. Reading through the
-    /// handle afterwards gives [`Error::ClientSuspended`] rather than
-    /// [`Error::ObjectGone`], so a caller can tell this from a client that
-    /// left.
+    /// Returns an error when tmux refuses the command. A later
+    /// [`Self::refresh`] can return [`Error::ClientSuspended`] or succeed,
+    /// depending on whether that tmux release omits the stopped client.
     pub async fn suspend(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
@@ -422,15 +418,15 @@ impl Client {
     /// client on the server; this locks exactly one.
     ///
     /// tmux marks a locked client with the flag it uses for a suspended one,
-    /// so a locked client leaves [`crate::Server::clients`] the same way and
-    /// comes back when its `lock-command` exits. A server with
+    /// so a locked client can leave [`crate::Server::clients`] the same way and
+    /// returns to normal when its `lock-command` exits. A server with
     /// `lock-after-time` set reaches that state with nobody asking.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command. Reading through the
-    /// handle while the client is locked gives [`Error::ClientSuspended`],
-    /// not [`Error::ObjectGone`].
+    /// Returns an error when tmux refuses the command. A later
+    /// [`Self::refresh`] can return [`Error::ClientSuspended`] or succeed,
+    /// depending on whether that tmux release omits the locked client.
     pub async fn lock(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,

@@ -238,8 +238,10 @@ did not. The test that means something cancels one request while the server
 keeps running, then asserts the connection is gone and the server still
 answers.
 
-Both waits now select on the token, biased so a request cancelled while a
-chunk is already in flight stops rather than reading one more.
+Both request paths observe the token. `wait_for_text` closes its observer
+when cancelled. `run_shell_command` ends the request while its watcher keeps
+collecting output and reserving the pane until completion or pane closure is
+proved; cancelling a request does not cancel its command.
 
 ## Tasks: measured, not adopted
 

@@ -205,9 +205,10 @@ the test, and two shapes account for most of them:
 - **A fixed sleep standing in for a wait.** A duration chosen to cover a
   latency that has no upper bound is a guess, and load is what collects on it.
   Wait for the observable instead — `Pane::wait_for_text` and
-  `Pane::wait_for_quiet` are in the library and need no feature, and
-  `tmux-mcp` exposes the same shapes as tools. A wait must assert the outcome
-  it got, since one that runs to its deadline still returns successfully.
+  `Pane::wait_for_quiet` are in the library and need no feature;
+  `tmux-mcp` exposes `wait_for_text` for a concrete text condition. A wait must
+  assert the outcome it got, since one that runs to its deadline still returns
+  successfully.
 
 A test that only passes on an idle machine is a broken test, and the fix
 belongs in the test rather than in a rerun.
@@ -240,8 +241,9 @@ That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
 `parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`,
 `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
-every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
-fails until the lockfile is committed.
+every cargo invocation passes `--locked`, so dependency changes need a
+consistent `Cargo.lock` before the gate can run. Committing it is not required
+to run the local gate.
 
 `compat-supervisor-test` exercises the Linux pidfd containment used by the
 slow compatibility lane. It skips on other Unix targets; CI runs it on Linux.
@@ -502,9 +504,9 @@ Releases are numbered `0.1.N` (`0.1.0`, `0.1.1`, and so on), with no
 `-alpha` or other prerelease tag unless the maintainer asks for one. To cut a
 release:
 
-1. Bump `[workspace.package] version` and the `libtmux` pin in
-   `[workspace.dependencies]` together — they are the same number, and a
-   published crate whose own dependency requirement points at the previous
+1. Bump `[workspace.package] version` and the `libtmux` and exact
+   `libtmux-macros` requirements in `[workspace.dependencies]` together — they
+   use the same number. A published crate whose dependency points at the previous
    version will not resolve. `tmux-mcp` carries its own version and is bumped
    separately.
 2. Bump the version every README tells a reader to depend on. The packaged
