@@ -34,8 +34,10 @@ on:
   schedule:
     - cron: "37 4 * * 1"
 
+# A dispatch is a request for that run, so its run id keeps one from cancelling
+# another or the push run of the same branch.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:

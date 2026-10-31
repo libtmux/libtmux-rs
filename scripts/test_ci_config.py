@@ -87,5 +87,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("ci-matrix", release)
 
 
+class ConcurrencyTests(unittest.TestCase):
+    def test_a_dispatch_adds_its_run_id_to_the_group(self) -> None:
+        match = re.search(r"^concurrency:\n  group: (.+)$", CI, re.MULTILINE)
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertIn("workflow_dispatch", match.group(1))
+        self.assertIn("github.run_id", match.group(1))
+
+
 if __name__ == "__main__":
     unittest.main()
