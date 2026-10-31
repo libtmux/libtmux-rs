@@ -303,6 +303,24 @@ fn builder_rejects_conflicting_selectors_and_invalid_colors_before_execution() {
 
 #[test]
 fn default_named_and_explicit_socket_selection_are_distinct() {
+    // A default handle reads both socket variables, so a run that has either
+    // exported checks a child that has not.
+    if std::env::var_os("LIBTMUX_SOCKET").is_some()
+        || std::env::var_os("LIBTMUX_SOCKET_PATH").is_some()
+    {
+        let status = process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "default_named_and_explicit_socket_selection_are_distinct",
+                "--nocapture",
+            ])
+            .env_remove("LIBTMUX_SOCKET")
+            .env_remove("LIBTMUX_SOCKET_PATH")
+            .status()
+            .expect("child starts");
+        assert!(status.success());
+        return;
+    }
     let default = Server::new().expect("default server configuration");
     let named = Server::builder()
         .socket_name("libtmux-task-seven")

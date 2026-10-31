@@ -479,7 +479,11 @@ pub(crate) mod endpoint_resolution {
     pub(crate) enum ResolvedSocketSelector {
         Path {
             path: PathBuf,
+            /// `TMUX` named this path.
             inherited: bool,
+            /// tmux reads that `TMUX` to the same path, so it is not passed
+            /// as `-S`.
+            left_to_tmux: bool,
         },
         Name {
             name: OsString,
@@ -542,6 +546,13 @@ pub(crate) mod endpoint_resolution {
         Some(OsStr::from_bytes(path))
     }
 
+    /// Whether tmux, which stops reading `TMUX` at the first comma, would
+    /// name `path` itself. A path that holds a comma is one only this crate
+    /// can address, so it is passed as `-S` rather than left to tmux.
+    fn tmux_reads_the_same_path(value: &OsStr, path: &OsStr) -> bool {
+        value.as_bytes().split(|byte| *byte == b',').next() == Some(path.as_bytes())
+    }
+
     fn resolved_socket_root(
         candidate: Option<&OsStr>,
         cwd: &Path,
@@ -595,6 +606,7 @@ pub(crate) mod endpoint_resolution {
                 selector: ResolvedSocketSelector::Path {
                     path: identity.socket_path.clone(),
                     inherited: false,
+                    left_to_tmux: false,
                 },
                 identity,
             });
@@ -605,17 +617,18 @@ pub(crate) mod endpoint_resolution {
                 return Err(IdentityError::InvalidSocketName);
             }
             (name, true)
-        } else if let Some(path) = inputs
-            .inherited_tmux
-            .and_then(inherited_socket_path)
-            .and_then(|path| capture_endpoint(path, inputs.cwd).ok())
-        {
+        } else if let Some((left_to_tmux, identity)) = inputs.inherited_tmux.and_then(|value| {
+            let path = inherited_socket_path(value)?;
+            let identity = capture_endpoint(path, inputs.cwd).ok()?;
+            Some((tmux_reads_the_same_path(value, path), identity))
+        }) {
             return Ok(ResolvedEndpoint {
                 selector: ResolvedSocketSelector::Path {
-                    path: path.socket_path.clone(),
+                    path: identity.socket_path.clone(),
                     inherited: true,
+                    left_to_tmux,
                 },
-                identity: path,
+                identity,
             });
         } else {
             (OsStr::new("default"), false)

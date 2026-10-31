@@ -121,6 +121,9 @@ tmux -S "$socket" new-session -d -s examples
 tmux -S "$socket" new-window -d -n second sh
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
 export TMUX="$socket,$server_pid,0"
+# The socket variables beat `$TMUX`, so a reader's own would send the examples
+# to the server they name.
+unset LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH
 
 # Positive control examples need a daemon ranking at or above 3.7 final, the
 # rule `since::CONTROL_ACQUISITION` states: `3.7` and later numbered releases,

@@ -243,9 +243,10 @@ impl PromptKind {
 /// A tmux server does a great many things, so this type has a great many
 /// methods. They fall into a few groups:
 ///
-/// **Connecting.** Reach the default socket, a configured one, or the server
-/// this process is already inside, from `TMUX` or from a value you pass; ask
-/// whether anything is listening. A socket path does not identify a daemon, so
+/// **Connecting.** Reach the server tmux picks, one that `LIBTMUX_SOCKET_PATH`
+/// or `LIBTMUX_SOCKET` names, one you name, or the server this process is
+/// already inside, from `TMUX` or from a value you pass; ask whether anything
+/// is listening. A socket path does not identify a daemon, so
 /// `generation` captures the one answering, and `require_generation` fails once
 /// a different one has taken the endpoint. With the `control-mode` feature,
 /// which is off by default, run a handle's commands over an open control
@@ -605,7 +606,9 @@ impl Server {
         self.core.owns_control_client(pid)
     }
 
-    /// Construct a server from the captured default endpoint context.
+    /// Construct a server whose socket is chosen as [`ServerBuilder::build`]
+    /// describes: from `LIBTMUX_SOCKET_PATH` or `LIBTMUX_SOCKET`, else left to
+    /// tmux.
     ///
     /// # Errors
     ///
@@ -670,7 +673,10 @@ impl Server {
         self.identity().socket_path()
     }
 
-    /// Return the configured named socket selector, if any.
+    /// Return the socket name tmux is given as `-L`, if any.
+    ///
+    /// It is `None` when a socket path was given, and when nothing chose a
+    /// socket, so that tmux picks the server itself.
     ///
     /// # Examples
     ///
@@ -793,7 +799,9 @@ impl Server {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::new()?;
+    /// let server = libtmux::Server::builder()
+    ///     .socket_path("/tmp/libtmux-rs-test/capabilities-example-absent.sock")
+    ///     .build()?;
     /// assert!(!server.capabilities().await?.tmux_version().raw().is_empty());
     /// server.shutdown().await?;
     /// # Ok::<(), libtmux::Error>(())
@@ -980,6 +988,9 @@ impl Server {
     }
 
     /// Build a server from the `TMUX` variable tmux exports into every pane.
+    ///
+    /// This is how a caller asks for that server by name, as `-S`. [`Server::new`]
+    /// and [`Server::builder`] pass no socket of their own, so tmux picks.
     ///
     /// tmux sets `TMUX` to `<socket_path>,<server_pid>,<session_id>`. Only the
     /// socket path is used: the pid and session id are frozen when the pane

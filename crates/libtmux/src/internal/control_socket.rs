@@ -60,23 +60,98 @@ impl PinnedSocket {
     }
 
     pub(crate) fn arguments(&self, global: &[OsString]) -> Vec<OsString> {
+        let pin = self.directory.path().join("s").into_os_string();
         // Keep launch flags, replacing the one captured endpoint selector.
-        let mut selected = Vec::with_capacity(global.len());
+        let mut selected = Vec::with_capacity(global.len() + 2);
+        let mut replaced = false;
         let mut index = 0;
         while index < global.len() {
             if global[index] == "-S" || global[index] == "-L" {
                 selected.push(OsString::from("-S"));
-                selected.push(self.directory.path().join("s").into_os_string());
+                selected.push(pin.clone());
+                replaced = true;
                 index += 2;
             } else {
                 selected.push(global[index].clone());
                 index += 1;
             }
         }
+        // With no selector, tmux was left to pick, and would pick again.
+        if !replaced {
+            selected.splice(0..0, [OsString::from("-S"), pin]);
+        }
         selected
     }
 
     pub(crate) fn into_directory(self) -> tempfile::TempDir {
         self.directory
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::os::unix::net::UnixListener;
+
+    use super::PinnedSocket;
+
+    fn arguments(global: &[&str]) -> (Vec<OsString>, OsString) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let socket = directory.path().join("server.sock");
+        let _listener = UnixListener::bind(&socket).expect("socket inode");
+        let pinned = PinnedSocket::new(&socket).expect("socket pins");
+        let pin = pinned.directory.path().join("s").into_os_string();
+        let global: Vec<OsString> = global.iter().map(OsString::from).collect();
+        (pinned.arguments(&global), pin)
+    }
+
+    #[test]
+    fn a_path_selector_is_replaced_in_place() {
+        let (selected, pin) = arguments(&["-S", "/elsewhere.sock", "-f", "tmux.conf", "-u"]);
+
+        assert_eq!(
+            selected,
+            [
+                OsString::from("-S"),
+                pin,
+                OsString::from("-f"),
+                OsString::from("tmux.conf"),
+                OsString::from("-u")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_selector_becomes_the_pinned_path() {
+        let (selected, pin) = arguments(&["-L", "named", "-2", "-u"]);
+
+        assert_eq!(
+            selected,
+            [
+                OsString::from("-S"),
+                pin,
+                OsString::from("-2"),
+                OsString::from("-u")
+            ]
+        );
+    }
+
+    #[test]
+    fn no_selector_gets_the_pinned_path_in_front() {
+        let (selected, pin) = arguments(&["-u"]);
+
+        assert_eq!(selected, [OsString::from("-S"), pin, OsString::from("-u")]);
+    }
+
+    #[test]
+    fn launch_flags_alone_still_get_the_pinned_path() {
+        let (selected, pin) = arguments(&["-N", "-f", "tmux.conf", "-2", "-u"]);
+
+        assert_eq!(selected.len(), 7);
+        assert_eq!(selected[..2], [OsString::from("-S"), pin]);
+        assert_eq!(
+            selected[2..],
+            ["-N", "-f", "tmux.conf", "-2", "-u"].map(OsString::from)
+        );
     }
 }
