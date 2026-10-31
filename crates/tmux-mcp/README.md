@@ -277,8 +277,9 @@ A JSON client takes the same two settings as `args` and `env`:
 ### Anything else: the command and no arguments
 
 Any client that runs a stdio MCP server takes the same two pieces: the command
-`tmux-mcp`, and no arguments. That default selects a dedicated product socket
-and a minimal tmux configuration.
+`tmux-mcp`, and no arguments. That default passes tmux no socket, so tmux picks
+the server: the one `TMUX` names when the client runs inside tmux, and tmux's
+default socket otherwise.
 
 ## Choose which tmux it drives
 
@@ -288,19 +289,18 @@ it. [Settings](#settings) lists every flag and variable, and
 
 ### [`--socket-name`][guide-existing-server]: pick a socket by name
 
-With no flag, the server drives a tmux server of its own, on a socket named
-`libtmux-mcp`, started with a minimal configuration the package ships. None of
-its tools can name the sessions you already have.
+With no flag and neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET` set, the
+server passes tmux no socket, and tmux picks the server: the one `TMUX` names
+when the client runs inside tmux, and tmux's default socket otherwise. Its
+tools name the sessions that server already has.
 
-To work with a tmux server you already run, name its socket:
+To work with a tmux server on another socket, name it:
 
 ```console
 $ tmux-mcp --socket-name work
 ```
 
-`-L` is the short form. Several processes started without arguments share the
-`libtmux-mcp` daemon, and `tmux -L libtmux-mcp kill-server` stops it. [The
-contract][contract-server] says which process stops it on its own.
+`-L` is the short form.
 
 ### [`--socket`][guide-existing-server]: pick a socket by path
 
@@ -308,12 +308,13 @@ contract][contract-server] says which process stops it on its own.
 $ tmux-mcp --socket /tmp/tmux-1000/work
 ```
 
-`-S` is the short form. A socket name and a path are mutually exclusive.
-[`LIBTMUX_SOCKET_PATH`][contract-server] and
+`-S` is the short form. A socket name and a path are mutually exclusive as
+flags. [`LIBTMUX_SOCKET_PATH`][contract-server] and
 [`LIBTMUX_SOCKET`][contract-server] make the same choices from the
-environment, which is how a client's configuration sets them, and
-[`LIBTMUX_TMUX_CONFIG`][contract-server] names the tmux configuration for a
-daemon the server starts.
+environment, which is how a client's configuration sets them. A flag wins over
+both variables, and `LIBTMUX_SOCKET_PATH` wins when both are set, as tmux's
+`-S` does over `-L`. [`LIBTMUX_TMUX_CONFIG`][contract-server] names the tmux
+configuration for a daemon the server starts.
 
 ## Run work and wait for it
 
@@ -462,10 +463,8 @@ It takes toolset names separated by commas, in any order, and replaces the
 default. An empty string offers no toolsets. Empty tokens and unknown names stop
 startup.
 
-The default dedicated socket gets all four toolsets only when `tmux-mcp` can
-establish minimal-configuration provenance. An existing dedicated socket, an
-explicit socket, or an explicit tmux configuration defaults to `inspect`,
-`manage`, and `execute`, so select `teardown` there by name.
+The default is `inspect`, `manage`, and `execute`, so select `teardown` by
+name.
 
 ```console
 $ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp
@@ -588,8 +587,8 @@ The environment sets the rest. A flag wins over its variable.
 | [`LIBTMUX_TOOLS`] | Adds exact tool names after toolset expansion |
 | [`LIBTMUX_EXCLUDE_TOOLS`] | Removes exact names after every inclusion |
 | [`LIBTMUX_ENVIRONMENT_VALUES`] | Names the tmux environment variables whose values tools may return; none by default |
-| [`LIBTMUX_SOCKET_PATH`][contract-server] | Socket path, as `-S`; ignored when `-S` or `-L` is given |
-| [`LIBTMUX_SOCKET`][contract-server] | Socket name, as `-L`; not together with [`LIBTMUX_SOCKET_PATH`][contract-server] |
+| [`LIBTMUX_SOCKET_PATH`][contract-server] | Socket path, as `-S`; ignored when `-S` or `-L` is given, and wins over [`LIBTMUX_SOCKET`][contract-server] |
+| [`LIBTMUX_SOCKET`][contract-server] | Socket name, as `-L`; ignored when `-S` or `-L` is given |
 | [`LIBTMUX_TMUX_CONFIG`][contract-server] | Absolute path of a tmux configuration for a daemon the server starts |
 
 A malformed setting stops startup. The protocol runs on stdout, so anything

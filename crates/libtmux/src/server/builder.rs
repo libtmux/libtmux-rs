@@ -156,7 +156,10 @@ impl ServerBuilder {
         self
     }
 
-    /// Select a named tmux socket.
+    /// Select a named tmux socket, passed to tmux as `-L`.
+    ///
+    /// Naming a socket here leaves `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET`
+    /// unread.
     ///
     /// # Examples
     ///
@@ -171,10 +174,11 @@ impl ServerBuilder {
         self
     }
 
-    /// Select an explicit tmux socket path.
+    /// Select an explicit tmux socket path, passed to tmux as `-S`.
     ///
     /// Relative paths are joined to the working directory captured by
-    /// [`ServerBuilder::build`].
+    /// [`ServerBuilder::build`]. Naming a socket here leaves
+    /// `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` unread.
     ///
     /// # Examples
     ///
@@ -270,10 +274,25 @@ impl ServerBuilder {
 
     /// Capture process context and construct an inert server handle.
     ///
+    /// The socket is the first of these that names one:
+    ///
+    /// 1. [`ServerBuilder::socket_path`] as `-S`, or [`ServerBuilder::socket_name`] as `-L`.
+    /// 2. `LIBTMUX_SOCKET_PATH`, as `-S`.
+    /// 3. `LIBTMUX_SOCKET`, as `-L`.
+    /// 4. None: tmux gets neither flag and picks the server itself, the one
+    ///    `TMUX` names when this process is inside tmux and its default socket
+    ///    otherwise.
+    ///
+    /// `LIBTMUX_SOCKET_PATH` wins when both variables are set, as tmux's `-S`
+    /// does over `-L`. A variable that is empty or only whitespace counts as
+    /// unset, each one alone. To use the `TMUX` socket as an explicit `-S`
+    /// instead, build with [`Server::from_env`](crate::Server::from_env).
+    ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidServerConfiguration`] for invalid selector,
-    /// path, color, working-directory, or socket-root inputs.
+    /// path, color, working-directory, or socket-root inputs, including a
+    /// value read from either variable.
     ///
     /// # Examples
     ///

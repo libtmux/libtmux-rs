@@ -43,7 +43,9 @@ impl EngineCapabilities {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::new()?;
+    /// let server = libtmux::Server::builder()
+    ///     .socket_path("/tmp/libtmux-rs-test/tmux-version-example-absent.sock")
+    ///     .build()?;
     /// let capabilities = server.capabilities().await?;
     /// assert!(!capabilities.tmux_version().raw().is_empty());
     /// server.shutdown().await?;

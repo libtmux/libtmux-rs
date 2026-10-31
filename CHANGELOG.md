@@ -15,6 +15,29 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- **Behaviour change.** `Server::new` and `Server::builder` now pass tmux
+  neither `-L` nor `-S` when no socket is named, where they passed the `TMUX`
+  socket as `-S`, else `-L default`. They read `LIBTMUX_SOCKET_PATH` (as `-S`),
+  then `LIBTMUX_SOCKET` (as `-L`), and with neither set tmux picks the server:
+  the one `TMUX` names inside tmux, else its default socket. A variable that is
+  empty or only whitespace counts as unset, and `LIBTMUX_SOCKET_PATH` wins when
+  both are set. A socket named in code leaves both unread, and
+  `Server::from_env` still names the `TMUX` socket as `-S`. A value that
+  cannot name a socket, such as `LIBTMUX_SOCKET=a/b`, now makes `Server::new`
+  and `ServerBuilder::build` return `Error::InvalidServerConfiguration`. To pin
+  a server, name its socket in code or set one of the variables. (#119)
+- **Behaviour change.** `tmux-workspace` leaves the socket to the core after
+  `-S` and `-L`: `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, else tmux picks.
+  It no longer passes the `TMUX` socket as `-S` or falls back to `-L default`
+  itself, and `--help` states the fallback beside both flags. (#119)
+- **Behaviour change.** `tmux-mcp` no longer drives a server of its own on the
+  `libtmux-mcp` socket. With no `-S` or `-L` it takes `LIBTMUX_SOCKET_PATH`,
+  then `LIBTMUX_SOCKET`, else tmux picks the server. It starts and stops no
+  daemon and loads no shipped configuration, `teardown` is not in the default
+  toolsets, and both variables set together no longer stop startup:
+  `LIBTMUX_SOCKET_PATH` wins. To keep the old setup, start a server on the
+  `libtmux-mcp` socket yourself, run `tmux-mcp -L libtmux-mcp`, and add
+  `teardown` to `LIBTMUX_TOOLSETS`. (#119)
 - JSON layouts need tmux 3.8 or newer, the first release that accepts
   them. On an older server, applying one fails before it reaches tmux with
   `Error::UnsupportedCapability`, naming 3.8; upgrade to tmux 3.8 to apply

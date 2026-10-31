@@ -3,17 +3,40 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::io::{BufRead as _, BufReader, Write as _};
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::MetadataExt as _;
+use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Output, Stdio};
-use std::time::Duration;
 
 use libtmux::test::TestServer;
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_tmux-mcp");
 
+/// A directory of the process's own for `TMUX_TMPDIR`, so a start that names
+/// no socket reaches a private default socket and never the tester's.
+struct PrivateRoot(PathBuf);
+
+impl PrivateRoot {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let root = PathBuf::from("/tmp/libtmux-rs-test").join(format!(
+            "mcp-private-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).expect("private root");
+        Self(root)
+    }
+}
+
+impl Drop for PrivateRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct Process {
+    _root: PrivateRoot,
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -23,7 +46,8 @@ struct Process {
 
 impl Process {
     fn start(args: &[&str], environment: &[(&str, &str)]) -> Self {
-        let mut command = base_command();
+        let root = PrivateRoot::new();
+        let mut command = base_command(&root);
         command.args(args);
         for (name, value) in environment {
             command.env(name, value);
@@ -33,6 +57,7 @@ impl Process {
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
         let stderr = child.stderr.take();
         let mut process = Self {
+            _root: root,
             child,
             stdin,
             stdout,
@@ -139,7 +164,7 @@ impl Process {
     }
 }
 
-fn base_command() -> Command {
+fn base_command(root: &PrivateRoot) -> Command {
     let mut command = Command::new(BIN);
     command
         .env_remove("TMUX")
@@ -153,7 +178,7 @@ fn base_command() -> Command {
         .env_remove("LIBTMUX_SOCKET_PATH")
         .env_remove("LIBTMUX_TMUX_CONFIG")
         .env_remove("LIBTMUX_ENVIRONMENT_VALUES")
-        .env_remove("TMUX_TMPDIR")
+        .env("TMUX_TMPDIR", &root.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -161,46 +186,12 @@ fn base_command() -> Command {
 }
 
 fn failed_start(environment: &[(&str, &str)]) -> Output {
-    let mut command = base_command();
+    let root = PrivateRoot::new();
+    let mut command = base_command(&root);
     for (name, value) in environment {
         command.env(name, value);
     }
     command.stdin(Stdio::null()).output().expect("binary runs")
-}
-
-fn daemon_is_alive(socket: &Path) -> bool {
-    Command::new("tmux")
-        .arg("-S")
-        .arg(socket)
-        .arg("display-message")
-        .arg("-p")
-        .arg("alive")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn daemon_stops(socket: &Path) -> bool {
-    for _ in 0..200 {
-        if !daemon_is_alive(socket) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    false
-}
-
-fn stop_daemon(socket: &Path) {
-    let _ = Command::new("tmux")
-        .arg("-S")
-        .arg(socket)
-        .arg("kill-server")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 fn tool_error(response: &Value) -> Value {
@@ -539,66 +530,38 @@ fn configured_tmux_file_must_be_absolute() {
     assert!(stderr.contains("absolute"), "{stderr}");
 }
 
-#[test]
-fn stale_default_socket_path_is_replaced_before_claiming_a_live_daemon() {
-    let root = PathBuf::from("/tmp/libtmux-rs-test")
-        .join(format!("mcp-provenance-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("fixture root");
-    let uid = std::fs::metadata(&root).expect("fixture metadata").uid();
-    let socket_dir = root.join(format!("tmux-{uid}"));
-    std::fs::create_dir(&socket_dir).expect("socket directory");
-    std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
-        .expect("safe socket-directory permissions");
-    let socket = socket_dir.join("libtmux-mcp");
-    std::fs::write(&socket, b"stale, not a daemon").expect("stale socket fixture");
-
-    let mut process = Process::start(
-        &[],
-        &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
-    );
+/// What `tmux://capabilities` says about the socket, read from a running
+/// process.
+fn capability_report(process: &mut Process) -> Value {
     let response = process.request("resources/read", &json!({"uri": "tmux://capabilities"}));
     let text = response["result"]["contents"][0]["text"]
         .as_str()
         .expect("capability report text");
-    let report: Value = serde_json::from_str(text).expect("capability report JSON");
-
-    process.finish();
-    std::fs::remove_file(&socket).expect("socket link cleanup");
-    std::fs::remove_dir_all(&root).expect("fixture cleanup");
-
-    assert_eq!(report["socket"]["serverState"], "created");
-    assert_eq!(report["socket"]["configurationProvenance"], "minimal");
-    assert_eq!(report["toolCount"], 45);
+    serde_json::from_str(text).expect("capability report JSON")
 }
 
 #[test]
-fn default_startup_reports_dedicated_minimal_socket_provenance() {
+fn default_startup_passes_tmux_no_socket_and_starts_no_daemon() {
     let root = PathBuf::from("/tmp/libtmux-rs-test")
         .join(format!("mcp-capabilities-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("fixture root");
+    let canonical = root.canonicalize().expect("fixture root resolves");
+    let uid = std::fs::metadata(&root).expect("fixture metadata").uid();
     let mut process = Process::start(
         &[],
         &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
     );
 
-    let response = process.request("resources/read", &json!({"uri": "tmux://capabilities"}));
-    let text = response["result"]["contents"][0]["text"]
-        .as_str()
-        .expect("capability report text");
-    let report: Value = serde_json::from_str(text).expect("capability report JSON");
+    let report = capability_report(&mut process);
+    let selector = format!("path:{}/tmux-{uid}/default", canonical.display());
 
-    assert_eq!(report["socket"]["selector"], "name:libtmux-mcp");
-    assert_eq!(report["socket"]["selectionProvenance"], "default-dedicated");
-    assert_eq!(report["socket"]["serverState"], "created");
-    assert_eq!(report["socket"]["configurationProvenance"], "minimal");
-    assert_eq!(report["connection"]["socketSelector"], "name:libtmux-mcp");
-    assert_eq!(
-        report["connection"]["socketProvenance"],
-        "default-dedicated"
-    );
-    assert_eq!(report["connection"]["serverState"], "created");
-    assert_eq!(report["connection"]["configurationProvenance"], "minimal");
-    assert!(report["connection"]["resolvedSocketPath"].is_string());
+    assert_eq!(report["socket"]["selector"], selector);
+    assert_eq!(report["socket"]["selectionProvenance"], "operator-current");
+    assert_eq!(report["socket"]["serverState"], "absent");
+    assert_eq!(report["socket"]["configurationProvenance"], "unknown");
+    assert_eq!(report["connection"]["socketSelector"], selector);
+    assert_eq!(report["connection"]["socketProvenance"], "operator-current");
+    assert_eq!(report["connection"]["serverState"], "absent");
     assert!(
         report["connection"]["attachCommand"]
             .as_str()
@@ -608,158 +571,170 @@ fn default_startup_reports_dedicated_minimal_socket_provenance() {
     assert_eq!(report["boundary"]["perCallSocketSelection"], false);
     assert_eq!(report["boundary"]["hostCommandExecution"], false);
     assert_eq!(report["boundary"]["dynamicResources"], false);
-    assert_eq!(report["toolCount"], 45);
+    assert_eq!(report["toolCount"], 40, "teardown is not in the default");
 
     process.finish();
+    // tmux makes the socket directory for any client, so only a socket in it
+    // shows a daemon.
+    let started = std::fs::read_dir(root.join(format!("tmux-{uid}")))
+        .is_ok_and(|mut entries| entries.next().is_some());
     std::fs::remove_dir_all(root).expect("fixture cleanup");
+    assert!(!started, "the process started a daemon of its own");
 }
 
-#[test]
-fn default_owner_stops_its_dedicated_daemon_when_stdio_closes() {
-    let root = PathBuf::from("/tmp/libtmux-rs-test")
-        .join(format!("mcp-owner-shutdown-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("fixture root");
-    let socket = root.join(format!(
-        "tmux-{}/libtmux-mcp",
-        std::fs::metadata(&root).expect("fixture metadata").uid()
-    ));
-    let process = Process::start(
-        &[],
-        &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
-    );
+/// Start a daemon on a socket name in a private root, the way a user's own
+/// would be, and keep it findable by a bare `tmux -L`.
+struct NamedDaemon {
+    root: PathBuf,
+    name: &'static str,
+}
 
-    process.finish();
-    let stopped = daemon_stops(&socket);
-    if !stopped {
-        stop_daemon(&socket);
+impl NamedDaemon {
+    fn start(label: &str, name: &'static str, session: &str) -> Self {
+        let root = PathBuf::from("/tmp/libtmux-rs-test")
+            .join(format!("mcp-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("fixture root");
+        let daemon = Self { root, name };
+        let started = daemon
+            .tmux(&["new-session", "-d", "-s", session])
+            .status()
+            .expect("tmux runs");
+        assert!(started.success());
+        daemon
     }
-    std::fs::remove_dir_all(root).expect("fixture cleanup");
 
-    assert!(
-        stopped,
-        "the process left its dedicated tmux daemon running"
-    );
-}
-
-#[test]
-fn only_the_process_whose_config_marker_loaded_claims_minimal_provenance() {
-    let root = PathBuf::from("/tmp/libtmux-rs-test")
-        .join(format!("mcp-launch-owner-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("fixture root");
-    let environment = [("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))];
-    let mut owner = Process::start(&[], &environment);
-    let owner_response = owner.request("resources/read", &json!({"uri": "tmux://capabilities"}));
-    let owner_report: Value = serde_json::from_str(
-        owner_response["result"]["contents"][0]["text"]
-            .as_str()
-            .expect("owner capability report"),
-    )
-    .expect("owner report JSON");
-
-    let mut follower = Process::start(&[], &environment);
-    let follower_response =
-        follower.request("resources/read", &json!({"uri": "tmux://capabilities"}));
-    let follower_report: Value = serde_json::from_str(
-        follower_response["result"]["contents"][0]["text"]
-            .as_str()
-            .expect("follower capability report"),
-    )
-    .expect("follower report JSON");
-
-    follower.finish();
-    owner.finish();
-    let socket_dir = root.join(format!(
-        "tmux-{}",
-        std::fs::metadata(&root).expect("fixture metadata").uid()
-    ));
-    let socket = socket_dir.join("libtmux-mcp");
-    if socket.exists() {
-        std::fs::remove_file(socket).expect("socket cleanup");
+    fn tmux(&self, arguments: &[&str]) -> Command {
+        let mut command =
+            Command::new(std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or("tmux".into()));
+        command
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .env("TMUX_TMPDIR", &self.root)
+            .args(["-f", "/dev/null", "-L", self.name])
+            .args(arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
     }
-    std::fs::remove_dir_all(root).expect("fixture cleanup");
 
-    assert_eq!(owner_report["socket"]["configurationProvenance"], "minimal");
-    assert_eq!(owner_report["toolCount"], 45);
-    assert_eq!(follower_report["socket"]["serverState"], "existing");
-    assert_eq!(
-        follower_report["socket"]["configurationProvenance"],
-        "unknown"
-    );
-    assert_eq!(follower_report["toolCount"], 40);
+    fn root(&self) -> &str {
+        self.root.to_str().expect("UTF-8 fixture path")
+    }
 }
 
-/// Two clients on the default socket share one daemon, so the one that
-/// started it must not stop it while the other still answers from it.
-#[test]
-fn the_owner_leaves_a_shared_dedicated_daemon_running() {
-    let root = PathBuf::from("/tmp/libtmux-rs-test")
-        .join(format!("mcp-shared-owner-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("fixture root");
-    let socket = root.join(format!(
-        "tmux-{}/libtmux-mcp",
-        std::fs::metadata(&root).expect("fixture metadata").uid()
-    ));
-    let environment = [("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))];
-    let mut owner = Process::start(&[], &environment);
-    let created = owner.request(
-        "tools/call",
-        &json!({"name": "create_session", "arguments": {"name": "shared"}}),
-    );
-    let mut follower = Process::start(&[], &environment);
+impl Drop for NamedDaemon {
+    fn drop(&mut self) {
+        let _ = self.tmux(&["kill-server"]).status();
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
 
-    let owner_log = owner.finish();
-    let listed = follower.request(
+fn session_names(process: &mut Process) -> Vec<String> {
+    let listed = process.request(
         "tools/call",
         &json!({"name": "list_sessions", "arguments": {}}),
     );
-    follower.finish();
-    let alive_after_both = daemon_is_alive(&socket);
-    stop_daemon(&socket);
-    std::fs::remove_dir_all(&root).expect("fixture cleanup");
-
-    assert_ne!(created["result"]["isError"], true, "{created}");
-    assert_eq!(
-        listed["result"]["structuredContent"]["sessions"][0]["name"], "shared",
-        "the follower lost its daemon when the owner exited: {listed}"
-    );
-    assert!(owner_log.contains("leaving"), "{owner_log}");
-    assert!(
-        alive_after_both,
-        "a follower stopped a daemon it did not start"
-    );
+    listed["result"]["structuredContent"]["sessions"]
+        .as_array()
+        .expect("session list")
+        .iter()
+        .map(|session| session["name"].as_str().expect("session name").to_owned())
+        .collect()
 }
 
 #[test]
-fn default_daemon_loads_the_shipped_minimal_configuration() {
-    let root = PathBuf::from("/tmp/libtmux-rs-test")
-        .join(format!("mcp-minimal-config-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("fixture root");
+fn the_socket_name_variable_selects_the_daemon_when_no_flag_is_given() {
+    let daemon = NamedDaemon::start("env-name", "chosen-by-env", "by-name");
     let mut process = Process::start(
         &[],
-        &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
+        &[
+            ("TMUX_TMPDIR", daemon.root()),
+            ("LIBTMUX_SOCKET", daemon.name),
+        ],
     );
 
-    let created = process.request(
-        "tools/call",
-        &json!({"name": "create_session", "arguments": {"name": "minimal-config"}}),
-    );
-    assert_ne!(created["result"]["isError"], true, "{created}");
-    let status = process.request(
-        "tools/call",
-        &json!({
-            "name": "show_option",
-            "arguments": {"name": "status", "scope": "global-session"}
-        }),
-    );
-    assert_eq!(status["result"]["structuredContent"]["value"], "off");
-    let killed = process.request(
-        "tools/call",
-        &json!({"name": "kill_session", "arguments": {"session": "minimal-config"}}),
-    );
-    assert_ne!(killed["result"]["isError"], true, "{killed}");
-
+    assert_eq!(session_names(&mut process), ["by-name"]);
+    let report = capability_report(&mut process);
+    assert_eq!(report["socket"]["selector"], "name:chosen-by-env");
+    assert_eq!(report["socket"]["serverState"], "existing");
     process.finish();
-    std::fs::remove_dir_all(root).expect("fixture cleanup");
+}
+
+#[test]
+fn the_socket_path_variable_selects_the_daemon_and_wins_over_the_name() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard = runtime.block_on(async {
+        let guard = TestServer::new().await.expect("tmux starts");
+        guard.session("by-path").await.expect("session starts");
+        guard
+    });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let mut process = Process::start(
+        &[],
+        &[
+            ("LIBTMUX_SOCKET_PATH", socket),
+            ("LIBTMUX_SOCKET", "name-that-loses"),
+        ],
+    );
+
+    assert_eq!(session_names(&mut process), ["by-path"]);
+    let report = capability_report(&mut process);
+    assert_eq!(report["socket"]["selector"], format!("path:{socket}"));
+    process.finish();
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+}
+
+#[test]
+fn a_flag_leaves_both_socket_variables_unread() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard = runtime.block_on(async {
+        let guard = TestServer::new().await.expect("tmux starts");
+        guard.session("by-flag").await.expect("session starts");
+        guard
+    });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let mut process = Process::start(
+        &["--socket", socket],
+        &[
+            (
+                "LIBTMUX_SOCKET_PATH",
+                "/tmp/libtmux-rs-test/never-read.sock",
+            ),
+            ("LIBTMUX_SOCKET", "never-read"),
+        ],
+    );
+
+    assert_eq!(session_names(&mut process), ["by-flag"]);
+    process.finish();
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+}
+
+#[test]
+fn inside_tmux_with_no_socket_chosen_the_server_tmux_names_is_driven() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (guard, pane) = runtime.block_on(async {
+        let guard = TestServer::new().await.expect("tmux starts");
+        let session = guard.session("inside").await.expect("session starts");
+        let pane = session
+            .active_window()
+            .await
+            .expect("window")
+            .expect("active window")
+            .active_pane()
+            .await
+            .expect("pane")
+            .expect("active pane")
+            .id()
+            .to_string();
+        (guard, pane)
+    });
+    let context = format!("{},{},0", guard.socket_path().display(), guard.daemon_pid());
+    let mut process = Process::start(&[], &[("TMUX", &context), ("TMUX_PANE", &pane)]);
+
+    assert_eq!(session_names(&mut process), ["inside"]);
+    process.finish();
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
 }
 
 /// Errors rmcp raises before a tool runs carry the same `kind` as the rest,

@@ -443,8 +443,11 @@ Targets are scope-specific: pane operations cannot accept window targets.
 `ServerIdentity` structurally normalizes the effective socket endpoint,
 including the resolved socket root for named and default sockets and the
 absolute path captured for explicit sockets. Symlink-sensitive parent
-components are preserved rather than collapsed, and dispatch uses the same
-captured path as identity. It never uses `Arc` pointer identity. Independently
+components are preserved rather than collapsed. Dispatch reaches the same
+endpoint the identity names: an explicit path as `-S`, a name as `-L`, and
+with neither, no flag, so that tmux picks the server `TMUX` names or its
+default socket, which `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` can steer.
+It never uses `Arc` pointer identity. Independently
 constructed servers for the same structural endpoint therefore compare
 equally, while equal-looking object IDs on different endpoints do not.
 

@@ -40,6 +40,24 @@ is given. Both workspaces whose session is `api` and has a `logs` window:
 $ tmux-workspace search session:api window:logs
 ```
 
+## Choosing the tmux server
+
+`load` and `freeze` use the first of these that names a socket:
+
+1. `-S`, a socket path, or `-L`, a socket name.
+2. `LIBTMUX_SOCKET_PATH`, a socket path, as `-S`.
+3. `LIBTMUX_SOCKET`, a socket name, as `-L`.
+4. None. tmux gets neither flag and picks the server itself: the one `TMUX`
+   names when the command runs inside tmux, and its default socket otherwise.
+
+`-S` and `-L` leave both variables unread. `LIBTMUX_SOCKET_PATH` wins when
+both are set, and a variable that is empty or only whitespace counts as unset.
+Without `-S`, `-L` or either variable, a `TMUX` that is not
+`socket,pid,session` stops the command with exit status 2. A flag or a
+variable names the server, so a `TMUX` beside it is not read.
+`shell` passes `-S` and `-L` on to tmuxp, which reads neither variable and
+uses the `TMUX` socket inside tmux.
+
 ## Loading
 
 `load` builds each WORKSPACE in order, then attaches to the last one, or

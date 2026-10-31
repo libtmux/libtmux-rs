@@ -211,11 +211,17 @@ Server ──┬── Session ──── Window ──── Pane
 
 | Type | Held by | Identified by | Notes |
 | --- | --- | --- | --- |
-| [`Server`] | a socket | its socket path | one daemon; [`Server::new`] finds the default |
+| [`Server`] | a socket | its socket path | one daemon; [`Server::new`] passes tmux no socket unless one is named |
 | [`Session`] | the server | `$0` | what a client attaches to |
 | [`Window`] | *linked into* sessions | `@0` | one window can be linked into several sessions at once |
 | [`Pane`] | exactly one window | `%0` | holds the process and the scrollback |
 | [`Client`] | the server | its tty | attached to one session at a time |
+
+[`Server::new`] and [`Server::builder`] choose the socket in this order: the
+one you name in code, `LIBTMUX_SOCKET_PATH` as `-S`, then `LIBTMUX_SOCKET` as
+`-L`. With none of them, tmux gets no socket and picks the server itself: the
+one `TMUX` names inside tmux, else its default socket. `Server::from_env` names
+the `TMUX` socket as `-S` instead.
 
 The third row decides API shape. A window has one identity and several
 *links*, so a command that removes one link names the session too, as
@@ -1008,6 +1014,7 @@ or [MIT license](LICENSE-MIT) at your option.
 [`FilterExpr<T>`]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
 [`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/server-server-cmd/
 [`Server::new`]: https://libtmux.org/en/rs/latest/reference/server-server-new/
+[`Server::builder`]: https://libtmux.org/en/rs/latest/reference/server-server-builder/
 [`Server::with_session`]: https://libtmux.org/en/rs/latest/reference/server-server-with_session/
 [`Server::session`]: https://libtmux.org/en/rs/latest/reference/server-server-session/
 [`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/server-server-sessions/

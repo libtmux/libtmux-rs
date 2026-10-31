@@ -29,6 +29,12 @@ use crate::{
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The socket path a caller names to every process it starts, as `-S`.
+const SOCKET_PATH_ENV: &str = "LIBTMUX_SOCKET_PATH";
+
+/// The socket name a caller names to every process it starts, as `-L`.
+const SOCKET_NAME_ENV: &str = "LIBTMUX_SOCKET";
+
 pub(crate) enum SocketSelection {
     Automatic,
     Name(OsString),
@@ -43,6 +49,8 @@ pub(crate) struct BuildContext {
     socket_root: Option<OsString>,
     fallback_socket_root: Option<PathBuf>,
     real_uid: u32,
+    socket_path_env: Option<OsString>,
+    socket_name_env: Option<OsString>,
 }
 
 impl BuildContext {
@@ -63,7 +71,20 @@ impl BuildContext {
             socket_root,
             fallback_socket_root,
             real_uid,
+            socket_path_env: None,
+            socket_name_env: None,
         }
+    }
+
+    /// Record what [`SOCKET_PATH_ENV`] and [`SOCKET_NAME_ENV`] held.
+    pub(crate) fn with_socket_environment(
+        mut self,
+        socket_path: Option<OsString>,
+        socket_name: Option<OsString>,
+    ) -> Self {
+        self.socket_path_env = socket_path;
+        self.socket_name_env = socket_name;
+        self
     }
 
     pub(crate) fn capture() -> Self {
@@ -76,7 +97,50 @@ impl BuildContext {
             Path::new("/tmp").canonicalize().ok(),
             rustix::process::getuid().as_raw(),
         )
+        .with_socket_environment(env::var_os(SOCKET_PATH_ENV), env::var_os(SOCKET_NAME_ENV))
     }
+}
+
+/// The socket the environment names, when the caller named none.
+///
+/// The path wins over the name, as tmux's `-S` does over `-L`. A value that
+/// is empty or only whitespace counts as unset, each one alone.
+fn environment_socket<'a>(
+    path: Option<&'a OsStr>,
+    name: Option<&'a OsStr>,
+) -> (Option<&'a OsStr>, Option<&'a OsStr>) {
+    let used = |value: Option<&'a OsStr>| {
+        value.filter(|value| !value.as_bytes().iter().all(u8::is_ascii_whitespace))
+    };
+    match (used(path), used(name)) {
+        (Some(path), _) => (Some(path), None),
+        (None, name) => (None, name),
+    }
+}
+
+/// The environment tmux runs in. `PATH` and `TMUX_TMPDIR` are the captured
+/// ones, and `TMUX` and `TMUX_PANE` are set only when they name the server.
+fn launch_context(
+    executable: OsString,
+    working_directory: &Path,
+    path: Option<OsString>,
+    tmux: Option<OsString>,
+    tmux_pane: Option<OsString>,
+    socket_root: Option<PathBuf>,
+) -> LaunchContext {
+    let set = |launch: LaunchContext, name: &str, value: Option<OsString>| match value {
+        Some(value) => launch.with_environment(name, value),
+        None => launch.with_environment_removed(name),
+    };
+    let launch = LaunchContext::new(executable).with_current_dir(working_directory);
+    let launch = set(launch, "PATH", path);
+    let launch = set(launch, "TMUX", tmux);
+    let launch = set(launch, "TMUX_PANE", tmux_pane);
+    set(
+        launch,
+        "TMUX_TMPDIR",
+        socket_root.map(PathBuf::into_os_string),
+    )
 }
 
 #[derive(Clone)]
@@ -132,7 +196,10 @@ impl CoreConfiguration {
         }
 
         let (explicit_path, socket_name) = match selection {
-            SocketSelection::Automatic => (None, None),
+            SocketSelection::Automatic => environment_socket(
+                context.socket_path_env.as_deref(),
+                context.socket_name_env.as_deref(),
+            ),
             SocketSelection::Name(name) => (None, Some(name.as_os_str())),
             SocketSelection::Path(path) => (Some(path.as_os_str()), None),
         };
@@ -146,24 +213,41 @@ impl CoreConfiguration {
         let endpoint = resolve_server_endpoint(explicit_path, socket_name, inputs)
             .map_err(|error| map_identity_error(&error))?;
         let identity = endpoint.identity;
-        let (socket_name, mut global_argv, inherited, socket_root) = match endpoint.selector {
-            ResolvedSocketSelector::Path { path, inherited } => (
-                None,
-                vec![OsString::from("-S"), path.into_os_string()],
-                inherited,
-                None,
-            ),
-            ResolvedSocketSelector::Name {
-                name,
-                socket_root,
-                configured,
-            } => (
-                configured.then(|| name.clone()),
-                vec![OsString::from("-L"), name],
-                false,
-                Some(socket_root),
-            ),
-        };
+        // With nothing chosen, tmux gets neither `-S` nor `-L` and picks the
+        // server itself: the one `TMUX` names, else its default socket.
+        let (socket_name, mut global_argv, inherited, left_to_tmux, socket_root) =
+            match endpoint.selector {
+                ResolvedSocketSelector::Path {
+                    path,
+                    inherited,
+                    left_to_tmux,
+                } => (
+                    None,
+                    if left_to_tmux {
+                        Vec::new()
+                    } else {
+                        vec![OsString::from("-S"), path.into_os_string()]
+                    },
+                    inherited,
+                    left_to_tmux,
+                    None,
+                ),
+                ResolvedSocketSelector::Name {
+                    name,
+                    socket_root,
+                    configured,
+                } => (
+                    configured.then(|| name.clone()),
+                    if configured {
+                        vec![OsString::from("-L"), name]
+                    } else {
+                        Vec::new()
+                    },
+                    false,
+                    false,
+                    Some(socket_root),
+                ),
+            };
 
         let config_file = config_file
             .map(|path| capture_config_path(&path, &working_directory))
@@ -178,30 +262,20 @@ impl CoreConfiguration {
         // tmux replaces every byte outside `0x20..=0x7e` with `_` when it does
         // not believe its client speaks UTF-8, and it decides that from the
         // client process's own `TMUX`, `LANG`, `LC_ALL`, and `LC_CTYPE`. This
-        // crate unsets `TMUX` and inherits whatever locale its caller had, so
-        // a listing run from a container or a unit file returned `______` for
-        // a name and no error. `-u` says it directly instead of hoping.
+        // crate unsets `TMUX` unless it names the server, and inherits whatever
+        // locale its caller had, so a listing run from a container or a unit
+        // file returned `______` for a name and no error. `-u` says it
+        // directly instead of hoping.
         global_argv.push(OsString::from("-u"));
 
-        let pane = if inherited {
-            context.inherited_tmux_pane
-        } else {
-            None
-        };
-        let mut launch = LaunchContext::new(executable).with_current_dir(&working_directory);
-        launch = match context.path {
-            Some(path) => launch.with_environment("PATH", path),
-            None => launch.with_environment_removed("PATH"),
-        };
-        launch = launch.with_environment_removed("TMUX");
-        launch = match pane {
-            Some(pane) => launch.with_environment("TMUX_PANE", pane),
-            None => launch.with_environment_removed("TMUX_PANE"),
-        };
-        launch = match socket_root {
-            Some(root) => launch.with_environment("TMUX_TMPDIR", root.into_os_string()),
-            None => launch.with_environment_removed("TMUX_TMPDIR"),
-        };
+        let launch = launch_context(
+            executable,
+            &working_directory,
+            context.path,
+            left_to_tmux.then_some(context.inherited_tmux).flatten(),
+            inherited.then_some(context.inherited_tmux_pane).flatten(),
+            socket_root,
+        );
 
         Ok(Self {
             identity,
@@ -1044,10 +1118,7 @@ mod tests {
             Some(Some(canonical.as_os_str()))
         );
         assert_eq!(named.environment_value(OsStr::new("TMUX_PANE")), Some(None));
-        assert_eq!(
-            argv(&fallback),
-            [b"-L".as_slice(), b"default".as_slice(), b"-u".as_slice()]
-        );
+        assert_eq!(argv(&fallback), [b"-u".as_slice()]);
         assert_eq!(
             fallback.environment_value(OsStr::new("TMUX_TMPDIR")),
             Some(Some(OsStr::new("/fallback")))
@@ -1065,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn inherited_endpoint_becomes_explicit_and_freezes_only_its_pane_context() {
+    fn inherited_endpoint_is_left_to_tmux_with_its_pane_context() {
         let configuration = resolve(
             &SocketSelection::Automatic,
             None,
@@ -1081,21 +1152,15 @@ mod tests {
         )
         .expect("inherited endpoint resolves");
 
-        assert_eq!(
-            argv(&configuration),
-            [
-                b"-S".as_slice(),
-                b"/captured/work/relative/socket".as_slice(),
-                b"-u".as_slice(),
-            ]
-        );
+        assert_eq!(argv(&configuration), [b"-u".as_slice()]);
+        assert_eq!(configuration.socket_name(), None);
         assert_eq!(
             configuration.identity().socket_path(),
             Path::new("/captured/work/relative/socket")
         );
         assert_eq!(
             configuration.environment_value(OsStr::new("TMUX")),
-            Some(None)
+            Some(Some(OsStr::new("relative/socket,10,4")))
         );
         assert_eq!(
             configuration.environment_value(OsStr::new("TMUX_PANE")),
@@ -1105,6 +1170,252 @@ mod tests {
             configuration.environment_value(OsStr::new("TMUX_TMPDIR")),
             Some(None)
         );
+    }
+
+    #[test]
+    fn an_inherited_path_holding_a_comma_stays_explicit_because_tmux_would_cut_it() {
+        let configuration = resolve(
+            &SocketSelection::Automatic,
+            None,
+            None,
+            context(
+                Some(Path::new("/captured/work")),
+                Some(OsStr::new("/captured/bin")),
+                Some(OsStr::new("/inside/with,comma,10,4")),
+                Some(OsStr::new("%4")),
+                Some(OsStr::new("/unrelated/root")),
+                Some(Path::new("/fallback")),
+            ),
+        )
+        .expect("inherited endpoint resolves");
+
+        assert_eq!(
+            argv(&configuration),
+            [
+                b"-S".as_slice(),
+                b"/inside/with,comma".as_slice(),
+                b"-u".as_slice()
+            ]
+        );
+        assert_eq!(
+            configuration.environment_value(OsStr::new("TMUX")),
+            Some(None)
+        );
+        assert_eq!(
+            configuration.environment_value(OsStr::new("TMUX_PANE")),
+            Some(Some(OsStr::new("%4")))
+        );
+    }
+
+    /// Resolve with nothing chosen but the two socket variables, inside the
+    /// tmux server `/inside/socket` and with a private socket root.
+    fn automatic(socket_path: Option<&str>, socket_name: Option<&str>) -> CoreConfiguration {
+        resolve(
+            &SocketSelection::Automatic,
+            None,
+            None,
+            context(
+                Some(Path::new("/captured/work")),
+                Some(OsStr::new("/captured/bin")),
+                Some(OsStr::new("/inside/socket,10,4")),
+                Some(OsStr::new("%4")),
+                Some(OsStr::new("/private/root")),
+                Some(Path::new("/private/root")),
+            )
+            .with_socket_environment(
+                socket_path.map(OsString::from),
+                socket_name.map(OsString::from),
+            ),
+        )
+        .expect("automatic selection resolves")
+    }
+
+    #[test]
+    fn the_socket_path_variable_selects_dash_s_over_the_inherited_server() {
+        let configuration = automatic(Some("/chosen/by-env.sock"), None);
+
+        assert_eq!(
+            argv(&configuration),
+            [
+                b"-S".as_slice(),
+                b"/chosen/by-env.sock".as_slice(),
+                b"-u".as_slice()
+            ]
+        );
+        assert_eq!(
+            configuration.identity().socket_path(),
+            Path::new("/chosen/by-env.sock")
+        );
+        assert_eq!(
+            configuration.environment_value(OsStr::new("TMUX")),
+            Some(None)
+        );
+        assert_eq!(
+            configuration.environment_value(OsStr::new("TMUX_PANE")),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn a_relative_socket_path_variable_is_joined_to_the_working_directory() {
+        let configuration = automatic(Some("rel.sock"), None);
+
+        assert_eq!(
+            configuration.identity().socket_path(),
+            Path::new("/captured/work/rel.sock")
+        );
+    }
+
+    #[test]
+    fn the_socket_name_variable_selects_dash_l_over_the_inherited_server() {
+        let configuration = automatic(None, Some("by-env"));
+
+        assert_eq!(
+            argv(&configuration),
+            [b"-L".as_slice(), b"by-env".as_slice(), b"-u".as_slice()]
+        );
+        assert_eq!(configuration.socket_name(), Some(OsStr::new("by-env")));
+        assert_eq!(
+            configuration.identity().socket_path(),
+            Path::new("/private/root/tmux-1000/by-env")
+        );
+        assert_eq!(
+            configuration.environment_value(OsStr::new("TMUX")),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn the_socket_path_variable_wins_when_both_are_set() {
+        let configuration = automatic(Some("/chosen/by-env.sock"), Some("by-env"));
+
+        assert_eq!(
+            argv(&configuration),
+            [
+                b"-S".as_slice(),
+                b"/chosen/by-env.sock".as_slice(),
+                b"-u".as_slice()
+            ]
+        );
+        assert_eq!(configuration.socket_name(), None);
+    }
+
+    #[test]
+    fn an_empty_or_blank_variable_counts_as_unset_each_alone() {
+        for blank in ["", " ", "\t\n "] {
+            let neither = automatic(Some(blank), Some(blank));
+            assert_eq!(argv(&neither), [b"-u".as_slice()], "{blank:?}");
+            assert_eq!(
+                neither.identity().socket_path(),
+                Path::new("/inside/socket"),
+                "{blank:?}"
+            );
+
+            let name_only = automatic(Some(blank), Some("by-env"));
+            assert_eq!(
+                argv(&name_only),
+                [b"-L".as_slice(), b"by-env".as_slice(), b"-u".as_slice()],
+                "a blank path must not hide the name: {blank:?}"
+            );
+
+            let path_only = automatic(Some("/chosen/by-env.sock"), Some(blank));
+            assert_eq!(
+                argv(&path_only),
+                [
+                    b"-S".as_slice(),
+                    b"/chosen/by-env.sock".as_slice(),
+                    b"-u".as_slice()
+                ],
+                "a blank name must not hide the path: {blank:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_variable_value_is_used_as_written() {
+        let configuration = automatic(None, Some(" padded "));
+
+        assert_eq!(configuration.socket_name(), Some(OsStr::new(" padded ")));
+    }
+
+    #[test]
+    fn an_explicit_selection_leaves_both_variables_unread() {
+        let named = |selection| {
+            resolve(
+                &selection,
+                None,
+                None,
+                context(
+                    Some(Path::new("/captured/work")),
+                    Some(OsStr::new("/captured/bin")),
+                    None,
+                    None,
+                    Some(OsStr::new("/private/root")),
+                    Some(Path::new("/private/root")),
+                )
+                .with_socket_environment(
+                    Some(OsString::from("/chosen/by-env.sock")),
+                    Some(OsString::from("by-env")),
+                ),
+            )
+            .expect("explicit selection resolves")
+        };
+        let by_name = named(SocketSelection::Name(OsString::from("explicit")));
+        let by_path = named(SocketSelection::Path(PathBuf::from("/explicit.sock")));
+
+        assert_eq!(
+            argv(&by_name),
+            [b"-L".as_slice(), b"explicit".as_slice(), b"-u".as_slice()]
+        );
+        assert_eq!(
+            argv(&by_path),
+            [
+                b"-S".as_slice(),
+                b"/explicit.sock".as_slice(),
+                b"-u".as_slice()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bad_variable_value_is_refused_like_a_bad_explicit_one() {
+        let name = resolve(
+            &SocketSelection::Automatic,
+            None,
+            None,
+            context(
+                Some(Path::new("/captured/work")),
+                None,
+                None,
+                None,
+                None,
+                Some(Path::new("/private/root")),
+            )
+            .with_socket_environment(None, Some(OsString::from("a/b"))),
+        );
+        let path = resolve(
+            &SocketSelection::Automatic,
+            None,
+            None,
+            context(
+                Some(Path::new("/captured/work")),
+                None,
+                None,
+                None,
+                None,
+                Some(Path::new("/private/root")),
+            )
+            .with_socket_environment(Some(OsString::from("a\0b")), None),
+        );
+
+        assert!(matches!(
+            name,
+            Err(ServerConfigurationErrorKind::InvalidSocketName)
+        ));
+        assert!(matches!(
+            path,
+            Err(ServerConfigurationErrorKind::InvalidSocketPath)
+        ));
     }
 
     #[test]
