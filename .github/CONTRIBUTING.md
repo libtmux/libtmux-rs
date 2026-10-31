@@ -206,9 +206,10 @@ sandbox from a `TMUX_TMPDIR` the caller happened to have.
 - The directory is committed because tmux ignores a `TMUX_TMPDIR` that does
   not exist and falls back to `/tmp` (measured on 3.8a), which is the default
   socket this exists to avoid. Nothing is meant to listen in it.
-- `cargo run` gets the same environment. To reach a real server on purpose,
-  run the built binary, or override one variable the way
-  `scripts/run-examples.sh` does:
+- `cargo run` gets the same environment when its working directory is inside
+  the checkout: Cargo reads `.cargo/config.toml` from the working directory,
+  not from `--manifest-path`. To reach a real server on purpose, run the built
+  binary, or override one variable the way `scripts/run-examples.sh` does:
   `cargo run --config 'env.TMUX.value="<TMUX>"' --config 'env.TMUX.force=true'`.
 - A test binary started by hand has not been through Cargo, so none of this
   applies to it. The canary and the `tmux-mcp` binary tests refuse to run
