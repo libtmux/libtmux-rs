@@ -458,6 +458,13 @@ The `tmux-workspace` commands and the workspace YAML on this page are parsed by
 that crate's tests, and the `tmux-mcp` commands by that crate's, against the
 real command lines.
 
+## AI policy
+
+Use these packages with AI tools as you like. When contributing, check what you
+submit and wait for a maintainer's invitation before preparing a pull request.
+See the [AI policy](https://libtmux.org/en/meta/ai-policy/), also kept as
+[AI_POLICY.md](https://github.com/libtmux/.github/blob/HEAD/AI_POLICY.md).
+
 ## Attribution
 
 Please use the following BibTeX template to cite libtmux-rs in scientific discourse:
