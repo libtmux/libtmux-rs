@@ -180,6 +180,55 @@ held and `fork` failing with `No space left on device` in an unrelated build.
   the file it leaves is invisible until the root fills up. `just fixture-root`
   fails when anything is left behind, and runs as part of `just check`.
 
+### Nothing selects a server
+
+A tmux command that names no socket follows an inherited `TMUX` to the server
+its caller is inside, and otherwise lands on the default socket under
+`TMUX_TMPDIR`. A suite started from a tmux pane could drive, or `kill-server`,
+the session it was started from.
+
+`.cargo/config.toml` therefore sets, for everything Cargo launches (tests,
+doctests, examples, `cargo run`), `TMUX` and `TMUX_PANE` to empty and
+`TMUX_TMPDIR` to `.cargo/tmux-sandbox`, a directory of the checkout. It also
+names that directory in `LIBTMUX_TEST_SANDBOX`, which is how a test tells the
+sandbox from a `TMUX_TMPDIR` the caller happened to have.
+
+- The variables are emptied rather than removed because `[env]` cannot unset
+  one. The `libtmux` core, `tmux-workspace` and `tmux-mcp` read an empty `TMUX`
+  as unset. The `from_env` constructors fail on an empty variable as they do
+  on an unset one, with a different error.
+- `LIBTMUX_SOCKET` and `LIBTMUX_SOCKET_PATH` are not emptied: `tmux-mcp` reads
+  an empty value as an invalid socket, not as unset, so emptying them would
+  break `cargo run -p tmux-mcp`. The canary and the `tmux-mcp` binary tests
+  refuse to run while either holds a value, so unset them for the run. The
+  change that makes an empty value mean unset also makes `[env]` empty them,
+  and the refusal goes with it.
+- The directory is committed because tmux ignores a `TMUX_TMPDIR` that does
+  not exist and falls back to `/tmp` (measured on 3.8a), which is the default
+  socket this exists to avoid. Nothing is meant to listen in it.
+- `cargo run` gets the same environment. To reach a real server on purpose,
+  run the built binary, or override one variable the way
+  `scripts/run-examples.sh` does:
+  `cargo run --config 'env.TMUX.value="<TMUX>"' --config 'env.TMUX.force=true'`.
+- A test binary started by hand has not been through Cargo, so none of this
+  applies to it. The canary and the `tmux-mcp` binary tests refuse to run
+  there.
+
+`crates/libtmux/tests/sandbox_canary.rs` asserts the environment, resolves the
+default socket under the sandbox and fails if a server is listening on it; a
+leftover socket file is not one, since tmux never unlinks its socket. It starts
+a bare tmux client, with no `-L` or `-S`, and requires the server to listen on
+that default socket; a second run points the client elsewhere and requires the
+same assertion to fail. It then runs itself again in the environment of a tmux
+pane, where it must fail. A failure names variables and never their values.
+
+The sandbox directory takes the checkout's umask, because git records no
+directory modes. What tmux keeps private is `tmux-<uid>` inside it, which tmux
+creates 0700 and refuses to use when others can reach it (measured on 3.8a);
+the canary checks that one when it exists, and that the default socket path
+fits in `sun_path`. The canary and `crates/tmux-mcp/tests/binary.rs` are not packaged:
+a published crate has no `.cargo/config.toml`.
+
 ## Flaky, or broken?
 
 Tests drive a real tmux server, so they are load-sensitive in a way a mocked

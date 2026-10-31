@@ -124,6 +124,9 @@ export TMUX="$socket,$server_pid,0"
 # The socket variables beat `$TMUX`, so a reader's own would send the examples
 # to the server they name.
 unset LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH
+# `.cargo/config.toml` forces `TMUX` empty for everything Cargo launches, which
+# would drop the variable just exported. Cargo's own config is the way through.
+readonly cargo_env=(--config "env.TMUX.value=\"$TMUX\"" --config "env.TMUX.force=true")
 
 # Positive control examples need a daemon ranking at or above 3.7 final, the
 # rule `since::CONTROL_ACQUISITION` states: `3.7` and later numbered releases,
@@ -214,7 +217,7 @@ while IFS='|' read -r crate name features args driver expect requirement; do
     # shellcheck disable=SC2086 # arguments are a field, and are meant to split
     if [ -z "$driver" ]; then
         out="$run_dir/$name.out"
-        if cargo run "${opts[@]}" -- $args </dev/null | tee "$out"; then
+        if cargo run "${cargo_env[@]}" "${opts[@]}" -- $args </dev/null | tee "$out"; then
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
                 printf 'did not print %s\n' "$expect" >&2
                 failures+=("$crate/$name")
@@ -225,7 +228,7 @@ while IFS='|' read -r crate name features args driver expect requirement; do
     else
         out="$run_dir/$name.out"
         : > "$out"
-        if "$driver" "$out" | cargo run "${opts[@]}" -- $args > "$out"; then
+        if "$driver" "$out" | cargo run "${cargo_env[@]}" "${opts[@]}" -- $args > "$out"; then
             printf 'answered %s bytes and shut down cleanly\n' "$(wc -c < "$out" | tr -d ' ')"
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
                 printf 'did not print %s\n' "$expect" >&2
