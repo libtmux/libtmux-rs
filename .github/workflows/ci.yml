@@ -1,18 +1,48 @@
 name: CI
 
+# A push or pull request builds the oldest and the newest supported tmux. The
+# weekly schedule and a dispatch with scope=full build every lane in
+# .github/ci-matrix.txt. scripts/ci-plan.py decides, and the compatibility job
+# takes its matrix from that plan.
 on:
   push:
     branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: edges builds the oldest and newest tmux, full every lane, custom the tmux-ref list
+        type: choice
+        options: [edges, full, custom]
+        default: edges
+      tmux-ref:
+        description: With scope=custom, comma-separated tmux versions, tags, branches or commits
+        type: string
+        default: ""
+      rust-toolchain:
+        description: Comma-separated toolchains for the compatibility jobs; empty keeps rust-toolchain.toml
+        type: string
+        default: ""
+      os:
+        description: Runner image for the compatibility jobs
+        type: choice
+        options: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04]
+        default: ubuntu-latest
+      tmate:
+        description: Open a tmate session on the one compatibility lane, which needs a single tmux-ref
+        type: choice
+        options: ['off', before-tests, on-failure]
+        default: "off"
   # Scheduled weekly, whether or not the code changed: a parser is worth
   # re-fuzzing as its corpus grows, and a benchmark is compared with the
   # previous week's.
   schedule:
     - cron: "37 4 * * 1"
 
+# A dispatch is a request for that run, so its run id keeps one from cancelling
+# another or the push run of the same branch.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
@@ -21,6 +51,50 @@ env:
   LC_ALL: C.UTF-8
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      lanes: ${{ steps.plan.outputs.lanes }}
+      os: ${{ steps.plan.outputs.os }}
+      periodic: ${{ steps.plan.outputs.periodic }}
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Inputs reach the script through the environment, never inline.
+      - name: Plan the tmux lanes
+        id: plan
+        env:
+          INPUT_SCOPE: ${{ inputs.scope }}
+          INPUT_TMUX_REF: ${{ inputs.tmux-ref }}
+          INPUT_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
+          INPUT_OS: ${{ inputs.os }}
+          INPUT_TMATE: ${{ inputs.tmate }}
+        run: python3 scripts/ci-plan.py
+
+  # One check to require. A job the plan left out of scope may be skipped; every
+  # other job has to have passed. The matrix shrinks through the plan, not
+  # through an `if` on a leg, so a skipped leg cannot read as a pass.
+  required:
+    name: required
+    if: ${{ always() }}
+    needs: [plan, check, api, fuzz, bench, parity, python-bridge, compat]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Require every planned job to have passed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}
+        run: python3 scripts/ci-plan.py verify
+
   # Everything `just check` runs: formatting, Clippy, tests, doctests, docs,
   # the feature powerset, cargo-deny, both MSRV floors, and packaging.
   check:
@@ -90,7 +164,8 @@ jobs:
   # for.
   fuzz:
     name: fuzz parsers
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: needs.plan.outputs.periodic == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -159,7 +234,8 @@ jobs:
   # regression, not of a noisy neighbour. Every change is in the job summary.
   bench:
     name: benchmarks
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: needs.plan.outputs.periodic == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -209,7 +285,8 @@ jobs:
   # because it needs tmuxp and a settled shell per pane.
   parity:
     name: tmuxp parity
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: needs.plan.outputs.periodic == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -328,11 +405,21 @@ jobs:
             --test cli python_ -- --include-ignored --test-threads=1
 
   # The slow lane. tmux's output and error wording change between releases, so
-  # every supported one is built from source and runs the whole workspace.
+  # each lane builds its release from source and runs the whole workspace, or
+  # proves a refusal. A push builds the oldest and the newest; the schedule and
+  # scope=full build every lane in the manifest.
   compat:
-    name: tmux compatibility
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    name: tmux compatibility (${{ matrix.name }})
+    needs: plan
+    runs-on: ${{ needs.plan.outputs.os }}
+    permissions:
+      contents: read
+    # A tmate session needs longer than a lane does.
+    timeout-minutes: ${{ matrix.tmate == 'off' && 90 || 120 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.lanes) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -348,10 +435,32 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ matrix.rust-toolchain || 'stable' }}
       - uses: taiki-e/install-action@v2
         with:
           tool: just
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - run: just compat
+      - name: Open a tmate session before the tests
+        if: ${{ matrix.tmate == 'before-tests' }}
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        with:
+          limit-access-to-actor: true
+
+      # An empty toolchain keeps what rust-toolchain.toml pins, which the
+      # compile-fail cases need; a named one overrides it.
+      - name: Build and test the lane
+        env:
+          LIBTMUX_COMPAT_LANES: ${{ matrix.lane }}
+          LANE_TOOLCHAIN: ${{ matrix.rust-toolchain }}
+        run: |
+          if [ -n "$LANE_TOOLCHAIN" ]; then
+            export RUSTUP_TOOLCHAIN="$LANE_TOOLCHAIN"
+          fi
+          just compat
+
+      - name: Open a tmate session after a failure
+        if: ${{ failure() && matrix.tmate == 'on-failure' }}
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        with:
+          limit-access-to-actor: true

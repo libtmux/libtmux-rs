@@ -235,10 +235,10 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `doctest`, `api-examples`, `examples`, `example-tables`,
-`fixture-root`, `docs`, `doc-blocks`, `doc-contents`, `doctests-run`,
-`parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`,
-`package`.
+`compat-supervisor-test`, `ci-test`, `doctest`, `api-examples`, `examples`,
+`example-tables`, `fixture-root`, `docs`, `doc-blocks`, `doc-contents`,
+`doctests-run`, `parity-claims`, `format-coverage-check`, `features`, `deny`,
+`msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.
@@ -559,22 +559,67 @@ configured, which all four have been.
 
 Pinned compatibility releases are built from source in CI and run the whole
 workspace, because tmux's own output and error wording change between
-releases. The lane covers **3.3a, 3.4, 3.5a, 3.6b, and 3.7b** — the final
+releases. The lanes cover **3.3a, 3.4, 3.5a, 3.6b, 3.7b, and 3.8** — the final
 patch of each series, which is what a distribution ships and what a user runs;
-3.4 is the exception because that series has no later patch.
+3.4 is the exception because that series has no later patch. A tmux master
+commit is pinned beside them.
 
-The same lane builds 3.0a, 3.1c, 3.2a and 3.3, and checks that each is
+Other lanes build **3.0a, 3.1c, 3.2a, and 3.3**, and check that each is
 refused before any command reaches it. 3.0a and 3.1c run as the daemon
 behind the 3.3a client as well as with their own client, because an old
-daemon answers a current client differently from its own.
+daemon answers a current client differently from its own. **3.7** is built to
+pin its known `break-pane` defect.
+
+`.github/ci-matrix.txt` lists the lanes, each with the commit its tag must
+name. A push or pull request builds the first and last supported release,
+3.3a and 3.8. The weekly schedule and a dispatch with `scope=full` build every
+lane. The `required` job is the one check that passes only when every planned
+job did.
 
 Where a release is wrong rather than merely old, the crate says so rather than
 working around it silently: `run_shell` refuses on 3.3 through 3.4, which drop
 the command's output instead of returning it.
 
-Run the lane locally with `just compat`, which builds each release from
+Run the lanes locally with `just compat`, which builds each release from
 source. It is slow, and it is the only thing that catches a version-specific
-break before CI does.
+break before CI does. `LIBTMUX_COMPAT_LANES` picks lanes, and builds the
+releases a lane needs first without testing them:
+
+```console
+$ LIBTMUX_COMPAT_LANES="3.3a 3.8" just compat
+```
+
+Before tagging a release, run every lane on the release commit and wait for
+it to pass, since a green push no longer covers the middle of the table:
+
+```console
+$ gh workflow run ci.yml \
+    --ref master \
+    -f scope=full
+```
+
+### Running CI against any tmux
+
+Dispatch the `CI` workflow on any branch to build tmux versions, tags,
+branches or commits of github.com/tmux/tmux, and to run them with other Rust
+toolchains:
+
+```console
+$ gh workflow run ci.yml \
+    --ref my-branch \
+    -f scope=custom \
+    -f tmux-ref=a1b2c3d4e5f60718293a4b5c6d7e8f9012345678 \
+    -f rust-toolchain=1.85.0 \
+    -f tmate=on-failure
+```
+
+`tmux-ref` takes a comma-separated list, and `LIBTMUX_COMPAT_LANES` takes the
+same names. A ref outside the manifest builds as a development build and runs
+the whole workspace. The compile-fail cases quote the pinned toolchain's own
+wording, so a toolchain other than `rust-toolchain.toml`'s fails them. `tmate`
+opens a session on the one lane that runs, so it needs a single `tmux-ref` and
+at most one `rust-toolchain`, and it connects only the account that started the
+run. A dispatch runs the fuzz, benchmark and parity jobs as well, as before.
 
 Releases are numbered `0.1.N`, and each release increments `N`. The API is not
 settled: any release may change or remove exported identifiers, without a
