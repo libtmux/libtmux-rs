@@ -106,6 +106,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 workspace_root="$(cd "$script_dir/.." && pwd -P)"
 cd "$workspace_root"
 
+# The lanes, and the commit each one must build, are listed in the manifest.
+# LIBTMUX_COMPAT_LANES selects some of them, or names a tmux the manifest does
+# not hold.
+# shellcheck source=scripts/compat-lanes.sh
+source "$script_dir/compat-lanes.sh"
+load_lanes "$workspace_root/.github/ci-matrix.txt"
+
 require_family() {
     local test_list="$1"
     local family="$2"
@@ -128,33 +135,47 @@ normalize_bootstrap_mtimes() {
     } | xargs -0r touch --no-dereference --date="@$checkout_epoch" --
 }
 
-run_lane() {
+# The lane's tmux, built from its pinned commit. A lane the manifest does not
+# hold is a tag, branch or commit named by LIBTMUX_COMPAT_LANES: it resolves to
+# a commit and is built as a development build, with no version to compare.
+declare -A lane_built=()
+
+build_lane() {
     local tag="$1"
-    local expected_commit="$2"
-    local expected_version="$3"
-    local source_contract="${4:-}"
-    local source_root="$build_root/tmux-$tag-source"
-    local install_prefix="$build_root/tmux-$tag-install"
+    local key="${tag//\//_}"
+    local expected_commit="${lane_commit[$tag]:-}"
+    local expected_version=""
+    local source_contract="${lane_contract[$tag]:-custom}"
+    local source_root="$build_root/tmux-$key-source"
+    local install_prefix="$build_root/tmux-$key-install"
     local tmux_binary="$install_prefix/bin/tmux"
     local tag_type
     local peeled_commit
     local checkout_commit
     local checkout_epoch
     local installed_version
-    local test_list
 
-    if [[ "$source_contract" == "development" ]]; then
+    if [[ -n "${lane_built[$tag]:-}" ]]; then
+        return 0
+    fi
+    if [[ -n "${lane_kind[$tag]:-}" ]]; then
+        expected_version="tmux ${lane_version[$tag]}"
+    else
+        expected_commit="$(resolve_lane_ref "$tag")"
+    fi
+
+    if [[ "$source_contract" == "development" || "$source_contract" == "custom" ]]; then
         # A development build has no release tag: pin the exact commit.
         git init "$source_root"
         git -C "$source_root" fetch --depth 1 \
-            https://github.com/tmux/tmux.git "$expected_commit"
+            "$compat_repository" "$expected_commit"
         git -C "$source_root" checkout --detach FETCH_HEAD
     else
         git clone \
             --branch "$tag" \
             --depth 1 \
             --single-branch \
-            https://github.com/tmux/tmux.git \
+            "$compat_repository" \
             "$source_root"
 
         tag_type="$(git -C "$source_root" cat-file -t "refs/tags/$tag")"
@@ -198,10 +219,22 @@ run_lane() {
     fi
 
     installed_version="$("$tmux_binary" -V)"
-    if [[ "$installed_version" != "$expected_version" ]]; then
+    if [[ -n "$expected_version" && "$installed_version" != "$expected_version" ]]; then
         printf 'tmux %s version output does not match\n' "$tag" >&2
         return 1
     fi
+    printf '%s\n' "$installed_version"
+    lane_built[$tag]=1
+}
+
+test_lane() {
+    local tag="$1"
+    local key="${tag//\//_}"
+    local source_contract="${lane_contract[$tag]:-custom}"
+    local expected_version="tmux ${lane_version[$tag]:-}"
+    local install_prefix="$build_root/tmux-$key-install"
+    local tmux_binary="$install_prefix/bin/tmux"
+    local test_list
 
     # A filtered run that matches no test exits 0, so every refusal lane goes
     # through require-tests.sh. LIBTMUX_REQUIRE_NATIVE names the variables
@@ -293,7 +326,7 @@ run_lane() {
         fi
         lane_path="$install_prefix/bin:$PATH"
         selected_version="$(LC_ALL=C.UTF-8 PATH="$lane_path" tmux -V)"
-        if [[ "$selected_version" != "$expected_version" ]]; then
+        if [[ -n "${lane_version[$tag]:-}" && "$selected_version" != "$expected_version" ]]; then
             printf 'command-local PATH did not select tmux %s\n' "$tag" >&2
             return 1
         fi
@@ -344,86 +377,5 @@ run_lane() {
 # not confined to the codec: flags, control mode, and the stderr wording that
 # separates a missing target from a refusal all differ by release in
 # principle, and asserting them on one version proves nothing about the
-# others.
-run_lane \
-    "3.2a" \
-    "3b929f332aafa7f1080eacc31feb11ffbb1d1841" \
-    "tmux 3.2a" \
-    "reject-core"
-
-run_lane \
-    "3.3" \
-    "87fe00e8b44901240fc22d7120c1b31e4331f6f5" \
-    "tmux 3.3" \
-    "reject-boundary"
-
-run_lane \
-    "3.3a" \
-    "0b355ae8114511e1ff6359272b164f1cdf718e80" \
-    "tmux 3.3a" \
-
-# tmux 3.1 and older cannot answer the probe. Each daemon is refused behind
-# the 3.3a client built above, and with its own client, which rejects `-N`.
-run_lane \
-    "3.0a" \
-    "25ae02869544b84b639b25b0aa69baa6ea2d3a6a" \
-    "tmux 3.0a" \
-    "reject-pre-probe"
-
-run_lane \
-    "3.1c" \
-    "25cae5d86f01d0deb050243842ed5d967b3dc411" \
-    "tmux 3.1c" \
-    "reject-pre-probe"
-
-# 3.4 and 3.5a are the releases that wrapped command output in
-# VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH. They are the reason the codec has a second
-# dialect at all, so leaving them out of CI would leave the decoder that
-# handles them unexercised on every platform but a developer's own.
-run_lane \
-    "3.4" \
-    "9ae69c3795ab5ef6b4d760f6398cd9281151f632" \
-    "tmux 3.4" \
-
-run_lane \
-    "3.5a" \
-    "549c35b06165f6ae023115eb76f83f2cbf945395" \
-    "tmux 3.5a" \
-
-# The final patch of each supported series: 3.3a, 3.5a, 3.6b, and
-# 3.7b are what a distribution ships and what a user runs. 3.4 is the
-# exception because that series has no later patch.
-run_lane \
-    "3.6b" \
-    "0623d1e968423ad0c192e0d8debf1258671063d5" \
-    "tmux 3.6b" \
-
-run_lane \
-    "3.7b" \
-    "e802909de06012a4df6209d55e86487c56223163" \
-    "tmux 3.7b" \
-    "format-catalog" \
-
-# The release with the break-pane defect is a refusal witness, separate from
-# the maintained patch-series lane above.
-run_lane \
-    "3.7" \
-    "81f88f8517c9fc5371b56cf117530c6b477c96ac" \
-    "tmux 3.7" \
-    "feature-boundary"
-
-# The final release, so the newest series is exercised alongside the 3.7
-# patch lane rather than only in rejection witnesses.
-run_lane \
-    "3.8" \
-    "7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53" \
-    "tmux 3.8"
-
-# Development master, reported as `next-3.9`: it ranks above 3.7 final, so
-# managed control acquisition is accepted, and it catches format and
-# behavior changes before a release carries them.
-run_lane \
-    "master" \
-    "d1fedcc9a0e98dbad57f92f923db46c6f4b6e893" \
-    "tmux next-3.9" \
-    "development"
+# others. The manifest says which lanes run and why each is there.
+run_selected

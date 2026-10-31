@@ -235,10 +235,10 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `doctest`, `api-examples`, `examples`, `example-tables`,
-`fixture-root`, `docs`, `doc-blocks`, `doc-contents`, `doctests-run`,
-`parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`,
-`package`.
+`compat-supervisor-test`, `ci-test`, `doctest`, `api-examples`, `examples`,
+`example-tables`, `fixture-root`, `docs`, `doc-blocks`, `doc-contents`,
+`doctests-run`, `parity-claims`, `format-coverage-check`, `features`, `deny`,
+`msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.

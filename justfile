@@ -145,10 +145,19 @@ compat-supervisor-test *args:
     fi
     python3 scripts/test-tmux-format-compat-supervisor.py {{ args }}
 
-# Build every pinned tmux release and run the suite against each
+# `LIBTMUX_COMPAT_LANES` names the lanes to build and test, such as "3.3a 3.8",
+# and may name a tmux tag, branch or commit the manifest does not hold. Unset,
+# every lane in .github/ci-matrix.txt runs.
+#
+# Build the pinned tmux releases and run the suite against each
 [group: 'test']
 compat:
     bash scripts/test-tmux-format-compat.sh
+
+# Test how the compatibility script picks lanes and how CI plans them
+[group: 'test']
+ci-test:
+    python3 -m unittest scripts/test_compat_lanes.py
 
 # A type with well-documented methods and no example of its own still leaves
 # someone who arrived from a search with nothing to copy, and that gap is
@@ -436,7 +445,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

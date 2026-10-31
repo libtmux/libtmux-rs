@@ -1,0 +1,31 @@
+# What CI runs. scripts/ci-plan.py turns this into the compatibility matrix of
+# the CI workflow, scripts/test-tmux-format-compat.sh builds and tests the
+# lanes it names, and the documentation tests check the tested range against it.
+#
+# One lane per line, in six fields:
+#
+#   kind      supported    a released tmux in the support table. A push or pull
+#                          request runs the first and the last.
+#             witness      a release kept to pin one defect
+#             refused      a release below the floor, proven refused
+#             development  an unreleased tmux, pinned to a commit
+#   tag       the tmux tag or branch; releases run oldest first
+#   commit    the 40-hex commit the tag must name
+#   version   what `tmux -V` reports after the name
+#   contract  what the lane proves: workspace, format-catalog, feature-boundary,
+#             reject-core, reject-boundary, reject-pre-probe or development
+#   requires  tags this lane builds first, comma-separated, or -
+#
+# kind        tag     commit                                    version   contract          requires
+supported     3.3a    0b355ae8114511e1ff6359272b164f1cdf718e80  3.3a      workspace         -
+supported     3.4     9ae69c3795ab5ef6b4d760f6398cd9281151f632  3.4       workspace         -
+supported     3.5a    549c35b06165f6ae023115eb76f83f2cbf945395  3.5a      workspace         -
+supported     3.6b    0623d1e968423ad0c192e0d8debf1258671063d5  3.6b      workspace         -
+supported     3.7b    e802909de06012a4df6209d55e86487c56223163  3.7b      format-catalog    -
+supported     3.8     7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53  3.8       workspace         -
+witness       3.7     81f88f8517c9fc5371b56cf117530c6b477c96ac  3.7       feature-boundary  3.3a,3.7b
+refused       3.2a    3b929f332aafa7f1080eacc31feb11ffbb1d1841  3.2a      reject-core       -
+refused       3.3     87fe00e8b44901240fc22d7120c1b31e4331f6f5  3.3       reject-boundary   -
+refused       3.0a    25ae02869544b84b639b25b0aa69baa6ea2d3a6a  3.0a      reject-pre-probe  3.3a
+refused       3.1c    25cae5d86f01d0deb050243842ed5d967b3dc411  3.1c      reject-pre-probe  3.3a
+development   master  d1fedcc9a0e98dbad57f92f923db46c6f4b6e893  next-3.9  development       -
