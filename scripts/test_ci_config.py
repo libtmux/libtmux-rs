@@ -30,6 +30,11 @@ CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 JOB = re.compile(r"^  ([a-z][a-z-]*):\s*$", re.MULTILINE)
 
 
+def job_ids(text: str) -> list[str]:
+    _, _, jobs = text.partition("\njobs:\n")
+    return JOB.findall(jobs)
+
+
 def job_section(text: str, name: str) -> str:
     _, _, jobs = text.partition("\njobs:\n")
     headings = list(JOB.finditer(jobs))
@@ -94,6 +99,19 @@ class ConcurrencyTests(unittest.TestCase):
         assert match is not None
         self.assertIn("workflow_dispatch", match.group(1))
         self.assertIn("github.run_id", match.group(1))
+
+
+class RequiredTests(unittest.TestCase):
+    def test_the_required_job_waits_for_every_other_job(self) -> None:
+        section = job_section(CI, "required")
+        needs = re.search(r"^    needs: \[([^\]]+)\]", section, re.MULTILINE)
+        self.assertIsNotNone(needs)
+        assert needs is not None
+        waits = sorted(entry.strip() for entry in needs.group(1).split(","))
+        others = sorted(name for name in job_ids(CI) if name != "required")
+        self.assertEqual(waits, others)
+        self.assertIn("if: ${{ always() }}", section)
+        self.assertIn("ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}", section)
 
 
 if __name__ == "__main__":

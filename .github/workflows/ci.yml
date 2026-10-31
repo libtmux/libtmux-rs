@@ -67,6 +67,24 @@ jobs:
           INPUT_OS: ${{ inputs.os }}
         run: python3 scripts/ci-plan.py
 
+  # One check to require. A job the plan left out of scope may be skipped; every
+  # other job has to have passed. The matrix shrinks through the plan, not
+  # through an `if` on a leg, so a skipped leg cannot read as a pass.
+  required:
+    name: required
+    if: ${{ always() }}
+    needs: [plan, check, api, fuzz, bench, parity, python-bridge, compat]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Require every planned job to have passed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}
+        run: python3 scripts/ci-plan.py verify
+
   # Everything `just check` runs: formatting, Clippy, tests, doctests, docs,
   # the feature powerset, cargo-deny, both MSRV floors, and packaging.
   check:
