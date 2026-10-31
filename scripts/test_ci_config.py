@@ -28,6 +28,7 @@ SPEC.loader.exec_module(ci_plan)
 
 CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 JOB = re.compile(r"^  ([a-z][a-z-]*):\s*$", re.MULTILINE)
+TMATE = "mxschmitt/action-tmate@"
 
 
 def job_ids(text: str) -> list[str]:
@@ -84,7 +85,7 @@ class WorkflowTests(unittest.TestCase):
         _, _, after = CI.partition("  workflow_dispatch:\n    inputs:\n")
         block = after.split("\n  # Scheduled weekly", 1)[0]
         names = re.findall(r"^      ([a-z-]+):\s*$", block, re.MULTILINE)
-        self.assertEqual(names, ["scope", "tmux-ref", "rust-toolchain", "os"])
+        self.assertEqual(names, ["scope", "tmux-ref", "rust-toolchain", "os", "tmate"])
 
     def test_a_release_does_not_wait_on_the_narrowed_lanes(self) -> None:
         release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
@@ -112,6 +113,26 @@ class RequiredTests(unittest.TestCase):
         self.assertEqual(waits, others)
         self.assertIn("if: ${{ always() }}", section)
         self.assertIn("ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}", section)
+
+
+class TmateTests(unittest.TestCase):
+    def test_tmate_is_pinned_limited_and_confined_to_the_compatibility_job(
+        self,
+    ) -> None:
+        uses = CI.count(TMATE)
+        self.assertGreater(uses, 0)
+        self.assertEqual(len(re.findall(TMATE + r"[0-9a-f]{40}\b", CI)), uses)
+        self.assertEqual(CI.count("limit-access-to-actor: true"), uses)
+        compat = job_section(CI, "compat")
+        self.assertEqual(compat.count(TMATE), uses)
+        self.assertIn("timeout-minutes:", compat)
+
+    def test_no_other_workflow_opens_a_session(self) -> None:
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            if path.name == "ci.yml":
+                continue
+            with self.subTest(path.name):
+                self.assertNotIn("action-tmate", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

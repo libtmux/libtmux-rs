@@ -28,6 +28,11 @@ on:
         type: choice
         options: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04]
         default: ubuntu-latest
+      tmate:
+        description: Open a tmate session on the one compatibility lane, which needs a single tmux-ref
+        type: choice
+        options: [off, before-tests, on-failure]
+        default: "off"
   # Scheduled weekly, whether or not the code changed: a parser is worth
   # re-fuzzing as its corpus grows, and a benchmark is compared with the
   # previous week's.
@@ -65,6 +70,7 @@ jobs:
           INPUT_TMUX_REF: ${{ inputs.tmux-ref }}
           INPUT_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
           INPUT_OS: ${{ inputs.os }}
+          INPUT_TMATE: ${{ inputs.tmate }}
         run: python3 scripts/ci-plan.py
 
   # One check to require. A job the plan left out of scope may be skipped; every
@@ -402,7 +408,8 @@ jobs:
     name: tmux compatibility (${{ matrix.name }})
     needs: plan
     runs-on: ${{ needs.plan.outputs.os }}
-    timeout-minutes: 90
+    # A tmate session needs longer than a lane does.
+    timeout-minutes: ${{ matrix.tmate == 'off' && 90 || 120 }}
     strategy:
       fail-fast: false
       matrix:
@@ -428,6 +435,12 @@ jobs:
           tool: just
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      - name: Open a tmate session before the tests
+        if: ${{ matrix.tmate == 'before-tests' }}
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        with:
+          limit-access-to-actor: true
+
       # An empty toolchain keeps what rust-toolchain.toml pins, which the
       # compile-fail cases need; a named one overrides it.
       - name: Build and test the lane
@@ -439,3 +452,9 @@ jobs:
             export RUSTUP_TOOLCHAIN="$LANE_TOOLCHAIN"
           fi
           just compat
+
+      - name: Open a tmate session after a failure
+        if: ${{ failure() && matrix.tmate == 'on-failure' }}
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        with:
+          limit-access-to-actor: true
