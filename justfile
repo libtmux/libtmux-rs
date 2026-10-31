@@ -157,7 +157,7 @@ compat:
 # Test how the compatibility script picks lanes and how CI plans them
 [group: 'test']
 ci-test:
-    python3 -m unittest scripts/test_compat_lanes.py scripts/test_ci_plan.py
+    python3 -m unittest scripts/test_compat_lanes.py scripts/test_ci_plan.py scripts/test_ci_config.py
 
 # A type with well-documented methods and no example of its own still leaves
 # someone who arrived from a search with nothing to copy, and that gap is
