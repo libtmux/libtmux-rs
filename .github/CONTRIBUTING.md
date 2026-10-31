@@ -314,10 +314,10 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `ci-test`, `doctest`, `api-examples`, `examples`,
-`example-tables`, `fixture-root`, `docs`, `doc-blocks`, `doc-contents`,
-`changelogs`, `doctests-run`, `parity-claims`, `format-coverage-check`,
-`features`, `deny`, `msrv`, `package`.
+`compat-supervisor-test`, `ci-test`, `doctest`, `api-examples`, `script-env`,
+`examples`, `example-tables`, `fixture-root`, `docs`, `doc-blocks`,
+`doc-contents`, `changelogs`, `doctests-run`, `parity-claims`,
+`format-coverage-check`, `features`, `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so dependency changes need a
 consistent `Cargo.lock` before the gate can run. Committing it is not required
@@ -369,6 +369,12 @@ unknown targets, hidden source helpers and incomplete file boundaries.
 the manifest check alone does not establish native execution.
 
 The gates worth explaining:
+
+**The scripts that run a binary outside Cargo scrub their own environment.**
+`just script-env` fails when `scripts/tmuxp-parity.py` or
+`scripts/bench-workspace-cli.py` hands a child `TMUX`, `TMUX_PANE`,
+`LIBTMUX_SOCKET` or `LIBTMUX_SOCKET_PATH`, or when the benchmark's private
+`TMUX_TMPDIR` is not owner-only. No runner stands in front of them.
 
 **Doctests must actually run.** A `#[cfg(feature = "…")]` inside a doctest
 reads the doctest's own crate, which has no features, so it is always false:

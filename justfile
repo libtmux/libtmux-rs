@@ -48,6 +48,15 @@ api-examples:
     python3 -m unittest scripts/test_check_api_examples.py
     python3 scripts/check-api-examples.py
 
+# The parity and benchmark scripts run an installed binary outside Cargo, so
+# the environment they build is the only thing keeping it off the reader's own
+# server. Pure Python, no tmux, so it is part of `just check`.
+#
+# Check the environments those scripts give the processes they start
+[group: 'test']
+script-env:
+    python3 -m unittest scripts/test_child_environments.py
+
 # Run every example and check it cleaned up
 [group: 'test']
 examples:
@@ -455,7 +464,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest api-examples script-env examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:
