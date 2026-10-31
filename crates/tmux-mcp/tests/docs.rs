@@ -315,9 +315,6 @@ impl Launch {
             .map_err(|error| error.to_string())?;
         parse_environment_values(self.setting(ENVIRONMENT_VALUES_ENV))
             .map_err(|error| error.to_string())?;
-        if self.setting(SOCKET_ENV).is_some() && self.setting(SOCKET_PATH_ENV).is_some() {
-            return Err(format!("{SOCKET_ENV} and {SOCKET_PATH_ENV} are exclusive"));
-        }
         if self
             .setting(TMUX_CONFIG_ENV)
             .is_some_and(|config| !Path::new(config).is_absolute())
@@ -613,6 +610,7 @@ fn the_readme_checks_find_what_they_report_and_refuse_what_the_binary_refuses() 
         "$ tmux-mcp --socket-name work",
         "$ tmux-mcp -S /tmp/tmux-1000/work",
         "$ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp",
+        "$ LIBTMUX_SOCKET=a LIBTMUX_SOCKET_PATH=/tmp/b tmux-mcp",
         "$ LIBTMUX_TOOLSETS='' \\\n    LIBTMUX_TOOLS=call_read_tools_batch \\\n    tmux-mcp",
         "$ claude mcp add tmux -- tmux-mcp",
         "$ claude mcp add tmux -e LIBTMUX_TOOLSETS=inspect -- tmux-mcp -L work",
@@ -630,7 +628,6 @@ fn the_readme_checks_find_what_they_report_and_refuse_what_the_binary_refuses() 
         "$ LIBTMUX_TOOLSETS=bogus tmux-mcp",
         "$ LIBTMUX_TOOLS=not_a_tool tmux-mcp",
         "$ LIBTMUX_TOOLSET=inspect tmux-mcp",
-        "$ LIBTMUX_SOCKET=a LIBTMUX_SOCKET_PATH=/tmp/b tmux-mcp",
         "$ LIBTMUX_TMUX_CONFIG=relative.conf tmux-mcp",
         "$ claude mcp add tmux -- tmux-mcp --no-such-flag",
         "$ claude mcp add tmux -e LIBTMUX_TOOLSETS=bogus -- tmux-mcp",

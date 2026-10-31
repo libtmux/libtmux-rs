@@ -142,10 +142,10 @@ attach command, daemon state, and configuration provenance:
     "dynamicResources": false
   },
   "connection": {
-    "socketSelector": "name:libtmux-mcp",
-    "socketProvenance": "default-dedicated",
-    "serverState": "created",
-    "configurationProvenance": "minimal"
+    "socketSelector": "path:/tmp/tmux-1000/default",
+    "socketProvenance": "operator-current",
+    "serverState": "existing",
+    "configurationProvenance": "unknown"
   }
 }
 ```
@@ -157,10 +157,8 @@ catalog.
 
 ## Toolset selection
 
-The default dedicated socket gets all four toolsets only when `tmux-mcp` can
-establish minimal-configuration provenance. An existing dedicated socket, an
-explicit socket, or an explicit tmux configuration defaults to `inspect`,
-`manage`, and `execute`; select `teardown` explicitly there.
+The default is `inspect`, `manage`, and `execute`; select `teardown`
+explicitly.
 
 - [`LIBTMUX_TOOLSETS`] replaces the default with a comma-separated unordered
   set. An empty string offers no toolsets. Empty tokens and unknown names stop
@@ -226,28 +224,24 @@ apply.
 
 ## Choosing a server
 
-Without arguments the server selects the `libtmux-mcp` socket, starts it with
-the shipped minimal configuration, and authenticates that this launch created
-the daemon before enabling teardown by default. An already-running daemon
-keeps its configuration and gets conservative provenance. The server does not
-follow `$TMUX`.
+The server selects a socket in this order, and the first that names one wins:
 
-Several `tmux-mcp` processes without arguments share that one daemon. Each
-holds a shared lock on `libtmux-mcp.lease` beside the socket, and the process
-that started the daemon stops it at shutdown only when no other process holds
-one.
+1. `-S` and `--socket` name a socket by path, and `-L` and `--socket-name` by
+   name. The two flags are mutually exclusive.
+2. `LIBTMUX_SOCKET_PATH`, a socket path, as `-S`.
+3. `LIBTMUX_SOCKET`, a socket name, as `-L`.
+4. None. tmux gets neither `-S` nor `-L` and picks the server itself: the one
+   `TMUX` names when the server runs inside tmux, and its default socket
+   otherwise.
 
-No process stops a daemon it did not start. When the owner exits first, the
-daemon outlives every process using it, and the next launch finds it already
-running. Stop it with `tmux -L libtmux-mcp kill-server`.
-
-`-S` and `--socket` name a socket by path, and `-L` and `--socket-name` by
-name. `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` provide the same startup
-choices from the environment, and a flag wins over its variable.
+A flag leaves both variables unread. `LIBTMUX_SOCKET_PATH` wins when both are
+set, and a variable that is empty or only whitespace counts as unset. The
+server starts no daemon of its own and stops none: it reports a daemon that
+answers as `existing` and one that does not as `absent`, with configuration
+provenance `unknown`, and teardown is not in the default toolsets.
 
 Set `LIBTMUX_TMUX_CONFIG` to use an explicit tmux configuration at an
-absolute path. Socket names and paths are mutually exclusive.
-`tmux-mcp --help` lists every flag and environment variable.
+absolute path. `tmux-mcp --help` lists every flag and environment variable.
 
 ## Trust boundary
 

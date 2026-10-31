@@ -10,10 +10,10 @@
 //!
 //! # Startup boundary
 //!
-//! One process selects one socket. The binary uses the dedicated
-//! `libtmux-mcp` socket and minimal configuration by default; explicit socket
-//! or configuration settings carry conservative provenance. Teardown is in
-//! the implicit default only for a newly dedicated minimal daemon. The
+//! One process selects one socket. The binary takes it from `-S` or `-L`, else
+//! from `LIBTMUX_SOCKET_PATH` or `LIBTMUX_SOCKET`, and with none of them
+//! passes tmux no socket, so tmux picks the server. Every socket carries
+//! conservative provenance, and teardown is not in the implicit default. The
 //! `LIBTMUX_TOOLSETS`, `LIBTMUX_TOOLS`, and `LIBTMUX_EXCLUDE_TOOLS` settings
 //! are parsed before tmux access, and exclusions win.
 //!
