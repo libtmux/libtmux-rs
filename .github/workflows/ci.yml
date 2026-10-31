@@ -31,7 +31,7 @@ on:
       tmate:
         description: Open a tmate session on the one compatibility lane, which needs a single tmux-ref
         type: choice
-        options: [off, before-tests, on-failure]
+        options: ['off', before-tests, on-failure]
         default: "off"
   # Scheduled weekly, whether or not the code changed: a parser is worth
   # re-fuzzing as its corpus grows, and a benchmark is compared with the

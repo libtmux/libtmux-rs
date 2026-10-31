@@ -117,6 +117,12 @@ class RequiredTests(unittest.TestCase):
 
 
 class TmateTests(unittest.TestCase):
+    def test_off_is_quoted_in_the_options_and_the_default(self) -> None:
+        # GitHub reads a bare `off` as false. A default that is not one of the
+        # options refuses every dispatch that sets nothing.
+        self.assertIn("options: ['off', before-tests, on-failure]", CI)
+        self.assertRegex(CI, r"(?m)^        default: ['\"]off['\"]$")
+
     def test_tmate_is_pinned_limited_and_confined_to_the_compatibility_job(
         self,
     ) -> None:
