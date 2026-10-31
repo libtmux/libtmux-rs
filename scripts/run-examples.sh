@@ -127,6 +127,8 @@ unset LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH
 # `.cargo/config.toml` forces `TMUX` empty for everything Cargo launches, which
 # would drop the variable just exported. Cargo's own config is the way through.
 readonly cargo_env=(--config "env.TMUX.value=\"$TMUX\"" --config "env.TMUX.force=true")
+# The runner unsets it as well, unless told that this server is the point.
+export LIBTMUX_SANDBOX_KEEP_TMUX=1
 
 # Positive control examples need a daemon ranking at or above 3.7 final, the
 # rule `since::CONTROL_ACQUISITION` states: `3.7` and later numbered releases,

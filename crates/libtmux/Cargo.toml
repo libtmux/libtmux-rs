@@ -33,7 +33,7 @@ include = [
     "/tests/fixtures/dialect-v1/*.json",
     "/tests/fixtures/layout-preflight.json",
     "/tests/**/*.rs",
-    "!/tests/sandbox_canary.rs",
+    "!/tests/sandbox_*.rs",
 ]
 
 [lib]

@@ -1,6 +1,11 @@
-# Everything Cargo launches -- tests, doctests, examples, `cargo run` -- gets
-# no inherited tmux server and a private default socket directory.
-# CONTRIBUTING.md, "Nothing selects a server", says why and how to opt out.
+# Everything Cargo launches gets no inherited tmux server and a private default
+# socket directory. CONTRIBUTING.md, "Nothing selects a server", says how.
+#
+# The runner wraps tests, examples and benches. Rustdoc does not use it, so
+# `[env]` is what doctests and a runnerless process get.
+[target.'cfg(unix)']
+runner = ["scripts/sandbox-runner.sh"]
+
 [env]
 TMUX = { value = "", force = true }
 TMUX_PANE = { value = "", force = true }

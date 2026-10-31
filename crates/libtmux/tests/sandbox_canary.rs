@@ -63,9 +63,11 @@ fn listening(socket: &Path) -> bool {
 fn findings(lookup: Lookup<'_>) -> Vec<String> {
     let mut found = Vec::new();
 
+    // The runner unsets them. `[env]` can only empty them, so empty means the
+    // runner did not wrap this process.
     for name in ["TMUX", "TMUX_PANE"] {
-        if is_set(lookup, name) {
-            found.push(format!("{name} is set; it must be empty"));
+        if lookup(name).is_some() {
+            found.push(format!("{name} is set; the sandbox runner unsets it"));
         }
     }
     // Nothing empties these yet, and tmux-mcp reads an empty one as invalid
@@ -96,6 +98,13 @@ fn findings(lookup: Lookup<'_>) -> Vec<String> {
         return found;
     }
     let resolved = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if resolved.ends_with(".cargo/tmux-sandbox") {
+        found.push(
+            "LIBTMUX_TEST_SANDBOX is the committed fallback directory; \
+             the sandbox runner did not apply"
+                .to_owned(),
+        );
+    }
     let per_user = resolved.join(format!("tmux-{}", uid()));
     if per_user.join("default").as_os_str().len() > SOCKET_PATH_LIMIT {
         found.push(format!(
@@ -311,9 +320,12 @@ fn each_finding_names_what_is_wrong() {
     let other = std::env::temp_dir();
     let other = other.to_str().expect("UTF-8 temporary directory");
     let long = format!("/{}", "a".repeat(SOCKET_PATH_LIMIT));
+    let fallback = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/tmux-sandbox");
+    let fallback = fallback.to_str().expect("UTF-8 fallback path");
 
-    let cases: [Case<'_>; 12] = [
+    let cases: [Case<'_>; 14] = [
         ("TMUX is set", &[("TMUX", Some("/tmp/decoy.sock,1,0"))]),
+        ("TMUX is set", &[("TMUX", Some(""))]),
         ("TMUX_PANE is set", &[("TMUX_PANE", Some("%9"))]),
         ("LIBTMUX_SOCKET is set", &[("LIBTMUX_SOCKET", Some("name"))]),
         (
@@ -348,6 +360,13 @@ fn each_finding_names_what_is_wrong() {
             &[
                 ("TMUX_TMPDIR", Some(executable)),
                 ("LIBTMUX_TEST_SANDBOX", Some(executable)),
+            ],
+        ),
+        (
+            "committed fallback directory",
+            &[
+                ("TMUX_TMPDIR", Some(fallback)),
+                ("LIBTMUX_TEST_SANDBOX", Some(fallback)),
             ],
         ),
         (
