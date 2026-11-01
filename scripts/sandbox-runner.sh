@@ -5,6 +5,11 @@
 #
 #   sandbox-runner.sh <binary> [args...]
 #
+# TMUX, TMUX_PANE, LIBTMUX_SOCKET and LIBTMUX_SOCKET_PATH are removed. The one
+# way back to a server is LIBTMUX_SANDBOX_TMUX: when it is set and not empty,
+# the binary gets its value as TMUX, so a caller names the server it wants
+# instead of letting an inherited TMUX through. TMUX_PANE stays removed.
+#
 # Exit status: the binary's own; 78 when the run is refused before the binary
 # starts; 70 when the binary passed but left a server running. Messages name
 # variables and sockets, never values.
@@ -17,13 +22,17 @@ refuse() {
 
 [ "$#" -ge 1 ] || refuse "no binary to run"
 
-# `[env]` can only empty these, and the core reads an empty one as unset.
-unset LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH
-
-# scripts/run-examples.sh passes the TMUX of a server it owns.
-if [ "${LIBTMUX_SANDBOX_KEEP_TMUX:-}" != 1 ]; then
-    unset TMUX TMUX_PANE
+# The value is read before TMUX is removed and unset before the binary starts,
+# so nothing the binary runs sees it. The ambient TMUX is never the source.
+named_tmux=${LIBTMUX_SANDBOX_TMUX-}
+unset TMUX TMUX_PANE LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH LIBTMUX_SANDBOX_TMUX
+if [ -n "$named_tmux" ]; then
+    TMUX=$named_tmux
+    export TMUX
+    printf 'sandbox-runner: LIBTMUX_SANDBOX_TMUX is set: true; %s\n' \
+        'TMUX comes from it and TMUX_PANE is unset' >&2
 fi
+unset named_tmux
 
 # tmux appends tmux-<uid>/default, and sun_path holds 104 bytes on macOS and
 # 108 on Linux.

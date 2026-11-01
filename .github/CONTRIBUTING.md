@@ -225,10 +225,17 @@ a doctest gets `[env]` and no sweep.
 - `cargo run` gets the runner and `[env]` when its working directory is inside
   the checkout: Cargo reads `.cargo/config.toml` from the working directory,
   not from `--manifest-path`. To reach a real server on purpose, run the built
-  binary. `LIBTMUX_SANDBOX_KEEP_TMUX=1` makes the runner keep the `TMUX` it
-  receives, and `[env]` still empties it unless a `--config` replaces it, as
-  `scripts/run-examples.sh` does for the server it owns:
-  `cargo run --config 'env.TMUX.value="<TMUX>"' --config 'env.TMUX.force=true'`.
+  binary.
+- The runner has one way back to a server, and it names the server. When
+  `LIBTMUX_SANDBOX_TMUX` is set and not empty, the binary gets its value as
+  `TMUX`, and the runner says `LIBTMUX_SANDBOX_TMUX is set: true` on stderr. The
+  `TMUX` the runner received is never kept, so a shell that exports a server it
+  is inside cannot pass it on by accident. `TMUX_PANE` stays unset.
+  `scripts/run-examples.sh` uses it for `inspect` and `find`, which read
+  `$TMUX` as a process inside a pane does, and for no other example. It also
+  runs `inspect` with every variable aimed at its fixture server and none
+  handed over by name, and requires that the example finds no server on the
+  sandbox's default socket.
 - A test binary started by hand has not been through Cargo, so none of this
   applies to it. The canary refuses to run there.
 

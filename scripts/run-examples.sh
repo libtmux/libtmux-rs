@@ -18,19 +18,27 @@ set -euo pipefail
 
 readonly dev_root=/tmp/libtmux-rs-dev
 
-# crate | example | features | arguments | stdin driver | must print | needs control
+# Only the `pane` rows are handed a server, and by this script.
+unset LIBTMUX_SANDBOX_TMUX
+
+# crate | example | features | arguments | stdin driver | must print | needs
 #
 # Blank lines and `#` comments are ignored; every other row must name an
 # example that exists, and every example must have a row.
 #
-# The last column is what the example must print, and it answers two questions
-# a leak check cannot.
+# The last column is a list of words: `control` for an example that needs
+# control acquisition, `pane` for one that reads `$TMUX` as a process inside a
+# pane does and is handed this script's server by name.
+#
+# The column before it is what the example must print, and it answers two
+# questions a leak check cannot.
 #
 # Containment: `inspect` and `find` resolve their server with
 # `Server::from_env().or_else(|_| Server::new())`, so a `$TMUX` this script
-# failed to set would send them to the reader's own default server -- where
-# they would run perfectly, create nothing, and leave no socket behind to
-# notice. Naming a session this script made can only come from this server.
+# failed to hand them would send them to the default server of whoever runs
+# this -- where they would run perfectly, create nothing, and leave no socket
+# behind to notice. Naming a session this script made can only come from this
+# server.
 #
 # Demonstration: an example that runs and shows nothing passes an exit-code
 # check. `find` searched for `sh` against a fixture running the login shell and
@@ -44,8 +52,8 @@ libtmux  | api_query | query | | | query: prod-api
 libtmux  | api_cardinality | query | | | cardinality: none, one, multiple
 libtmux  | api_input | query | | | input: C-c is text
 libtmux  | api_capture | query | | | capture: first line, second line
-libtmux  | inspect  |                                               |    |               | examples
-libtmux  | find     | query                                         | sh |               | in window
+libtmux  | inspect  |                                               |    |               | examples | pane
+libtmux  | find     | query                                         | sh |               | in window | pane
 libtmux  | scratch  | test-support                                  |    |               | hello from tmux
 libtmux  | sweep    | test-support                                  |    |               | fixture
 libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket | control
@@ -111,7 +119,7 @@ cleanup() {
 trap cleanup EXIT
 
 # `inspect` and `find` read `$TMUX`, which is how a process inside a pane finds
-# the server it belongs to. Pointing that at a socket this script owns is what
+# the server it belongs to. Handing them a socket this script owns is what
 # keeps them off the reader's own server while still exercising the path they
 # document.
 # The second window runs `sh` rather than the login shell because `find`
@@ -120,15 +128,9 @@ trap cleanup EXIT
 tmux -S "$socket" new-session -d -s examples
 tmux -S "$socket" new-window -d -n second sh
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
-export TMUX="$socket,$server_pid,0"
-# The socket variables beat `$TMUX`, so a reader's own would send the examples
-# to the server they name.
-unset LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH
-# `.cargo/config.toml` forces `TMUX` empty for everything Cargo launches, which
-# would drop the variable just exported. Cargo's own config is the way through.
-readonly cargo_env=(--config "env.TMUX.value=\"$TMUX\"" --config "env.TMUX.force=true")
-# The runner unsets it as well, unless told that this server is the point.
-export LIBTMUX_SANDBOX_KEEP_TMUX=1
+# What a pane of that server exports. Cargo's sandbox removes `TMUX`, so the
+# `pane` examples are handed it by name through `LIBTMUX_SANDBOX_TMUX`.
+readonly fixture_tmux="$socket,$server_pid,0"
 
 # Positive control examples need a daemon ranking at or above 3.7 final, the
 # rule `since::CONTROL_ACQUISITION` states: `3.7` and later numbered releases,
@@ -207,10 +209,40 @@ while IFS='|' read -r crate name features args driver expect requirement; do
     cargo build "${opts[@]}"
 done < <(rows)
 
+# `cargo run`, naming the fixture server for a `pane` example and no other.
+cargo_run() {
+    local requirement=$1
+    shift
+    if [[ " $requirement " == *" pane "* ]]; then
+        LIBTMUX_SANDBOX_TMUX=$fixture_tmux cargo run "$@"
+    else
+        cargo run "$@"
+    fi
+}
+
 failures=()
+
+# Runs `inspect` with every variable that selects a server aimed at the fixture
+# and none handing it over by name. It must find no server on the sandbox's
+# default socket. The `pane` row of the same example is the control.
+printf '\n=== sandbox: variables that name a server are not followed\n'
+probe="$run_dir/probe.out"
+TMUX=$fixture_tmux TMUX_PANE=%0 LIBTMUX_SOCKET_PATH=$socket LIBTMUX_SOCKET=not-the-default \
+    cargo run --quiet --manifest-path crates/libtmux/Cargo.toml --example inspect \
+    </dev/null >"$probe" 2>&1 || true
+if grep -q 'examples (2 windows' "$probe"; then
+    printf 'a variable led an example to the fixture server\n' >&2
+    failures+=("sandbox/server")
+elif ! grep -q '^no tmux server at .*/default$' "$probe"; then
+    printf 'the example did not look on the sandbox default socket\n' >&2
+    failures+=("sandbox/default")
+else
+    printf 'no server found on the sandbox default socket\n'
+fi
+
 while IFS='|' read -r crate name features args driver expect requirement; do
     printf '\n=== example %s/%s\n' "$crate" "$name"
-    if [[ "$requirement" == "control" && "$control_qualified" != "yes" ]]; then
+    if [[ " $requirement " == *" control "* && "$control_qualified" != "yes" ]]; then
         printf 'positive control example requires a daemon ranking at or above tmux 3.7\n'
         continue
     fi
@@ -219,7 +251,7 @@ while IFS='|' read -r crate name features args driver expect requirement; do
     # shellcheck disable=SC2086 # arguments are a field, and are meant to split
     if [ -z "$driver" ]; then
         out="$run_dir/$name.out"
-        if cargo run "${cargo_env[@]}" "${opts[@]}" -- $args </dev/null | tee "$out"; then
+        if cargo_run "$requirement" "${opts[@]}" -- $args </dev/null | tee "$out"; then
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
                 printf 'did not print %s\n' "$expect" >&2
                 failures+=("$crate/$name")
@@ -230,7 +262,7 @@ while IFS='|' read -r crate name features args driver expect requirement; do
     else
         out="$run_dir/$name.out"
         : > "$out"
-        if "$driver" "$out" | cargo run "${cargo_env[@]}" "${opts[@]}" -- $args > "$out"; then
+        if "$driver" "$out" | cargo_run "$requirement" "${opts[@]}" -- $args > "$out"; then
             printf 'answered %s bytes and shut down cleanly\n' "$(wc -c < "$out" | tr -d ' ')"
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
                 printf 'did not print %s\n' "$expect" >&2

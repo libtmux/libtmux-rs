@@ -173,21 +173,75 @@ fn it_removes_the_socket_variables_before_the_binary_runs() {
     }
 }
 
+const TMUX_VISIBLE: &str =
+    "if [ -z \"${TMUX+x}${TMUX_PANE+x}\" ]; then echo unset; else echo set; fi > \"$OUT\"";
+
 #[test]
-fn it_unsets_tmux_and_the_pane_unless_asked_to_keep_them() {
-    let script =
-        "if [ -z \"${TMUX+x}${TMUX_PANE+x}\" ]; then echo unset; else echo set; fi > \"$OUT\"";
-    let hostile = [("TMUX", "/decoy.sock,1,0"), ("TMUX_PANE", "%9")];
-
+fn it_unsets_the_ambient_tmux_and_pane() {
     let fixture = Fixture::new();
-    assert_eq!(fixture.run(&hostile, script).code, Some(0));
+    let run = fixture.run(
+        &[
+            ("TMUX", "SENTINEL-ambient,1,0"),
+            ("TMUX_PANE", "%9"),
+            // The retired opt-out keeps nothing.
+            ("LIBTMUX_SANDBOX_KEEP_TMUX", "1"),
+        ],
+        TMUX_VISIBLE,
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(fixture.answer().trim(), "unset");
+    assert_eq!(run.stderr, "", "a clean run says nothing");
+}
 
+/// The binary's view of the named server: whether `TMUX` is what the caller
+/// named, whether the ambient one survived, and whether the pane or the
+/// variable that carried the name did.
+const NAMED_VISIBLE: &str = "{ [ \"${TMUX-}\" = \"$WANT\" ] && echo named || echo not-named; \
+     [ -z \"${TMUX_PANE+x}\" ] && echo no-pane || echo pane; \
+     [ -z \"${LIBTMUX_SANDBOX_TMUX+x}\" ] && echo no-carrier || echo carrier; } > \"$OUT\"";
+
+#[test]
+fn it_hands_the_binary_the_tmux_it_was_named_and_says_so() {
+    let named = "SENTINEL-named,1,0";
     let fixture = Fixture::new();
-    let mut kept = hostile.to_vec();
-    kept.push(("LIBTMUX_SANDBOX_KEEP_TMUX", "1"));
-    assert_eq!(fixture.run(&kept, script).code, Some(0));
-    assert_eq!(fixture.answer().trim(), "set", "the opt-out did nothing");
+    let run = fixture.run(
+        &[
+            ("LIBTMUX_SANDBOX_TMUX", named),
+            ("WANT", named),
+            ("TMUX", "SENTINEL-ambient,1,0"),
+            ("TMUX_PANE", "%9"),
+        ],
+        NAMED_VISIBLE,
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        fixture.answer().lines().collect::<Vec<_>>(),
+        ["named", "no-pane", "no-carrier"],
+    );
+    assert!(
+        run.stderr.contains("LIBTMUX_SANDBOX_TMUX is set: true"),
+        "the opt-out was not logged: {}",
+        run.stderr,
+    );
+    assert!(!run.stderr.contains("SENTINEL"), "a value was printed");
+}
+
+#[test]
+fn it_ignores_an_empty_name_and_never_falls_back_to_the_ambient_tmux() {
+    let fixture = Fixture::new();
+    let run = fixture.run(
+        &[
+            ("LIBTMUX_SANDBOX_TMUX", ""),
+            ("TMUX", "SENTINEL-ambient,1,0"),
+        ],
+        TMUX_VISIBLE,
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(fixture.answer().trim(), "unset");
+    assert_eq!(run.stderr, "", "an empty name was logged as an opt-out");
 }
 
 #[test]
