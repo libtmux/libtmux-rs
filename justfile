@@ -30,6 +30,15 @@ doctest:
     cargo test --locked --workspace --doc --all-features
     cargo test --locked --package libtmux --doc --features test-support
 
+# Each doctest is a process of its own, and rustdoc gives it the sandbox only
+# through the environment it inherits. A canary doctest asserts that, and a
+# second run proves the assertion can fail.
+#
+# Check that a doctest runs inside the tmux sandbox
+[group: 'test']
+doctest-sandbox:
+    scripts/check-doctest-sandbox.sh
+
 # tmux never unlinks its socket when the server exits, so whatever named one
 # owns removing it. `TestServer` does; a test that hand-rolls a socket path
 # does not, and the file it leaves is invisible until the root fills up. Pure
@@ -464,7 +473,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest api-examples script-env examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest doctest-sandbox api-examples script-env examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

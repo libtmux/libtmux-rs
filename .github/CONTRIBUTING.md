@@ -251,6 +251,20 @@ failure names variables and never their values.
 `crates/libtmux/tests/sandbox_runner.rs` runs the runner around small commands
 and has a test for each of its behaviours, among them the leaked server above.
 
+A doctest is a process of its own, so it gets the sandbox only through the
+environment it inherits. `crates/libtmux/tests/sandbox_doctest.md` is a doctest
+that asserts what it inherited, accepting either the runner's directory or the
+fallback, and starts a bare tmux client to see where its server lands.
+`just doctest-sandbox` runs it as `cargo test --doc` does and requires that it
+came through the runner, then with the runner swapped for a pass-through and
+requires that it came through `[env]`. It then breaks the sandbox one way at a
+time, naming a server in each of the four variables, moving `TMUX_TMPDIR`,
+putting the server somewhere else, and expecting the wrong way in, and requires
+each run to fail, name what is wrong and print no value. The check needs a
+checkout path short enough for `.cargo/tmux-sandbox/tmux-<uid>/default` to fit
+in 100 bytes. The file is outside the package, as the other sandbox tests are,
+and `lib.rs` includes it only while doctests run.
+
 The fallback directory takes the checkout's umask, because git records no
 directory modes; the runner's is owner-only. What tmux keeps private is
 `tmux-<uid>` inside either, which tmux creates 0700 and refuses to use when
@@ -315,10 +329,10 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `ci-test`, `doctest`, `api-examples`, `script-env`,
-`examples`, `example-tables`, `fixture-root`, `docs`, `doc-blocks`,
-`doc-contents`, `changelogs`, `doctests-run`, `parity-claims`,
-`format-coverage-check`, `features`, `deny`, `msrv`, `package`.
+`compat-supervisor-test`, `ci-test`, `doctest`, `doctest-sandbox`,
+`api-examples`, `script-env`, `examples`, `example-tables`, `fixture-root`,
+`docs`, `doc-blocks`, `doc-contents`, `changelogs`, `doctests-run`,
+`parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so dependency changes need a
 consistent `Cargo.lock` before the gate can run. Committing it is not required
