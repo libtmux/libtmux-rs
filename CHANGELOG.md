@@ -55,7 +55,7 @@ To pin one, name its socket or set either variable. JSON layouts need tmux 3.8.
   `scope=full`. A dispatch also takes `tmux-ref`, `rust-toolchain`, `os` and
   `tmate`, so any branch can build any tmux version, tag, branch or commit.
   `LIBTMUX_COMPAT_LANES="3.3a 3.8" just compat` builds chosen lanes locally.
-  (#117)
+  (#118)
 
 ## 0.1.0 - 2026-10-25
 
