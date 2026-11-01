@@ -238,8 +238,8 @@ $ just check
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
 `compat-supervisor-test`, `ci-test`, `doctest`, `api-examples`, `examples`,
 `example-tables`, `fixture-root`, `docs`, `doc-blocks`, `doc-contents`,
-`doctests-run`, `parity-claims`, `format-coverage-check`, `features`, `deny`,
-`msrv`, `package`.
+`changelogs`, `doctests-run`, `parity-claims`, `format-coverage-check`,
+`features`, `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so dependency changes need a
 consistent `Cargo.lock` before the gate can run. Committing it is not required
@@ -468,7 +468,9 @@ adding one.
 
 Run `just check` before pushing. A pull request that changes public API
 carries the regenerated `public-api.txt`; one that changes behavior carries a
-changelog entry under `## Unreleased`; one that adds a gate carries the proof
+changelog entry under `## Unreleased` in the crate it changes, or in the root
+file when it spans crates ([`WRITING.md`](WRITING.md#changelog) says which);
+one that adds a gate carries the proof
 that the gate can fail.
 
 Commit format is in [`WRITING.md`](WRITING.md).
@@ -514,7 +516,12 @@ release:
    `just package` fails on it.
 3. `cargo update --workspace`, which moves the four members in `Cargo.lock`
    and nothing else. `just check` passes `--locked` and fails without it.
-4. Move the changelog's `Unreleased` entries under a dated heading.
+4. Move the `Unreleased` entries of the root changelog and of each crate's
+   changelog under a dated heading, and open a fresh `## Unreleased` above it;
+   a crate with nothing under the new heading says
+   ``No entries for `<crate>`.``
+   `just changelogs` fails when a crate has no changelog or no such heading,
+   and `just package` when a crate does not ship it.
 5. `just check`.
 6. Push one tag per crate, in dependency order, waiting for each to land:
    `libtmux-macros@vX.Y.Z`, then `libtmux@vX.Y.Z`, then

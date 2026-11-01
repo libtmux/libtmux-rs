@@ -30,8 +30,9 @@ Cargo commands.
 ## Which policy applies
 
 - For changes to documentation or any user-facing text — `README.md`,
-  `CHANGELOG.md`, release notes, commit messages, CLI and help text, error
-  messages, rustdoc, or source comments — follow
+  `CHANGELOG.md` (the root file and the one in each crate), release notes,
+  commit messages, CLI and help text, error messages, rustdoc, or source
+  comments — follow
   [`.github/WRITING.md`](.github/WRITING.md).
 - For building, testing, the gates a change must pass, the language floor,
   dependencies, releases, or opening a pull request, follow
