@@ -72,8 +72,8 @@ jobs:
       - name: Install the musl toolchain
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends musl-tools
+          ./scripts/apt-get.sh update
+          ./scripts/apt-get.sh install -y --no-install-recommends musl-tools
 
       - name: Build
         env:
