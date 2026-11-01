@@ -440,6 +440,8 @@ You may be looking for:
 - [Examples](crates/libtmux/examples) — programs that run and clean up after
   themselves, from reading a server to watching one over control mode
 - [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
+- [Changelog](CHANGELOG.md) — changes that span crates, with a link to the
+  changelog of each crate
 - [Parity ledger](crates/libtmux/docs/parity.md) — capability-by-capability
   against Python libtmux
 

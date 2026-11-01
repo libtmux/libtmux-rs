@@ -19,6 +19,7 @@ keywords = ["tmux", "mcp", "terminal-use", "cli-use", "shell-use"]
 categories = ["command-line-utilities", "development-tools", "api-bindings"]
 include = [
     "/assets/*",
+    "/CHANGELOG.md",
     "/Cargo.toml",
     "/LICENSE-APACHE",
     "/LICENSE-MIT",

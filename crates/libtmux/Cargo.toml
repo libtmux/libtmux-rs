@@ -13,6 +13,7 @@ keywords = ["tmux", "terminal", "multiplexer", "async", "tokio"]
 categories = ["api-bindings", "asynchronous", "os::unix-apis"]
 include = [
     "/assets/*",
+    "/CHANGELOG.md",
     "/Cargo.toml",
     "/LICENSE-APACHE",
     "/LICENSE-MIT",

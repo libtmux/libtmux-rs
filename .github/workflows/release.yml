@@ -176,7 +176,7 @@ jobs:
           else
             # A version with a `-` suffix is a semver prerelease; a final
             # version gets an ordinary release.
-            notes="\`$PACKAGE\` $VERSION. See CHANGELOG.md for what changed."
+            notes="\`$PACKAGE\` $VERSION. See crates/$PACKAGE/CHANGELOG.md for what changed."
             flags=()
             if [[ "$VERSION" == *-* ]]; then
               notes="$notes This is a prerelease."

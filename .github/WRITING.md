@@ -272,6 +272,21 @@ The shape already in the file, and to keep:
   break the API, so the marker flags each break a caller has to act on, and the
   changelog is where a reader finds them.
 
+Each published crate keeps its own `CHANGELOG.md` beside its `Cargo.toml`, and
+an entry goes in the file of the crate it changes:
+`crates/tmux-mcp/CHANGELOG.md` for `tmux-mcp`, `crates/libtmux/CHANGELOG.md`
+for `libtmux`, and likewise for
+`libtmux-macros` and `tmux-workspace`. The root `CHANGELOG.md` holds what
+belongs to no single crate: a change that spans crates, documentation, CI,
+tests and release tooling, and the opening paragraph of a release, which says
+which crate got which number. An entry lives in exactly one file. Release
+headings are the workspace's, so each file carries every one and says
+``No entries for `libtmux-macros`.`` under a release with nothing for its crate;
+the `## tmux-mcp 0.1.0-alpha.4` heading is in `tmux-mcp`'s file and the root's
+only. A crate ships its changelog, and `just package` refuses a shipped
+document that links a file the crate does not ship, so a link in one is
+absolute.
+
 Writing an entry:
 
 - Lead with the identifier and a concrete verb: add, fix, remove, refuse,
