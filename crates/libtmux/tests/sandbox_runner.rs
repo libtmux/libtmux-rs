@@ -624,8 +624,14 @@ fn with_tmux_a_server_of_another_release_keeps_the_directory() {
 
 #[test]
 fn it_keeps_the_directory_when_it_cannot_search_it() {
+    if !tmux_is_available() {
+        return;
+    }
     let fixture = Fixture::new();
-    fixture.script("find", "exit 1");
+    fixture.script(
+        "find",
+        "echo \"find: $TMUX_TMPDIR: Permission denied\" >&2; exit 1",
+    );
     let path = format!(
         "{}:{}",
         fixture.parent.path().display(),
@@ -635,11 +641,66 @@ fn it_keeps_the_directory_when_it_cannot_search_it() {
 
     assert_eq!(run.code, Some(LEFT_A_SERVER), "{}", run.stderr);
     assert!(run.stderr.contains("could not search"), "{}", run.stderr);
+    assert!(!run.stderr.contains("ltrs."), "a path was printed");
     assert_eq!(
         fixture.private_directories(),
         1,
         "the directory was deleted"
     );
+}
+
+#[test]
+fn it_keeps_the_directory_it_cannot_remove_and_prints_no_path() {
+    // Root removes what it likes.
+    if rustix::process::getuid().is_root() {
+        return;
+    }
+    let fixture = Fixture::new();
+
+    let run = fixture.run(
+        &[],
+        "mkdir \"$TMUX_TMPDIR/d\" && touch \"$TMUX_TMPDIR/d/f\" && chmod 500 \"$TMUX_TMPDIR/d\"",
+    );
+    // Let the fixture's own cleanup remove what the runner could not.
+    for entry in std::fs::read_dir(fixture.parent.path()).expect("the parent lists") {
+        let entry = entry.expect("an entry");
+        if entry.file_name().to_string_lossy().starts_with("ltrs.") {
+            std::fs::set_permissions(
+                entry.path().join("d"),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .expect("the directory opens up");
+        }
+    }
+
+    assert_eq!(run.code, Some(LEFT_A_SERVER), "{}", run.stderr);
+    assert!(run.stderr.contains("could not remove"), "{}", run.stderr);
+    assert!(!run.stderr.contains("ltrs."), "a path was printed");
+    assert_eq!(fixture.private_directories(), 1, "the directory is gone");
+}
+
+/// Whether a shell here can trap `INT`. A process started in the background of
+/// a non-interactive shell ignores it, and a shell cannot trap what it inherits
+/// as ignored.
+fn a_shell_can_trap_interrupts() -> bool {
+    Command::new("sh")
+        .args(["-c", "trap 'exit 7' INT; kill -INT $$; sleep 1; exit 0"])
+        .status()
+        .is_ok_and(|status| status.code() == Some(7))
+}
+
+#[test]
+fn an_interrupt_the_binary_survives_exits_130() {
+    if !a_shell_can_trap_interrupts() {
+        eprintln!("INT is ignored in this process; no shell can trap it");
+        return;
+    }
+    let fixture = Fixture::new();
+
+    let run = fixture.run(&[], "kill -INT $PPID; exit 0");
+
+    assert_eq!(run.code, Some(130), "{}", run.stderr);
+    assert_eq!(fixture.private_directories(), 0, "the directory was left");
 }
 
 #[test]

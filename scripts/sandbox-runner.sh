@@ -93,7 +93,7 @@ stuck=
 unscanned=
 blind=
 if command -v "$tmux_bin" >/dev/null 2>&1; then
-    swept=$(sweep) || unscanned=1
+    swept=$(sweep 2>/dev/null) || unscanned=1
     left=$(printf '%s\n' "$swept" | sed -n 's/^left / /p' | tr '\n' ',')
     stuck=$(printf '%s\n' "$swept" | sed -n 's/^stuck / /p' | tr '\n' ',')
 elif [ -n "$(find "$sandbox" -type s 2>/dev/null | head -n 1)" ]; then
@@ -103,10 +103,12 @@ fi
 
 # Nothing owns a directory that still holds a server, so it stays, and so does
 # one that could not be searched or asked about.
+leftover=
 if [ -z "$stuck" ] && [ -z "$unscanned" ] && [ -z "$blind" ]; then
     case $sandbox in
-    "$parent"/ltrs.??????) rm -rf "${sandbox:?}" ;;
+    "$parent"/ltrs.??????) rm -rf "${sandbox:?}" 2>/dev/null ;;
     esac
+    [ ! -e "$sandbox" ] || leftover=1
 fi
 
 if [ -n "$unscanned" ]; then
@@ -117,6 +119,9 @@ elif [ -n "$blind" ]; then
     [ "$status" -eq 0 ] && exit 70
 elif [ -n "$stuck" ]; then
     printf 'sandbox-runner: could not stop the tmux server on socket(s):%s; the directory is kept\n' "${stuck%,}" >&2
+    [ "$status" -eq 0 ] && exit 70
+elif [ -n "$leftover" ]; then
+    printf 'sandbox-runner: could not remove the sandbox directory; it is kept\n' >&2
     [ "$status" -eq 0 ] && exit 70
 elif [ -n "$left" ]; then
     printf 'sandbox-runner: the binary left a tmux server on socket(s):%s; stopped\n' "${left%,}" >&2
