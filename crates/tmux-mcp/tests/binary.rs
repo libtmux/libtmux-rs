@@ -192,11 +192,6 @@ fn require_sandbox() {
 }
 
 #[test]
-fn the_sandbox_reached_this_process() {
-    require_sandbox();
-}
-
-#[test]
 fn a_pane_environment_is_refused_and_no_value_is_printed() {
     if !in_checkout() {
         return;
@@ -205,7 +200,7 @@ fn a_pane_environment_is_refused_and_no_value_is_printed() {
         let mut command = Command::new(std::env::current_exe().expect("test executable"));
         command.args([
             "--exact",
-            "the_sandbox_reached_this_process",
+            "configured_tmux_file_must_be_absolute",
             "--nocapture",
             "--test-threads=1",
         ]);

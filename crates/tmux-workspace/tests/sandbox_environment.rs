@@ -41,11 +41,6 @@ fn a_cleared_child_without_the_helper_loses_it() {
 }
 
 #[test]
-fn the_sandbox_reached_this_process() {
-    support::require_sandbox();
-}
-
-#[test]
 fn a_pane_environment_is_refused_and_no_value_is_printed() {
     if !support::in_checkout() {
         return;
@@ -54,7 +49,7 @@ fn a_pane_environment_is_refused_and_no_value_is_printed() {
         let mut command = Command::new(std::env::current_exe().expect("test executable"));
         command.args([
             "--exact",
-            "the_sandbox_reached_this_process",
+            "a_cleared_child_keeps_the_callers_tmux_tmpdir",
             "--nocapture",
             "--test-threads=1",
         ]);
