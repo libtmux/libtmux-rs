@@ -17,6 +17,43 @@ import time
 from pathlib import Path
 
 
+# The variables that make a tmux command, or a libtmux tool, pick a server.
+SERVER_SELECTORS = {"TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH"}
+
+
+def scrubbed_environment(environ: dict[str, str]) -> dict[str, str]:
+    return {key: value for key, value in environ.items() if key not in SERVER_SELECTORS}
+
+
+def private_tmux_tmpdir(work: Path) -> Path:
+    """A 0700 `TMUX_TMPDIR` under `work`, so a command that names no socket
+    lands in the run's own directory and is removed with it."""
+    tmpdir = work / "tmux-tmpdir"
+    tmpdir.mkdir(mode=0o700)
+    tmpdir.chmod(0o700)
+    return tmpdir
+
+
+def build_env(work: Path, configs: Path, tmux: str) -> dict[str, str]:
+    """The environment every process the benchmark starts gets."""
+    env = scrubbed_environment(dict(os.environ))
+    env["TMUX_TMPDIR"] = str(private_tmux_tmpdir(work))
+    env["PATH"] = str(Path(tmux).resolve().parent) + os.pathsep + env.get("PATH", "")
+    # The sandboxed HOME below would also move Python's user site, and a
+    # tmuxp installed with `pip --user` would stop importing: keep it
+    # where the real HOME puts it.
+    env.setdefault("PYTHONUSERBASE", site.getuserbase())
+    env.update(
+        HOME=str(configs.parent),
+        TMUXP_CONFIGDIR=str(configs),
+        XDG_CONFIG_HOME=str(work / "xdg"),
+        LIBTMUX_TEST_TMUX=tmux,
+        EDITOR="/bin/true",
+        NO_COLOR="1",
+    )
+    return env
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -39,26 +76,7 @@ def main() -> None:
         socket = work / "tmux.sock"
         configs = work / "home" / ".tmuxp"
         configs.mkdir(parents=True)
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if key not in {"TMUX", "TMUX_PANE"}
-        }
-        env["PATH"] = (
-            str(Path(args.tmux).resolve().parent) + os.pathsep + env.get("PATH", "")
-        )
-        # The sandboxed HOME below would also move Python's user site, and a
-        # tmuxp installed with `pip --user` would stop importing: keep it
-        # where the real HOME puts it.
-        env.setdefault("PYTHONUSERBASE", site.getuserbase())
-        env.update(
-            HOME=str(configs.parent),
-            TMUXP_CONFIGDIR=str(configs),
-            XDG_CONFIG_HOME=str(work / "xdg"),
-            LIBTMUX_TEST_TMUX=args.tmux,
-            EDITOR="/bin/true",
-            NO_COLOR="1",
-        )
+        env = build_env(work, configs, args.tmux)
 
         def run(
             arguments: list[str], *, tmux: bool = False

@@ -5,7 +5,8 @@
 //! ```
 //!
 //! Reads the default server, or the one named by `$TMUX` when run inside a
-//! pane. Changes nothing.
+//! pane. Changes nothing. Run from a checkout of this repository, `cargo run`
+//! hides both behind the test sandbox; run the built binary to see a real one.
 
 use libtmux::{Server, TmuxText};
 

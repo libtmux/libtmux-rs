@@ -21,6 +21,8 @@ use std::time::Duration;
 use libtmux::test::TestServer;
 use serde_json::{Value, json};
 
+mod support;
+
 fn write_workspace(directory: &Path, file: &str, extensions: &Value) {
     let mut source = json!({
         "session_name": "extension-workspace", "before_script": "touch script-ran",
@@ -52,6 +54,7 @@ async fn load(directory: &Path, guard: &TestServer, files: &[&str], pane: Option
         .env("TMUXP_CONFIGDIR", directory.join(".tmuxp"))
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("TMUX_WORKSPACE_PYTHON", directory.join("missing-python"))
+        .envs(support::kept_environment())
         .kill_on_drop(true);
     if let Some(pane) = pane {
         command.env("TMUX_PANE", pane).env(

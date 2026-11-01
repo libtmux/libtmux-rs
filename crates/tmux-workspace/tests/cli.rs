@@ -5,6 +5,8 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+mod support;
+
 /// Read the variable that gates a real-tmux case.
 ///
 /// A lane lists the variables it provides in `LIBTMUX_REQUIRE_NATIVE`,
@@ -438,6 +440,7 @@ impl AttachedClient {
             .env("HOME", guard.socket_path().parent().unwrap())
             .env("LC_ALL", "C.UTF-8")
             .env("TERM", "xterm-256color")
+            .envs(support::kept_environment())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

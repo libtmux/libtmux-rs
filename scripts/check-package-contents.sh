@@ -118,6 +118,14 @@ for file in "${core_files[@]}"; do
     require_line "$core_package" "${file#"$core_root"/}" "libtmux"
 done
 
+# The sandbox canary and runner tests assert a `.cargo/config.toml` a package
+# does not have, so they fail anywhere but a checkout.
+shipped=$(grep '^tests/sandbox_' <<< "$core_package" || true)
+if [[ -n "$shipped" ]]; then
+    printf 'libtmux package ships sandbox tests:\n%s\n' "$shipped" >&2
+    exit 1
+fi
+
 for file in "${macros_files[@]}"; do
     require_line "$macros_package" "${file#"$macros_root"/}" "libtmux-macros"
 done

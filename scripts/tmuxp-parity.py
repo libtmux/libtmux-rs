@@ -676,8 +676,16 @@ def discover_fixtures(fixtures_dir: Path, scratch: Path) -> list[Fixture]:
     return fixtures
 
 
+# The variables that make a tmux command, or a libtmux tool, pick a server.
+SERVER_SELECTORS = {"TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH"}
+
+
+def scrubbed_environment(environ: dict[str, str]) -> dict[str, str]:
+    return {key: value for key, value in environ.items() if key not in SERVER_SELECTORS}
+
+
 def build_env(run_dir: Path) -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key not in {"TMUX", "TMUX_PANE"}}
+    env = scrubbed_environment(dict(os.environ))
     xdg = run_dir / "xdg"
     tmux_conf_dir = xdg / "tmux"
     tmux_conf_dir.mkdir(parents=True, exist_ok=True)

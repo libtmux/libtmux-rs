@@ -1,0 +1,13 @@
+# Everything Cargo launches gets no inherited tmux server and a private default
+# socket directory (CONTRIBUTING.md, "Nothing selects a server"). `[env]` can
+# only empty a variable, and covers what the runner does not wrap.
+[target.'cfg(unix)']
+runner = ["scripts/sandbox-runner.sh"]
+
+[env]
+TMUX = { value = "", force = true }
+TMUX_PANE = { value = "", force = true }
+LIBTMUX_SOCKET = { value = "", force = true }
+LIBTMUX_SOCKET_PATH = { value = "", force = true }
+TMUX_TMPDIR = { value = ".cargo/tmux-sandbox", relative = true, force = true }
+LIBTMUX_TEST_SANDBOX = { value = ".cargo/tmux-sandbox", relative = true, force = true }

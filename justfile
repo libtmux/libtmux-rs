@@ -30,6 +30,15 @@ doctest:
     cargo test --locked --workspace --doc --all-features
     cargo test --locked --package libtmux --doc --features test-support
 
+# Each doctest is a process of its own, and rustdoc gives it the sandbox only
+# through the environment it inherits. A canary doctest asserts that, and a
+# second run proves the assertion can fail.
+#
+# Check that a doctest runs inside the tmux sandbox
+[group: 'test']
+doctest-sandbox:
+    scripts/check-doctest-sandbox.sh
+
 # tmux never unlinks its socket when the server exits, so whatever named one
 # owns removing it. `TestServer` does; a test that hand-rolls a socket path
 # does not, and the file it leaves is invisible until the root fills up. Pure
@@ -47,6 +56,15 @@ doctest:
 api-examples:
     python3 -m unittest scripts/test_check_api_examples.py
     python3 scripts/check-api-examples.py
+
+# The parity and benchmark scripts run an installed binary outside Cargo, so
+# the environment they build is the only thing keeping it off the reader's own
+# server. Pure Python, no tmux, so it is part of `just check`.
+#
+# Check the environments those scripts give the processes they start
+[group: 'test']
+script-env:
+    python3 -m unittest scripts/test_child_environments.py
 
 # Run every example and check it cleaned up
 [group: 'test']
@@ -455,7 +473,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest doctest-sandbox api-examples script-env examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

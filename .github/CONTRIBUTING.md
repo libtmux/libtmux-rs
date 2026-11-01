@@ -180,6 +180,124 @@ held and `fork` failing with `No space left on device` in an unrelated build.
   the file it leaves is invisible until the root fills up. `just fixture-root`
   fails when anything is left behind, and runs as part of `just check`.
 
+### Nothing selects a server
+
+A tmux command that names no socket follows an inherited `TMUX` to the server
+its caller is inside, and otherwise lands on the default socket under
+`TMUX_TMPDIR`. A suite started from a tmux pane could drive, or `kill-server`,
+the session it was started from.
+
+`.cargo/config.toml` therefore names a runner, `scripts/sandbox-runner.sh`,
+which Cargo puts in front of every test, example and bench binary it starts.
+Before the binary runs, the runner:
+
+- unsets `TMUX`, `TMUX_PANE`, `LIBTMUX_SOCKET` and `LIBTMUX_SOCKET_PATH`;
+- makes a fresh owner-only directory with `mktemp -d` under `TMPDIR`, exits 78
+  when it cannot, or when `TMPDIR` is relative, missing or so long that the
+  default socket path would pass 100 bytes once links are resolved (`sun_path`
+  holds 104 on macOS and 108 on Linux), and sets `TMUX_TMPDIR` and
+  `LIBTMUX_TEST_SANDBOX` to it.
+
+After the binary exits, the runner searches the whole directory for sockets,
+without following links, since a test can start a server with `-S` on a path of
+its own. A socket file nothing answers on is not a server, because tmux never
+unlinks one. It stops each server that answers with `tmux -S <path>
+kill-server`, then checks that a connection fails, retrying for about three
+seconds. A server that still answers keeps the directory, and so does a
+directory that could not be searched, or that holds a socket when no tmux can
+be found to ask, or that could not be removed; otherwise it is removed. The
+runner exits with the binary's own status, with 130 when it was interrupted and
+the binary passed, or with 70 when the binary passed and left a server: a test
+that starts a bare `tmux new-session -d` fails the run that started it and
+leaves nothing for the next one. Its messages give socket paths relative to the
+directory.
+
+The runner also looks, and only looks, at the `default` socket a bare client
+would use outside the sandbox: under `/tmp`, where tmux goes when `TMUX_TMPDIR`
+names no directory, and under the `TMUX_TMPDIR` the runner received. Under
+Cargo that is the checkout's `[env]` fallback, which is skipped, so the
+caller's own `TMUX_TMPDIR` is seen only when the runner is run by hand and by
+`just doctest-sandbox`. It never connects to those sockets or removes one. A
+socket there made after the run began fails the run with 70, whoever made it,
+since nothing says the server is the run's to stop. A run that reuses a server
+already on that socket, one that makes a socket and removes it, and an `-L`
+name are not seen. `LIBTMUX_SANDBOX_FALLBACK_ROOT` names another directory in
+place of `/tmp`, for the runner's own tests, and the runner says so on stderr.
+`just doctest-sandbox` does the same around its runs, some of which have no
+runner. The window is the whole run, so a tmux server the developer starts in
+another terminal while a long `cargo run` or the doctest check is going fails
+it.
+
+`[env]` in the same file covers what the runner does not wrap. It sets the four
+variables to empty, and `TMUX_TMPDIR` and `LIBTMUX_TEST_SANDBOX` to
+`.cargo/tmux-sandbox`, a directory of the checkout. Cargo 1.97.1 runs doctests
+through the runner; 1.85.0 and 1.88.0 do not (measured), so on those toolchains
+a doctest gets `[env]` and no sweep.
+
+- `[env]` empties the variables rather than removing them because it cannot
+  unset one. The `libtmux` core, `tmux-workspace` and `tmux-mcp` read an empty
+  one as unset. The `from_env` constructors fail on an empty `TMUX` or
+  `TMUX_PANE` as they do on an unset one, with a different error.
+- The fallback directory is committed because tmux ignores a `TMUX_TMPDIR` that
+  does not exist and falls back to `/tmp` (measured on 3.8a), which is the
+  default socket this exists to avoid. Nothing is meant to listen in it.
+- `cargo test` and `cargo run` get the runner and `[env]` when their working
+  directory is inside the checkout: Cargo reads `.cargo/config.toml` from the
+  working directory, not from `--manifest-path`. The libtmux canary,
+  `tmux-workspace`'s `kept_environment` helper and `tmux-mcp`'s `base_command`
+  refuse to run from outside it; the other test binaries do not. To reach a
+  real server on purpose, run the built binary.
+- The runner holds `INT`, `TERM` and `HUP` until the binary exits, so the sweep
+  still runs. A signal sent to the runner alone waits for the binary; signal the
+  process group, as a terminal's Ctrl-C does.
+- The runner has one way back to a server, and it names the server. When
+  `LIBTMUX_SANDBOX_TMUX` is set and not empty, the binary gets its value as
+  `TMUX`, and the runner says `LIBTMUX_SANDBOX_TMUX is set: true` on stderr. The
+  `TMUX` the runner received is never kept, so a shell that exports a server it
+  is inside cannot pass it on by accident. `TMUX_PANE` stays unset.
+  `scripts/run-examples.sh` uses it for `inspect` and `find`, which read
+  `$TMUX` as a process inside a pane does, and for no other example. It also
+  runs `inspect` with every variable aimed at its fixture server and none
+  handed over by name, and requires that the example finds no server on the
+  sandbox's default socket. The name is for `cargo run` and examples: the test
+  binaries that refuse outside the sandbox refuse a named `TMUX` as well.
+- A test binary started by hand has not been through Cargo, so none of this
+  applies to it. The canary refuses to run there.
+
+`crates/libtmux/tests/sandbox_canary.rs` asserts that the runner applied: the
+four variables are unset, and `TMUX_TMPDIR` is a directory of this user's that
+is not the committed fallback. It resolves the default socket under the sandbox
+and fails if a server is listening on it; a leftover socket file is not one,
+since tmux never unlinks its socket. It starts a bare tmux client, with no `-L`
+or `-S`, and requires the server to listen on that default socket; a second run
+points the client elsewhere and requires the same assertion to fail. It then
+runs itself again in the environment of a tmux pane, where it must fail. A
+failure names variables and never their values.
+`crates/libtmux/tests/sandbox_runner.rs` runs the runner around small commands
+and has a test for each of its behaviours, among them the leaked server above.
+
+A doctest is a process of its own, so it gets the sandbox only through the
+environment it inherits. `crates/libtmux/tests/sandbox_doctest.md` is a doctest
+that asserts what it inherited, accepting either the runner's directory or the
+fallback, and starts a bare tmux client to see where its server lands.
+`just doctest-sandbox` runs it as `cargo test --doc` does and requires that it
+came through the runner, then with the runner swapped for a pass-through and
+requires that it came through `[env]`. It then breaks the sandbox one way at a
+time, naming a server in each of the four variables, moving `TMUX_TMPDIR`,
+putting the server somewhere else, and expecting the wrong way in, and requires
+each run to fail, name what is wrong and print no value. The check needs a
+checkout path short enough for `.cargo/tmux-sandbox/tmux-<uid>/default` to fit
+in 100 bytes. The file is outside the package, as the other sandbox tests are,
+and `lib.rs` includes it only while doctests run.
+
+The fallback directory takes the checkout's umask, because git records no
+directory modes; the runner's is owner-only. What tmux keeps private is
+`tmux-<uid>` inside either, which tmux creates 0700 and refuses to use when
+others can reach it (measured on 3.8a); the canary checks that one when it
+exists, and that the default socket path fits in `sun_path`. The canary and the
+runner tests are not packaged: a published crate has no `.cargo/config.toml` and
+no runner.
+
 ## Flaky, or broken?
 
 Tests drive a real tmux server, so they are load-sensitive in a way a mocked
@@ -236,10 +354,10 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `ci-test`, `doctest`, `api-examples`, `examples`,
-`example-tables`, `fixture-root`, `docs`, `doc-blocks`, `doc-contents`,
-`changelogs`, `doctests-run`, `parity-claims`, `format-coverage-check`,
-`features`, `deny`, `msrv`, `package`.
+`compat-supervisor-test`, `ci-test`, `doctest`, `doctest-sandbox`,
+`api-examples`, `script-env`, `examples`, `example-tables`, `fixture-root`,
+`docs`, `doc-blocks`, `doc-contents`, `changelogs`, `doctests-run`,
+`parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so dependency changes need a
 consistent `Cargo.lock` before the gate can run. Committing it is not required
@@ -291,6 +409,12 @@ unknown targets, hidden source helpers and incomplete file boundaries.
 the manifest check alone does not establish native execution.
 
 The gates worth explaining:
+
+**The scripts that run a binary outside Cargo scrub their own environment.**
+`just script-env` fails when `scripts/tmuxp-parity.py` or
+`scripts/bench-workspace-cli.py` hands a child `TMUX`, `TMUX_PANE`,
+`LIBTMUX_SOCKET` or `LIBTMUX_SOCKET_PATH`, or when the benchmark's private
+`TMUX_TMPDIR` is not owner-only. No runner stands in front of them.
 
 **Doctests must actually run.** A `#[cfg(feature = "…")]` inside a doctest
 reads the doctest's own crate, which has no features, so it is always false:

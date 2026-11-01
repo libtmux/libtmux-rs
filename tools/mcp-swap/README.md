@@ -18,7 +18,12 @@ This is a private workspace tool (`publish = false`), not a supported
   front of the handshake. `debug` is the default.
 - `run` registers `cargo run --locked`, which checks for a rebuild on every
   start. It follows current source without another swap, but the first launch
-  after a change can outlast a client's handshake timeout.
+  after a change can outlast a client's handshake timeout. A client whose
+  working directory is inside this repository starts it with the test
+  sandbox's tmux environment (no `TMUX`, `LIBTMUX_SOCKET` or
+  `LIBTMUX_SOCKET_PATH`, and a private `TMUX_TMPDIR`; see
+  [CONTRIBUTING.md](../../.github/CONTRIBUTING.md#nothing-selects-a-server)),
+  so the server cannot see the session its client runs in. Use `debug` for that.
 - `published` installs one crates.io version under its own private root. Two
   selected releases do not overwrite each other's executables.
 - `path` registers the executable passed with `--bin`, wherever it came from.

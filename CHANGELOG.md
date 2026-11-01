@@ -21,6 +21,23 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
+### Changed
+
+- **Behaviour change.** `cargo test`, `cargo test --doc`, `cargo bench` and
+  `cargo run` in a checkout of this repository no longer see `TMUX`,
+  `TMUX_PANE`, `LIBTMUX_SOCKET` or `LIBTMUX_SOCKET_PATH`, and get a private
+  `TMUX_TMPDIR` that a runner searches for servers a test left behind, failing
+  the run when it finds one. Since 0.1.1 a `Server::new()` that names no socket
+  reaches the server its caller is inside or tmux's default socket, so a test
+  without one could drive the developer's own session. To reach a real server
+  on purpose, run the built binary, or name it to `cargo run` with
+  `LIBTMUX_SANDBOX_TMUX`.
+  A run exits 78 before the binary starts when `TMPDIR` is relative or would put
+  a socket path past 100 bytes, so shorten `TMPDIR`; and exits 70 when a binary
+  that passed left a tmux server, which the runner stops, or started one on the
+  default socket outside the sandbox, which it leaves alone. Published crates
+  are unaffected. (#126)
+
 ## 0.1.1 - 2026-10-31
 
 `libtmux`, `libtmux-macros`, `tmux-workspace` and `tmux-mcp` are all 0.1.1.
