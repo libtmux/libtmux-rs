@@ -9,7 +9,7 @@ was asked for.
 
 ## What is here
 
-One Cargo workspace; every crate in it is published:
+One Cargo workspace with four published crates and a private developer tool:
 
 | Crate | What it is |
 | --- | --- |
@@ -17,6 +17,7 @@ One Cargo workspace; every crate in it is published:
 | `crates/libtmux-macros` | `#[derive(Filterable)]`, for downstream structs |
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
+| `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
 
 `tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
 the workspace's, because it moves at its own pace and its dependencies need a

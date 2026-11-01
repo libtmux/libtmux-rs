@@ -61,11 +61,12 @@ See the [migration notes](docs/migration.md) when upgrading from an earlier alph
 
 ## Quick start
 
-Add the crate, and Tokio to drive it:
+Add the crate, and Tokio to drive it. `test-support` supplies the isolated
+server used by the examples:
 
 ```toml
 [dependencies]
-libtmux = "0.1.1"
+libtmux = { version = "0.1.1", features = ["test-support"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -77,8 +78,7 @@ use libtmux::test::TestServer;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Runs for real. `TestServer` is an isolated tmux on its own socket under
-    // `/tmp/libtmux-rs-test/`, torn down at the end. Your own code says
-    // `let server = libtmux::Server::new()?;` instead; nothing else changes.
+    // `/tmp/libtmux-rs-test/`, torn down at the end.
     let guard = TestServer::new().await?;
     let server = guard.server();
 
@@ -97,9 +97,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The examples on this page run as written, against a throwaway tmux. To run
-them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.1", features = ["test-support"] }`.
+The examples on this page run against a throwaway tmux. To connect to an
+existing server, use `libtmux::Server::new()?` instead of creating the guard,
+and omit `guard.shutdown()`. With neither `LIBTMUX_SOCKET_PATH` nor
+`LIBTMUX_SOCKET` set, `Server::new` passes tmux no socket and tmux picks the
+server. That route needs no `test-support` feature; leave the daemon's
+lifetime to its owner.
 
 [`Pane::send_line`] types a line and presses Enter, and [`Pane::capture`]
 reads what the pane shows. Every method that reaches tmux is `async`.
@@ -110,8 +113,9 @@ Commands run without a shell, and results keep stdout and stderr as raw bytes,
 so decoding stays the caller's decision.
 
 It needs Rust 1.85 or newer and tmux 3.3a or newer, on a Unix host. Against an
-older daemon, an operation returns [`Error::UnsupportedTmuxVersion`] and sends
-nothing. To fix it, upgrade tmux and restart its server, or pin the previous
+older daemon, an operation returns [`Error::UnsupportedTmuxVersion`] before
+dispatching the requested command; a version probe may run first. To fix it,
+upgrade tmux and restart its server, or pin the previous
 release. [The contract][contract-version] covers unrecognized versions, failed
 probes, and the calls that skip the check.
 
@@ -572,16 +576,20 @@ subprocess transport does instead of having one.
 | **Control mode** | One tmux process per command | One connection for every command, and tmux reports changes as they happen |
 | **Chaining** | One tmux process per command | Neighbouring commands share one process, trading the ability to say which one failed |
 
-Measured on one workload of six operations, all leaving identical tmux state:
+Counted by `examples/matrix.rs` on one workload of six operations, all leaving
+identical tmux state:
 
-| Mode | Processes | Attribution on failure |
-| --- | --- | --- |
-| One command per invocation | 6 | names the failing command |
-| Folded into shared invocations | 3 | `Unknown` -- tmux reports one status for the group |
-| Control mode | 1 | names the failing command |
+| Mode | Dispatches | Processes | Attribution on failure |
+| --- | --- | --- | --- |
+| One command per invocation | 6 | 7 | names the failing command |
+| Folded into shared invocations | 3 | 4 | `Unknown` -- tmux reports one status for the group |
+| Control mode, streaming | 6 | 3 | names the failing command |
+| Control mode, routed | 6 | 4 | names the failing command |
 
-Control mode is the only one that buys back the processes without giving up
-the answer, because its `%begin`/`%end` blocks are per command. Run
+Processes include the version probes inside the example's measurement window
+and, for control mode, the connection's own process. Both control rows reuse
+one persistent connection after those probes, and its `%begin`/`%end` blocks
+retain per-command evidence. Run
 `cargo run --example matrix --features full,test-support` to reproduce the
 table on your own machine.
 
@@ -705,9 +713,10 @@ Await it, or await your commands, before tearing the runtime down.
 ### [`Server::cmd`]: any tmux command, through the same machinery
 
 tmux has more commands than this crate has methods, and a method can be
-narrower than the command behind it. [`Server::cmd`] runs anything, through
-the same transport, timeout and error classification as the typed calls, so
-reaching for it costs you the method and keeps the machinery:
+narrower than the command behind it. [`Server::cmd`] uses the same transport
+and timeout as typed calls. A tmux refusal remains a nonzero
+[`CommandResult`], so check `success()`; version guards and transport failures
+return `Err`:
 
 ```rust
 use libtmux::{Command, test::TestServer};
@@ -730,8 +739,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    // The answer carries tmux's own bytes. A command tmux refuses is an `Err`
-    // classified the same way a typed call's would be.
+    // The answer carries tmux's own bytes and exit status.
     let version = server
         .cmd(Command::new("display-message").arg("-p").arg("#{version}"))
         .await?;
@@ -1066,3 +1074,4 @@ or [MIT license](LICENSE-MIT) at your option.
 [`libtmux::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
 [`TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
 [`CommandChain::new(a).then(b)`]: https://libtmux.org/en/rs/latest/reference/command-commandchain/
+[`CommandResult`]: https://libtmux.org/en/rs/latest/reference/command-commandresult/

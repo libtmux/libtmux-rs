@@ -17,7 +17,8 @@ daemon replacement with a different version. The daemon's version is cached.
 Every dispatch checks it in tmux's queue, and a mismatch invalidates the cache
 for a fresh probe on the next operation.
 
-A refusal means nothing was sent to the daemon:
+A refusal prevents the requested operation from being dispatched. Version
+probes and queue guards may still reach the daemon:
 
 - A daemon older than 3.3a, including 3.1 and older, which cannot answer the
   probe at all, is refused as [`Error::UnsupportedTmuxVersion`].

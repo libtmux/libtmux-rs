@@ -208,9 +208,10 @@ impl TmuxTools {
     #[tool(
         name = "run_shell_command",
         description = "Run a shell command in a pane, wait for it to finish, and report its \
-                       exit status with everything it wrote. This is the tool for \"run this \
+                       exit status with retained output. This is the tool for \"run this \
                        and tell me if it worked\". Output is the pane's raw output stream, not \
-                       the rendered screen: nothing is missed, the shell prompt is not \
+                       the rendered screen. Output is a bounded tail; check truncated before \
+                       treating it as complete. The shell prompt is not \
                        included, and a line redrawn in place repeats; capture_pane shows the \
                        screen. The command \
                        runs in a subshell, so cd and export do not persist and invalid syntax \

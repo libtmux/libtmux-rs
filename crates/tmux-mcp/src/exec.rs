@@ -141,12 +141,12 @@ pub struct RunView {
     /// Absent when the run did not complete, and when the command was killed
     /// by a signal rather than exiting.
     pub exit_status: Option<i32>,
-    /// Everything the command wrote, stdout and stderr interleaved in the
-    /// order the program wrote them.
+    /// The retained tail of command output, stdout and stderr interleaved.
     ///
     /// This is the raw output stream with escape sequences removed, not the
     /// rendered screen: a line redrawn in place, such as a progress bar,
-    /// repeats. `capture_pane` shows the screen.
+    /// repeats. Check `truncated` before treating it as complete.
+    /// `capture_pane` shows the screen.
     pub output: String,
     /// How many bytes that was, before any truncation.
     pub bytes: usize,
@@ -165,11 +165,12 @@ pub struct WaitView {
     pub matched_index: Option<usize>,
     /// The pattern that matched, as it was given.
     pub matched_pattern: Option<String>,
-    /// What the pane wrote, with escape sequences removed.
+    /// Retained stream text, or captured screen text on the polling path.
     ///
-    /// This is the raw output stream, not the rendered screen: a line redrawn
-    /// in place, such as a line editor's echo, repeats. `capture_pane` shows
-    /// the screen.
+    /// Streamed results are not the rendered screen: escape sequences are
+    /// removed and a line redrawn in place repeats. `capture_pane` shows the
+    /// screen. Below tmux 3.7 this is the last visible screen read instead;
+    /// a present-at-entry match can also return captured screen text.
     pub text: String,
     /// How many bytes arrived, before filtering or truncation.
     pub bytes: usize,

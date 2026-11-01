@@ -45,8 +45,8 @@ decision rather than an implementation detail:
   tracing;
 - caller cancellation, timeouts, and explicit shutdown kill and reap owned
   child processes;
-- list-shaped accessors are loud by default and have explicit `*_or_empty`
-  forms; an empty list means tmux said so;
+- list-shaped accessors return `Result`; a caller that chooses to discard
+  failures writes `unwrap_or_default()` explicitly;
 - expression construction, remote query execution, and mutations are loud;
 - no executor claims per-command attribution without protocol evidence;
 - tests use unique explicit socket paths under the fixture root and bounded
