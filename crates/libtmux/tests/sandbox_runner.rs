@@ -277,7 +277,7 @@ fn it_gives_each_run_a_fresh_owner_only_directory_and_removes_it() {
         let answer = fixture.answer();
         let lines: Vec<&str> = answer.lines().collect();
         assert_eq!(lines.len(), 3, "the command answered");
-        assert_eq!(lines[0], lines[1], "TMUX_TMPDIR and the marker differ");
+        assert!(lines[0] == lines[1], "TMUX_TMPDIR and the marker differ");
         assert_eq!(lines[2], "drwx------", "the directory is not owner-only");
         assert!(
             lines[0] != outer,

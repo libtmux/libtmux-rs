@@ -401,6 +401,25 @@ fn each_finding_names_what_is_wrong() {
 }
 
 #[test]
+fn a_directory_of_another_user_is_reported() {
+    // Root owns every directory it could be pointed at.
+    if uid() == 0 {
+        return;
+    }
+    let found = findings(&|name| match name {
+        "TMUX_TMPDIR" | "LIBTMUX_TEST_SANDBOX" => Some(OsString::from("/usr")),
+        _ => process_environment(name),
+    });
+
+    assert!(
+        found
+            .iter()
+            .any(|finding| finding.contains("belongs to another user")),
+        "a directory of another user went unreported: {found:?}",
+    );
+}
+
+#[test]
 fn an_open_per_user_directory_is_reported() {
     let open = tempfile::tempdir().expect("scratch directory");
     let path = open.path().to_str().expect("UTF-8 scratch path");

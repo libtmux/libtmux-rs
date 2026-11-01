@@ -22,7 +22,7 @@ fn a_cleared_child_keeps_the_callers_tmux_tmpdir() {
             output.stdout == directory.as_encoded_bytes(),
             "the child did not keep TMUX_TMPDIR",
         ),
-        None => assert_eq!(output.stdout, b"unset"),
+        None => assert!(output.stdout == b"unset", "the child saw a TMUX_TMPDIR"),
     }
 }
 
@@ -34,7 +34,10 @@ fn a_cleared_child_without_the_helper_loses_it() {
         .output()
         .expect("sh runs");
 
-    assert_eq!(output.stdout, b"unset", "the control: env_clear() drops it");
+    assert!(
+        output.stdout == b"unset",
+        "the control: env_clear() drops it",
+    );
 }
 
 #[test]
