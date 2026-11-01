@@ -4,8 +4,9 @@
 The workflow takes its tmux lanes from the plan, which reads
 `.github/ci-matrix.txt`, so nothing here compares a list in one file with a
 list in another. What is checked is that no second list has grown back, that
-every job is behind the one required check, and that the documents state the
-range the manifest tests.
+every job is behind the one required check, that no step calls `apt-get`
+without `scripts/apt-get.sh`, and that the documents state the range the
+manifest tests.
 """
 
 from __future__ import annotations
@@ -16,9 +17,12 @@ import re
 import sys
 import unittest
 
+import yaml
+
 SCRIPTS = pathlib.Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
+ACTIONS = ROOT / ".github" / "actions"
 
 SPEC = importlib.util.spec_from_file_location("ci_plan", SCRIPTS / "ci-plan.py")
 assert SPEC is not None and SPEC.loader is not None
@@ -30,6 +34,12 @@ CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 JOB = re.compile(r"^  ([a-z][a-z-]*):\s*$", re.MULTILINE)
 RELEASE = re.compile(r"\b\d+\.\d+[a-z]?\b")
 TMATE = "mxschmitt/action-tmate@"
+# `apt` or `apt-get` in command position, past `sudo` and `VAR=value` prefixes.
+# `./scripts/apt-get.sh` never matches: the name follows a `/` and a `.`.
+RAW_APT = re.compile(
+    r"(?:^|[;&|(`]|\b(?:then|do|else)\b)\s*"
+    r"(?:\w+=\S*\s+)*(?:sudo\s+(?:-\S+\s+)*)?(?:\w+=\S*\s+)*apt(?:-get)?(?=\s|$)"
+)
 
 
 def job_ids(text: str) -> list[str]:
@@ -47,6 +57,36 @@ def job_section(text: str, name: str) -> str:
             )
             return jobs[heading.start() : end]
     raise AssertionError(f"ci.yml has no {name} job")
+
+
+def run_scripts(doc: object, path: str) -> list[tuple[str, str]]:
+    """Return a location and the `run` script of every step in a workflow or action."""
+    if not isinstance(doc, dict):
+        return []
+    found = []
+    for job, body in (doc.get("jobs") or {}).items():
+        for number, step in enumerate(body.get("steps") or [], 1):
+            if "run" in step:
+                label = step.get("name") or f"#{number}"
+                found.append((f"{path}: job {job}, step {label}", step["run"]))
+    for number, step in enumerate((doc.get("runs") or {}).get("steps") or [], 1):
+        if "run" in step:
+            label = step.get("name") or f"#{number}"
+            found.append((f"{path}: step {label}", step["run"]))
+    return found
+
+
+def raw_apt_calls(doc: object, path: str) -> list[str]:
+    """Describe each `run` line that calls `apt` or `apt-get` directly."""
+    found = []
+    for where, script in run_scripts(doc, path):
+        for line in script.splitlines():
+            if not line.lstrip().startswith("#") and RAW_APT.search(line):
+                found.append(
+                    f"{where} runs `{line.strip()}` directly; "
+                    "run it through scripts/apt-get.sh"
+                )
+    return found
 
 
 class WorkflowTests(unittest.TestCase):
@@ -140,6 +180,66 @@ class TmateTests(unittest.TestCase):
                 continue
             with self.subTest(path.name):
                 self.assertNotIn("action-tmate", path.read_text(encoding="utf-8"))
+
+
+class AptTests(unittest.TestCase):
+    def test_no_step_calls_apt_without_the_wrapper(self) -> None:
+        paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(ACTIONS.glob("*/action.yml"))
+        self.assertIn(WORKFLOWS / "ci.yml", paths)
+        found = []
+        for path in paths:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+            found += raw_apt_calls(doc, path.relative_to(ROOT).as_posix())
+        self.assertEqual(found, [])
+
+    def test_a_raw_apt_get_is_named_with_its_fix(self) -> None:
+        doc = yaml.safe_load(
+            """
+jobs:
+  build:
+    steps:
+      - name: Install tmux
+        run: |
+          # sudo apt-get update is only mentioned here
+          sudo apt-get update
+          ./scripts/apt-get.sh install -y tmux
+"""
+        )
+        self.assertEqual(
+            raw_apt_calls(doc, "ci.yml"),
+            [
+                "ci.yml: job build, step Install tmux runs `sudo apt-get update` "
+                "directly; run it through scripts/apt-get.sh"
+            ],
+        )
+
+    def test_the_wrapper_passes(self) -> None:
+        doc = yaml.safe_load(
+            """
+jobs:
+  build:
+    steps:
+      - run: ./scripts/apt-get.sh update
+"""
+        )
+        self.assertEqual(raw_apt_calls(doc, "ci.yml"), [])
+
+    def test_every_spelling_of_a_raw_call_is_caught(self) -> None:
+        for call in (
+            "apt update",
+            "sudo -E apt-get install -y tmux",
+            "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tmux",
+            "test -x /usr/bin/tmux || sudo apt-get install -y tmux",
+        ):
+            with self.subTest(call):
+                action = {"runs": {"steps": [{"run": call}]}}
+                self.assertEqual(
+                    raw_apt_calls(action, "action.yml"),
+                    [
+                        f"action.yml: step #1 runs `{call}` directly; "
+                        "run it through scripts/apt-get.sh"
+                    ],
+                )
 
 
 class DocumentTests(unittest.TestCase):
