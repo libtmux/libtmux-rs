@@ -16,6 +16,10 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+## 0.1.2 - 2026-11-01
+
+No entries for `tmux-workspace`.
+
 ## 0.1.1 - 2026-10-31
 
 ### Changed

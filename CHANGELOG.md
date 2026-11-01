@@ -21,6 +21,11 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
+## 0.1.2 - 2026-11-01
+
+`libtmux`, `libtmux-macros`, `tmux-workspace` and `tmux-mcp` are all 0.1.2.
+Each crate now ships its own changelog (#128). No crate's code changed.
+
 ### Changed
 
 - **Behaviour change.** `cargo test`, `cargo test --doc`, `cargo bench` and

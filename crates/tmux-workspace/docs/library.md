@@ -224,8 +224,8 @@ $ cargo add tmux-workspace --no-default-features
 
 ```toml
 [dependencies]
-tmux-workspace = { version = "0.1.1", default-features = false }
-libtmux = { version = "0.1.1", features = ["test-support"] }
+tmux-workspace = { version = "0.1.2", default-features = false }
+libtmux = { version = "0.1.2", features = ["test-support"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

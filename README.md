@@ -69,7 +69,7 @@ $ cargo add tokio --features rt-multi-thread,macros
 
 ```toml
 [dependencies]
-libtmux = { version = "0.1.1", features = ["test-support"] }
+libtmux = { version = "0.1.2", features = ["test-support"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

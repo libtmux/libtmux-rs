@@ -66,7 +66,7 @@ server used by the examples:
 
 ```toml
 [dependencies]
-libtmux = { version = "0.1.1", features = ["test-support"] }
+libtmux = { version = "0.1.2", features = ["test-support"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -778,7 +778,7 @@ crate's own suite uses:
 
 ```toml
 [dev-dependencies]
-libtmux = { version = "0.1.1", features = ["test-support"] }
+libtmux = { version = "0.1.2", features = ["test-support"] }
 ```
 
 Each guard owns a tmux child on a private socket with an empty config, so tests
