@@ -340,6 +340,16 @@ parity-claims:
     python3 -m unittest scripts/test_public_api.py scripts/test_check_parity_claims.py
     python3 scripts/check-parity-claims.py crates/libtmux/docs/parity.md crates
 
+# Each published crate ships a changelog of its own, so a reader of one crate
+# does not have to read the history of the other three.
+#
+# Fail when a published crate has no changelog, does not ship it or does not
+# link it
+[group: 'docs']
+changelogs:
+    python3 -m unittest scripts/test_check_changelogs.py
+    python3 scripts/check-changelogs.py
+
 # Report formats tmux publishes that the catalog does not carry
 [group: 'docs']
 format-coverage-check:
@@ -445,7 +455,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

@@ -43,9 +43,13 @@ require_line() {
 
 shopt -s nullglob
 
+# Each crate ships its own CHANGELOG.md, so a reader of the packaged crate has
+# the history of that crate and not of the other three.
+#
 # The crate's front page links docs/design.md and names the examples, so both
 # ship or those references break for anyone reading the packaged crate.
 core_files=(
+    "$core_root"/CHANGELOG.md
     "$core_root"/LICENSE-APACHE
     "$core_root"/LICENSE-MIT
     "$core_root"/README.md
@@ -61,6 +65,7 @@ core_files=(
     "$core_root"/tests/fixtures/dialect-v1/*.json
 )
 macros_files=(
+    "$macros_root"/CHANGELOG.md
     "$macros_root"/LICENSE-APACHE
     "$macros_root"/LICENSE-MIT
     "$macros_root"/README.md
@@ -72,6 +77,7 @@ macros_files=(
 # break. Its planning notes under docs/ deliberately do not: they are working
 # material for this repository, not something an integrator needs in a tarball.
 mcp_files=(
+    "$mcp_root"/CHANGELOG.md
     "$mcp_root"/LICENSE-APACHE
     "$mcp_root"/LICENSE-MIT
     "$mcp_root"/README.md
@@ -88,6 +94,7 @@ mcp_files=(
 # after compiling most of the dependency graph first. This check fails in
 # the time a file listing takes.
 workspace_crate_files=(
+    "$workspace_crate_root"/CHANGELOG.md
     "$workspace_crate_root"/LICENSE-APACHE
     "$workspace_crate_root"/LICENSE-MIT
     "$workspace_crate_root"/README.md
