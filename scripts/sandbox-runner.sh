@@ -7,8 +7,8 @@
 #
 # Exit status: the binary's own; 78 when the run is refused before the binary
 # starts; 70 when the binary passed but left a server, or the directory could
-# not be checked; 130 when interrupted and the binary passed. Messages name
-# variables and sockets, never values.
+# not be checked, or a server started outside the sandbox; 130 when interrupted
+# and the binary passed. Messages name variables and sockets, never values.
 set -u
 
 refuse() {
@@ -18,10 +18,25 @@ refuse() {
 
 [ "$#" -ge 1 ] || refuse "no binary to run"
 
+helper=$(dirname "$0")/sandbox-outside.sh
+[ -r "$helper" ] || refuse "scripts/sandbox-outside.sh is missing"
+# shellcheck source=sandbox-outside.sh
+. "$helper"
+# Where tmux would have put a bare client's server had the sandbox not: under
+# the TMUX_TMPDIR received, which under Cargo is its `[env]` fallback, and under
+# /tmp, or the directory named for tests. Only the first is skipped there.
+caller_tmpdir=${TMUX_TMPDIR-}
+case $caller_tmpdir in
+*/.cargo/tmux-sandbox) caller_tmpdir= ;;
+esac
+fallback_named=${LIBTMUX_SANDBOX_FALLBACK_ROOT:+1}
+fallback_root=${LIBTMUX_SANDBOX_FALLBACK_ROOT:-/tmp}
+
 # LIBTMUX_SANDBOX_TMUX is the one way back to a server, and it names it. The
 # TMUX received is never the source, and TMUX_PANE stays unset.
 named_tmux=${LIBTMUX_SANDBOX_TMUX-}
-unset TMUX TMUX_PANE LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH LIBTMUX_SANDBOX_TMUX
+unset TMUX TMUX_PANE LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH LIBTMUX_SANDBOX_TMUX \
+    LIBTMUX_SANDBOX_FALLBACK_ROOT
 
 # tmux appends tmux-<uid>/default, and sun_path holds 104 bytes on macOS and
 # 108 on Linux.
@@ -41,7 +56,10 @@ need=$(($(printf '%s' "$resolved/ltrs.XXXXXX/tmux-$uid/default" | wc -c)))
     refuse "TMPDIR is too long for a tmux socket path; the limit is $limit bytes"
 sandbox=$(mktemp -d "$parent/ltrs.XXXXXX" 2>/dev/null) ||
     refuse "cannot create a private TMUX_TMPDIR under TMPDIR"
-chmod 700 "$sandbox"
+chmod 700 "$sandbox" 2>/dev/null || {
+    rm -rf "${sandbox:?}"
+    refuse "cannot make the private TMUX_TMPDIR owner-only"
+}
 export TMUX_TMPDIR="$sandbox" LIBTMUX_TEST_SANDBOX="$sandbox"
 
 if [ -n "$named_tmux" ]; then
@@ -52,11 +70,26 @@ if [ -n "$named_tmux" ]; then
 fi
 unset named_tmux
 
+if [ -n "$fallback_named" ]; then
+    printf 'sandbox-runner: LIBTMUX_SANDBOX_FALLBACK_ROOT is set: true; %s\n' \
+        'it names the fallback directory to watch in place of /tmp' >&2
+fi
+
+# Anything newer than this, outside the sandbox, was made after this point.
+reference=$sandbox/.reference
+outside_reference "$reference" || {
+    rm -rf "${sandbox:?}"
+    refuse "cannot write under the private TMUX_TMPDIR"
+}
+
 # Held until the binary exits, so an interrupt still reaches the sweep below.
 trap 'interrupted=1' INT TERM HUP
 "$@"
 status=$?
 trap - INT TERM HUP
+
+outside_failed=
+outside=$(outside_started "$reference" "$fallback_root" "$caller_tmpdir") || outside_failed=1
 
 tmux_bin=${LIBTMUX_TEST_TMUX:-tmux}
 command -v "$tmux_bin" >/dev/null 2>&1 || tmux_bin=tmux
@@ -109,6 +142,25 @@ if [ -z "$stuck" ] && [ -z "$unscanned" ] && [ -z "$blind" ]; then
     "$parent"/ltrs.??????) rm -rf "${sandbox:?}" 2>/dev/null ;;
     esac
     [ ! -e "$sandbox" ] || leftover=1
+fi
+
+# Read, never touched: nothing says the server is this run's to stop.
+if [ -n "$outside_failed" ]; then
+    printf 'sandbox-runner: could not check for servers outside the sandbox\n' >&2
+    [ "$status" -ne 0 ] || status=70
+elif [ -n "$outside" ]; then
+    where=
+    while read -r root; do
+        if [ "$root" = "$fallback_root" ]; then
+            where="$where the tmux fallback directory,"
+        else
+            where="$where the caller's TMUX_TMPDIR,"
+        fi
+    done <<OUTSIDE
+$outside
+OUTSIDE
+    printf 'sandbox-runner: a tmux server started outside the sandbox, in%s; not touched\n' "${where%,}" >&2
+    [ "$status" -ne 0 ] || status=70
 fi
 
 if [ -n "$unscanned" ]; then

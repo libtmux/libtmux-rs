@@ -57,9 +57,11 @@ impl Fixture {
     }
 
     fn command(&self, environment: &[(&str, &str)], script: &str) -> Command {
+        // A command that starts tmux must not do it without the sandbox.
+        let guarded = format!("[ -d \"$TMUX_TMPDIR\" ] || exit 99; {script}");
         let mut command = Command::new(runner());
         command
-            .args(["sh", "-c", script])
+            .args(["sh", "-c", &guarded])
             .env("TMPDIR", self.parent.path())
             .env("OUT", self.file("out"))
             .env("MARKER", self.file("marker"))
@@ -101,6 +103,7 @@ impl Fixture {
         let path = std::env::var_os("PATH").unwrap_or_default();
         for tool in [
             "id", "mktemp", "chmod", "wc", "sed", "tr", "find", "head", "rm", "ln", "sh",
+            "dirname", "touch", "sleep",
         ] {
             let found = std::env::split_paths(&path)
                 .map(|directory| directory.join(tool))
@@ -630,7 +633,8 @@ fn it_keeps_the_directory_when_it_cannot_search_it() {
     let fixture = Fixture::new();
     fixture.script(
         "find",
-        "echo \"find: $TMUX_TMPDIR: Permission denied\" >&2; exit 1",
+        "case \" $* \" in *\" -type s \"*) echo \"find: $TMUX_TMPDIR: Permission denied\" >&2; exit 1 ;; esac\n\
+         exec /usr/bin/find \"$@\"",
     );
     let path = format!(
         "{}:{}",
@@ -741,4 +745,296 @@ fn without_tmux_a_directory_with_no_socket_is_removed() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.stderr, "", "a clean run says nothing");
     assert_eq!(fixture.private_directories(), 0);
+}
+
+/// A directory standing in for one tmux would have used, with the per-user
+/// directory inside it, and the socket path a bare client would bind there.
+fn stand_in_root(fixture: &Fixture, name: &str) -> (PathBuf, PathBuf) {
+    let root = fixture.file(name);
+    let per_user = root.join(format!("tmux-{}", rustix::process::getuid().as_raw()));
+    std::fs::create_dir_all(&per_user).expect("a stand-in root");
+    // tmux refuses a per-user directory that others can reach.
+    std::fs::set_permissions(&per_user, std::fs::Permissions::from_mode(0o700))
+        .expect("an owner-only directory");
+    (root, per_user.join("default"))
+}
+
+/// Start a server on `socket` with a client that follows `root`, before the
+/// runner does, and stop it when dropped.
+struct EarlierServer {
+    socket: PathBuf,
+}
+
+impl EarlierServer {
+    fn start(root: &Path, socket: PathBuf) -> Self {
+        let tmux = std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into());
+        let started = Command::new(tmux)
+            .args(["-f", "/dev/null", "new-session", "-d"])
+            .env("TMUX_TMPDIR", root)
+            .env("SHELL", "/bin/sh")
+            .env_remove("TMUX")
+            .stdin(Stdio::null())
+            .status()
+            .expect("tmux runs");
+        assert!(started.success(), "tmux did not start a server");
+        Self { socket }
+    }
+}
+
+impl Drop for EarlierServer {
+    fn drop(&mut self) {
+        let tmux = std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into());
+        let _ = Command::new(tmux)
+            .arg("-S")
+            .arg(&self.socket)
+            .arg("kill-server")
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[test]
+fn a_server_started_on_the_callers_default_socket_fails_the_run_and_is_left_alone() {
+    if !tmux_is_available() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let (root, _) = stand_in_root(&fixture, "caller");
+    let root_text = root.to_str().expect("UTF-8 path");
+
+    let run = fixture.run(
+        &[("TMUX_TMPDIR", root_text), ("CALLER", root_text)],
+        "[ -d \"$CALLER\" ] || exit 99; TMUX_TMPDIR=\"$CALLER\" tmux -f /dev/null new-session -d -P -F '#{pid}' > \"$OUT\"",
+    );
+
+    let server = recorded_server(&fixture).expect("the server pid");
+    assert_eq!(run.code, Some(LEFT_A_SERVER), "{}", run.stderr);
+    assert!(run.stderr.contains("outside the sandbox"), "{}", run.stderr);
+    assert!(run.stderr.contains("TMUX_TMPDIR"), "{}", run.stderr);
+    assert!(!run.stderr.contains(root_text), "a path was printed");
+    assert!(
+        server.is_alive(),
+        "a server that was not the run's to stop was stopped"
+    );
+}
+
+#[test]
+fn a_server_started_in_the_fallback_directory_fails_the_run() {
+    if !tmux_is_available() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let (root, _) = stand_in_root(&fixture, "fallback");
+    let root_text = root.to_str().expect("UTF-8 path");
+
+    // tmux uses its fallback when TMUX_TMPDIR names no directory, so a
+    // command that overrides it stands in for that.
+    let run = fixture.run(
+        &[
+            ("LIBTMUX_SANDBOX_FALLBACK_ROOT", root_text),
+            ("FALLBACK", root_text),
+        ],
+        "[ -d \"$FALLBACK\" ] || exit 99; TMUX_TMPDIR=\"$FALLBACK\" tmux -f /dev/null new-session -d -P -F '#{pid}' > \"$OUT\"",
+    );
+
+    let server = recorded_server(&fixture).expect("the server pid");
+    assert_eq!(run.code, Some(LEFT_A_SERVER), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("tmux fallback directory"),
+        "{}",
+        run.stderr
+    );
+    assert!(!run.stderr.contains(root_text), "a path was printed");
+    assert!(
+        server.is_alive(),
+        "a server that was not the run's to stop was stopped"
+    );
+}
+
+#[test]
+fn a_server_there_before_the_run_is_not_reported() {
+    if !tmux_is_available() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let (root, socket) = stand_in_root(&fixture, "caller");
+    let _earlier = EarlierServer::start(&root, socket);
+    let root_text = root.to_str().expect("UTF-8 path");
+
+    let run = fixture.run(
+        &[
+            ("TMUX_TMPDIR", root_text),
+            ("LIBTMUX_SANDBOX_FALLBACK_ROOT", root_text),
+        ],
+        "exit 0",
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        !run.stderr.contains("outside the sandbox"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_stale_socket_file_there_is_not_reported() {
+    let fixture = Fixture::new();
+    let (root, socket) = stand_in_root(&fixture, "caller");
+    drop(UnixListener::bind(&socket).expect("a socket binds"));
+    let root_text = root.to_str().expect("UTF-8 path");
+
+    let run = fixture.run(
+        &[
+            ("TMUX_TMPDIR", root_text),
+            ("LIBTMUX_SANDBOX_FALLBACK_ROOT", root_text),
+        ],
+        "exit 0",
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        !run.stderr.contains("outside the sandbox"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn the_fallback_root_is_named_in_the_log_and_not_handed_on() {
+    let fixture = Fixture::new();
+    let root = fixture.file("elsewhere");
+    std::fs::create_dir(&root).expect("a directory");
+    let root_text = root.to_str().expect("UTF-8 path");
+
+    let run = fixture.run(
+        &[("LIBTMUX_SANDBOX_FALLBACK_ROOT", root_text)],
+        "if [ -z \"${LIBTMUX_SANDBOX_FALLBACK_ROOT+x}\" ]; then echo gone; else echo kept; fi > \"$OUT\"",
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        fixture.answer().trim(),
+        "gone",
+        "the binary saw the variable"
+    );
+    assert!(
+        run.stderr
+            .contains("LIBTMUX_SANDBOX_FALLBACK_ROOT is set: true"),
+        "{}",
+        run.stderr,
+    );
+    assert!(!run.stderr.contains(root_text), "a path was printed");
+}
+
+#[test]
+fn the_checkouts_own_fallback_directory_is_not_watched() {
+    if !tmux_is_available() {
+        return;
+    }
+    let fixture = Fixture::new();
+    // What Cargo's `[env]` gives the runner in place of the caller's value.
+    let (root, _) = stand_in_root(&fixture, ".cargo/tmux-sandbox");
+    let root_text = root.to_str().expect("UTF-8 path");
+    let elsewhere = fixture.file("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("a directory");
+
+    let run = fixture.run(
+        &[
+            ("TMUX_TMPDIR", root_text),
+            (
+                "LIBTMUX_SANDBOX_FALLBACK_ROOT",
+                elsewhere.to_str().expect("UTF-8"),
+            ),
+            ("CALLER", root_text),
+        ],
+        "[ -d \"$CALLER\" ] || exit 99; TMUX_TMPDIR=\"$CALLER\" tmux -f /dev/null new-session -d -P -F '#{pid}' > \"$OUT\"",
+    );
+
+    let _server = recorded_server(&fixture).expect("the server pid");
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        !run.stderr.contains("outside the sandbox"),
+        "{}",
+        run.stderr
+    );
+}
+
+/// The helper `scripts/sandbox-outside.sh`, called the way the runner does.
+fn outside(script: &str, arguments: &[&Path]) -> (Option<i32>, String) {
+    let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/sandbox-outside.sh");
+    let output = Command::new("sh")
+        .args(["-c", &format!(". \"$1\"; shift; {script}"), "sh"])
+        .arg(helper)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .output()
+        .expect("sh runs");
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
+}
+
+#[test]
+fn the_outside_check_fails_closed_without_a_reference() {
+    let fixture = Fixture::new();
+    let (root, _) = stand_in_root(&fixture, "caller");
+    let missing = fixture.file("no-reference");
+
+    let (code, printed) = outside("outside_started \"$@\"", &[&missing, &root]);
+
+    assert_eq!(code, Some(2));
+    assert_eq!(printed, "", "something was named without a reference");
+}
+
+#[test]
+fn the_outside_check_names_only_a_socket_made_after_the_reference() {
+    let fixture = Fixture::new();
+    let (root, socket) = stand_in_root(&fixture, "caller");
+    let (other, other_socket) = stand_in_root(&fixture, "other");
+    let reference = fixture.file("reference");
+    let before = UnixListener::bind(&other_socket).expect("a socket binds");
+    assert_eq!(
+        outside("outside_reference \"$1\"", &[&reference]).0,
+        Some(0)
+    );
+    let _after = UnixListener::bind(&socket).expect("a socket binds");
+
+    let (code, printed) = outside("outside_started \"$@\"", &[&reference, &root, &other]);
+
+    assert_eq!(code, Some(0));
+    assert_eq!(printed.trim(), root.to_str().expect("UTF-8 path"));
+    drop(before);
+}
+
+#[test]
+fn the_reference_is_older_than_whatever_is_made_next() {
+    let fixture = Fixture::new();
+    let reference = fixture.file("reference");
+    let next = fixture.file("next");
+    for round in 0..50 {
+        let (code, printed) = outside(
+            "outside_reference \"$1\" && touch \"$2\" && find \"$2\" -newer \"$1\"",
+            &[&reference, &next],
+        );
+        assert_eq!(code, Some(0), "round {round}");
+        assert!(!printed.is_empty(), "round {round}: made in the same tick");
+    }
+}
+
+#[test]
+fn a_run_whose_outside_check_cannot_be_made_fails() {
+    let fixture = Fixture::new();
+
+    // The reference is how the runner tells what the run made.
+    let run = fixture.run(&[], "rm -f \"$TMUX_TMPDIR/.reference\"");
+
+    assert_eq!(run.code, Some(LEFT_A_SERVER), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("could not check for servers outside"),
+        "{}",
+        run.stderr,
+    );
+    assert!(!run.stderr.contains("ltrs."), "a path was printed");
 }

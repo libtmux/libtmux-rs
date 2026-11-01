@@ -14,14 +14,41 @@ canary=(cargo test --locked --package libtmux --doc SandboxCanary)
 triple=$(rustc -vV | sed -n 's/^host: //p')
 swap=(--config "target.\"$triple\".runner=['env']")
 
-log=$(mktemp)
-elsewhere=$(mktemp -d)
+# shellcheck source=sandbox-outside.sh
+. scripts/sandbox-outside.sh
+
+log=
+elsewhere=
 cleanup() {
-    tmux -S "$elsewhere/server.sock" kill-server >/dev/null 2>&1 || true
-    rm -f "${log:?}"
-    rm -rf "${elsewhere:?}"
+    status=$?
+    if [ -n "$elsewhere" ]; then
+        tmux -S "$elsewhere/server.sock" kill-server >/dev/null 2>&1 || true
+        tmux -S "$elsewhere/tmpdir/tmux-$(id -u)/default" kill-server >/dev/null 2>&1 || true
+        # Read, never touched: only the servers this script started are stopped.
+        outside=$(outside_started "$elsewhere/reference" /tmp "${TMUX_TMPDIR-}") || {
+            printf 'could not check for servers outside the sandbox\n' >&2
+            status=70
+        }
+        if [ -n "$outside" ]; then
+            printf 'a tmux server started outside the sandbox during this check; not touched\n' >&2
+            status=70
+        fi
+        rm -rf "${elsewhere:?}"
+    fi
+    [ -z "$log" ] || rm -f "${log:?}"
+    exit "$status"
 }
 trap cleanup EXIT
+
+log=$(mktemp)
+elsewhere=$(mktemp -d)
+# A TMUX_TMPDIR that exists but is not the sandbox. One that does not exist
+# would send a bare client to /tmp/tmux-<uid>, the developer's own sockets.
+mkdir "$elsewhere/tmpdir"
+outside_reference "$elsewhere/reference" || {
+    printf 'cannot write the reference file for the outside check\n' >&2
+    exit 1
+}
 
 # A tmux whose servers listen on a socket of its own, so a bare client does
 # not land on the default socket.
@@ -75,7 +102,7 @@ for variable in TMUX TMUX_PANE LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH; do
 done
 expect_failure 'TMUX_TMPDIR is not LIBTMUX_TEST_SANDBOX' \
     'a TMUX_TMPDIR that is not the sandbox' -- \
-    --config 'env.TMUX_TMPDIR.value="/nonexistent/decoy"' \
+    --config "env.TMUX_TMPDIR.value=\"$elsewhere/tmpdir\"" \
     --config 'env.TMUX_TMPDIR.relative=false'
 expect_failure "missed the sandbox's default socket" \
     'a tmux that lands elsewhere' "LIBTMUX_TEST_TMUX=$elsewhere/tmux" --

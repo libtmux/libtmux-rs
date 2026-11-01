@@ -193,9 +193,10 @@ Before the binary runs, the runner:
 
 - unsets `TMUX`, `TMUX_PANE`, `LIBTMUX_SOCKET` and `LIBTMUX_SOCKET_PATH`;
 - makes a fresh owner-only directory with `mktemp -d` under `TMPDIR`, exits 78
-  when `TMPDIR` is relative or so long that the default socket path would pass
-  100 bytes once links are resolved (`sun_path` holds 104 on macOS and 108 on
-  Linux), and sets `TMUX_TMPDIR` and `LIBTMUX_TEST_SANDBOX` to it.
+  when it cannot, or when `TMPDIR` is relative, missing or so long that the
+  default socket path would pass 100 bytes once links are resolved (`sun_path`
+  holds 104 on macOS and 108 on Linux), and sets `TMUX_TMPDIR` and
+  `LIBTMUX_TEST_SANDBOX` to it.
 
 After the binary exits, the runner searches the whole directory for sockets,
 without following links, since a test can start a server with `-S` on a path of
@@ -204,11 +205,28 @@ unlinks one. It stops each server that answers with `tmux -S <path>
 kill-server`, then checks that a connection fails, retrying for about three
 seconds. A server that still answers keeps the directory, and so does a
 directory that could not be searched, or that holds a socket when no tmux can
-be found to ask; otherwise the directory is removed. The runner exits with the
-binary's own status, with 130 when it was interrupted and the binary passed, or
-with 70 when the binary passed and left a server: a test that starts a bare
-`tmux new-session -d` fails the run that started it and leaves nothing for the
-next one. Its messages give socket paths relative to the directory.
+be found to ask, or that could not be removed; otherwise it is removed. The
+runner exits with the binary's own status, with 130 when it was interrupted and
+the binary passed, or with 70 when the binary passed and left a server: a test
+that starts a bare `tmux new-session -d` fails the run that started it and
+leaves nothing for the next one. Its messages give socket paths relative to the
+directory.
+
+The runner also looks, and only looks, at the `default` socket a bare client
+would use outside the sandbox: under `/tmp`, where tmux goes when `TMUX_TMPDIR`
+names no directory, and under the `TMUX_TMPDIR` the runner received. Under
+Cargo that is the checkout's `[env]` fallback, which is skipped, so the
+caller's own `TMUX_TMPDIR` is seen only when the runner is run by hand and by
+`just doctest-sandbox`. It never connects to those sockets or removes one. A
+socket there made after the run began fails the run with 70, whoever made it,
+since nothing says the server is the run's to stop. A run that reuses a server
+already on that socket, one that makes a socket and removes it, and an `-L`
+name are not seen. `LIBTMUX_SANDBOX_FALLBACK_ROOT` names another directory in
+place of `/tmp`, for the runner's own tests, and the runner says so on stderr.
+`just doctest-sandbox` does the same around its runs, some of which have no
+runner. The window is the whole run, so a tmux server the developer starts in
+another terminal while a long `cargo run` or the doctest check is going fails
+it.
 
 `[env]` in the same file covers what the runner does not wrap. It sets the four
 variables to empty, and `TMUX_TMPDIR` and `LIBTMUX_TEST_SANDBOX` to
