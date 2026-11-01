@@ -975,6 +975,7 @@ changelog marks each break. Pin an exact version to avoid one.
 | [`docs/parity.md`][parity] | The capability ledger against Python libtmux, naming each Rust symbol and the test that exercises it |
 | [`docs/contracts.md`][contracts] | What the crate promises: the version check, deadlines, errors, and the test guard |
 | [`docs/migration.md`](docs/migration.md) | Moving from an earlier alpha |
+| [`CHANGELOG.md`](CHANGELOG.md) | What each release of this crate changed; the [main changelog](https://github.com/libtmux/libtmux-rs/blob/master/CHANGELOG.md) holds what spans crates |
 | [`examples/`][libtmux-examples] | Programs that run and clean up after themselves |
 
 ## License

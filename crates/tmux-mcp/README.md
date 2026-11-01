@@ -708,6 +708,7 @@ README][workspace-agent] has the two commands.
 | [`TOOLS.md`](TOOLS.md) | The generated tool reference |
 | [`docs/contracts.md`][contracts] | What the server promises |
 | [`docs/migration.md`][migration] | Moving from an earlier alpha |
+| [`CHANGELOG.md`](CHANGELOG.md) | What each release of this crate changed; the [main changelog](https://github.com/libtmux/libtmux-rs/blob/master/CHANGELOG.md) holds what spans crates |
 | [`examples/`][examples] | Runnable programs against a tmux of their own |
 
 ## Development

@@ -386,7 +386,7 @@ Lets an MCP client read the sessions a workspace built, as
 | [`docs/cli.md`](docs/cli.md) | How a workspace is found, what a load does when it cannot finish, and where the command departs from tmuxp |
 | [API reference][api-reference] | The library on libtmux.org |
 | [docs.rs][docs-rs] | The library as rustdoc |
-| [Changelog][changelog] | What each release changed |
+| [Changelog][changelog] | What each release of this crate changed; the [main changelog](https://github.com/libtmux/libtmux-rs/blob/master/CHANGELOG.md) holds what spans crates |
 
 ## Development
 
@@ -404,7 +404,7 @@ load every workspace file it shows.
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
 or [MIT license](LICENSE-MIT) at your option.
 
-[changelog]: https://github.com/libtmux/libtmux-rs/blob/master/CHANGELOG.md
+[changelog]: CHANGELOG.md
 [cli-manual]: https://libtmux.org/en/rs/latest/workspace/cli/
 [cli-load]: https://libtmux.org/en/rs/latest/workspace/cli/load/
 [cli-freeze]: https://libtmux.org/en/rs/latest/workspace/cli/freeze/

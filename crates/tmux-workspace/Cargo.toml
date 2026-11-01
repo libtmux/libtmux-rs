@@ -13,6 +13,7 @@ keywords = ["tmux", "tmuxp", "workspace", "yaml", "terminal"]
 categories = ["command-line-utilities", "config", "os::unix-apis"]
 include = [
     "/assets/*",
+    "/CHANGELOG.md",
     "/Cargo.toml",
     "/build.rs",
     "/LICENSE-APACHE",

@@ -178,6 +178,8 @@ filters tmux objects with the same expressions.
   derive implements
 - [The `libtmux` guide](https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md#filtering)
   — filtering tmux objects, which uses the same grammar
+- [`CHANGELOG.md`](CHANGELOG.md) — what each release of this crate changed; the
+  [main changelog](https://github.com/libtmux/libtmux-rs/blob/master/CHANGELOG.md) holds what spans crates
 
 [derive-docs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
 [query-docs]: https://docs.rs/libtmux/latest/libtmux/query/
