@@ -35,11 +35,11 @@ case $parent in
 esac
 [ -d "$parent" ] || refuse "TMPDIR is not a directory"
 # The path tmux binds is the resolved one: /var is /private/var on macOS.
-resolved=$(cd "$parent" && pwd -P) || refuse "TMPDIR cannot be resolved"
+resolved=$(cd "$parent" 2>/dev/null && pwd -P) || refuse "TMPDIR cannot be resolved"
 need=$(($(printf '%s' "$resolved/ltrs.XXXXXX/tmux-$uid/default" | wc -c)))
 [ "$need" -le "$limit" ] ||
     refuse "TMPDIR is too long for a tmux socket path; the limit is $limit bytes"
-sandbox=$(mktemp -d "$parent/ltrs.XXXXXX") ||
+sandbox=$(mktemp -d "$parent/ltrs.XXXXXX" 2>/dev/null) ||
     refuse "cannot create a private TMUX_TMPDIR under TMPDIR"
 chmod 700 "$sandbox"
 export TMUX_TMPDIR="$sandbox" LIBTMUX_TEST_SANDBOX="$sandbox"

@@ -241,7 +241,8 @@ a doctest gets `[env]` and no sweep.
   `$TMUX` as a process inside a pane does, and for no other example. It also
   runs `inspect` with every variable aimed at its fixture server and none
   handed over by name, and requires that the example finds no server on the
-  sandbox's default socket.
+  sandbox's default socket. The name is for `cargo run` and examples: the test
+  binaries that refuse outside the sandbox refuse a named `TMUX` as well.
 - A test binary started by hand has not been through Cargo, so none of this
   applies to it. The canary refuses to run there.
 
