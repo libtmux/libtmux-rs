@@ -164,7 +164,80 @@ impl Process {
     }
 }
 
+/// Whether this is a checkout, which has the sandbox's `.cargo/config.toml`.
+///
+/// A package does not, and there nothing applies one.
+fn in_checkout() -> bool {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.cargo/config.toml")
+        .is_file()
+}
+
+/// Refuse to start a child when a checkout's sandbox did not reach this process,
+/// naming the variable at fault and never its value.
+fn require_sandbox() {
+    if !in_checkout() {
+        return;
+    }
+    for name in ["TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH"] {
+        assert!(
+            std::env::var_os(name).is_none(),
+            "{name} is set; run this from the checkout, where Cargo sandboxes it",
+        );
+    }
+    assert!(
+        std::env::var_os("LIBTMUX_TEST_SANDBOX").is_some(),
+        "LIBTMUX_TEST_SANDBOX is unset; run this from the checkout, where Cargo sandboxes it",
+    );
+}
+
+#[test]
+fn the_sandbox_reached_this_process() {
+    require_sandbox();
+}
+
+#[test]
+fn a_pane_environment_is_refused_and_no_value_is_printed() {
+    if !in_checkout() {
+        return;
+    }
+    let rerun = |environment: Option<&[(&str, &str)]>| {
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command.args([
+            "--exact",
+            "the_sandbox_reached_this_process",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+        if let Some(environment) = environment {
+            command.env_clear().envs(environment.iter().copied());
+        }
+        let output = command.output().expect("the test executable runs");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        (output.status.success(), text)
+    };
+
+    let (passes, text) = rerun(None);
+    assert!(
+        passes && text.contains("1 passed"),
+        "the control must pass:\n{text}",
+    );
+
+    let (passes, text) = rerun(Some(&[
+        ("TMUX", "/nonexistent/decoy.sock,1,0"),
+        ("TMUX_PANE", "%9"),
+    ]));
+    assert!(!passes && text.contains("1 failed"), "a pane got through");
+    assert!(text.contains("TMUX is set"), "{text}");
+    assert!(!text.contains("decoy"), "a failure printed a value");
+}
+
 fn base_command(root: &PrivateRoot) -> Command {
+    require_sandbox();
     let mut command = Command::new(BIN);
     command
         .env_remove("TMUX")

@@ -36,3 +36,48 @@ fn a_cleared_child_without_the_helper_loses_it() {
 
     assert_eq!(output.stdout, b"unset", "the control: env_clear() drops it");
 }
+
+#[test]
+fn the_sandbox_reached_this_process() {
+    support::require_sandbox();
+}
+
+#[test]
+fn a_pane_environment_is_refused_and_no_value_is_printed() {
+    if !support::in_checkout() {
+        return;
+    }
+    let rerun = |environment: Option<&[(&str, &str)]>| {
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command.args([
+            "--exact",
+            "the_sandbox_reached_this_process",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+        if let Some(environment) = environment {
+            command.env_clear().envs(environment.iter().copied());
+        }
+        let output = command.output().expect("the test executable runs");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        (output.status.success(), text)
+    };
+
+    let (passes, text) = rerun(None);
+    assert!(
+        passes && text.contains("1 passed"),
+        "the control must pass:\n{text}",
+    );
+
+    let (passes, text) = rerun(Some(&[
+        ("TMUX", "/nonexistent/decoy.sock,1,0"),
+        ("TMUX_PANE", "%9"),
+    ]));
+    assert!(!passes && text.contains("1 failed"), "a pane got through");
+    assert!(text.contains("TMUX is set"), "{text}");
+    assert!(!text.contains("decoy"), "a failure printed a value");
+}

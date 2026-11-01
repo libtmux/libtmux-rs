@@ -3,6 +3,10 @@
 //! ```console
 //! $ cargo run --example find -- nvim
 //! ```
+//!
+//! Reads the same server as `inspect`. Run from a checkout of this repository,
+//! `cargo run` hides it behind the test sandbox; run the built binary to
+//! search a real one.
 
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::{Pane, Server};
