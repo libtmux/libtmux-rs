@@ -6,6 +6,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::net::UnixListener;
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -91,6 +92,24 @@ impl Fixture {
 
     fn answer(&self) -> String {
         std::fs::read_to_string(self.file("out")).unwrap_or_default()
+    }
+
+    /// A directory of links to the tools the runner and a shell command use,
+    /// and to no tmux, for a `PATH` on which no tmux is found.
+    fn path_without_tmux(&self) -> String {
+        let bin = self.file("bin");
+        std::fs::create_dir(&bin).expect("a tool directory");
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        for tool in [
+            "id", "mktemp", "chmod", "wc", "sed", "tr", "find", "head", "rm", "ln", "sh",
+        ] {
+            let found = std::env::split_paths(&path)
+                .map(|directory| directory.join(tool))
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| panic!("{tool} is not on PATH"));
+            std::os::unix::fs::symlink(found, bin.join(tool)).expect("a tool link");
+        }
+        bin.to_str().expect("UTF-8 path").to_owned()
     }
 
     /// The runner's private directories still in the parent.
@@ -294,6 +313,40 @@ fn it_refuses_a_tmpdir_too_long_for_a_socket_path() {
     assert!(!fixture.file("marker").exists(), "the binary ran");
     assert!(run.stderr.contains("TMPDIR"), "TMPDIR is not named");
     assert!(!run.stderr.contains(long), "a value was printed");
+}
+
+#[test]
+fn it_refuses_a_relative_tmpdir_that_exists() {
+    let fixture = Fixture::new();
+
+    // `.` is a directory, so only its being relative can refuse it.
+    let output = fixture
+        .command(&[("TMPDIR", ".")], "touch \"$MARKER\"")
+        .current_dir(fixture.parent.path())
+        .output()
+        .expect("the runner starts");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(REFUSED), "{stderr}");
+    assert!(!fixture.file("marker").exists(), "the binary ran");
+    assert!(stderr.contains("TMPDIR"), "TMPDIR is not named");
+}
+
+#[test]
+fn it_measures_the_directory_a_tmpdir_link_resolves_to() {
+    let fixture = Fixture::new();
+    let long = fixture.file(&"a".repeat(80));
+    std::fs::create_dir(&long).expect("a long directory");
+    let link = fixture.file("short");
+    std::os::unix::fs::symlink(&long, &link).expect("a link to it");
+    let link = link.to_str().expect("UTF-8 path");
+
+    let run = fixture.run(&[("TMPDIR", link)], "touch \"$MARKER\"");
+
+    assert_eq!(run.code, Some(REFUSED), "{}", run.stderr);
+    assert!(!fixture.file("marker").exists(), "the binary ran");
+    assert!(run.stderr.contains("TMPDIR"), "TMPDIR is not named");
+    assert!(!run.stderr.contains(link), "a value was printed");
 }
 
 #[test]
@@ -572,4 +625,44 @@ fn it_keeps_the_directory_when_it_cannot_search_it() {
         1,
         "the directory was deleted"
     );
+}
+
+#[test]
+fn without_tmux_a_socket_in_the_sandbox_keeps_the_directory() {
+    let fixture = Fixture::new();
+    let outer = fixture.file("outer.sock");
+    let _listener = UnixListener::bind(&outer).expect("a socket binds");
+    let path = fixture.path_without_tmux();
+    let run = fixture.run(
+        &[
+            ("PATH", &path),
+            ("LIBTMUX_TEST_TMUX", "/nonexistent/tmux"),
+            ("OUTER", outer.to_str().expect("UTF-8 path")),
+        ],
+        "ln \"$OUTER\" \"$TMUX_TMPDIR/linked.sock\"",
+    );
+
+    assert_eq!(run.code, Some(LEFT_A_SERVER), "{}", run.stderr);
+    assert!(run.stderr.contains("no tmux"), "{}", run.stderr);
+    assert!(run.stderr.contains("directory is kept"), "{}", run.stderr);
+    assert_eq!(
+        fixture.private_directories(),
+        1,
+        "the directory was deleted"
+    );
+}
+
+#[test]
+fn without_tmux_a_directory_with_no_socket_is_removed() {
+    let fixture = Fixture::new();
+    let path = fixture.path_without_tmux();
+
+    let run = fixture.run(
+        &[("PATH", &path), ("LIBTMUX_TEST_TMUX", "/nonexistent/tmux")],
+        "exit 0",
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stderr, "", "a clean run says nothing");
+    assert_eq!(fixture.private_directories(), 0);
 }

@@ -5,14 +5,9 @@
 #
 #   sandbox-runner.sh <binary> [args...]
 #
-# TMUX, TMUX_PANE, LIBTMUX_SOCKET and LIBTMUX_SOCKET_PATH are removed. The one
-# way back to a server is LIBTMUX_SANDBOX_TMUX: when it is set and not empty,
-# the binary gets its value as TMUX, so a caller names the server it wants
-# instead of letting an inherited TMUX through. TMUX_PANE stays removed.
-#
 # Exit status: the binary's own; 78 when the run is refused before the binary
-# starts; 70 when the binary passed but left a server running. Messages name
-# variables and sockets, never values.
+# starts; 70 when the binary passed but left a server, or the directory could
+# not be checked. Messages name variables and sockets, never values.
 set -u
 
 refuse() {
@@ -22,8 +17,8 @@ refuse() {
 
 [ "$#" -ge 1 ] || refuse "no binary to run"
 
-# The value is read before TMUX is removed and unset before the binary starts,
-# so nothing the binary runs sees it. The ambient TMUX is never the source.
+# LIBTMUX_SANDBOX_TMUX is the one way back to a server, and it names it. The
+# TMUX received is never the source, and TMUX_PANE stays unset.
 named_tmux=${LIBTMUX_SANDBOX_TMUX-}
 unset TMUX TMUX_PANE LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH LIBTMUX_SANDBOX_TMUX
 if [ -n "$named_tmux" ]; then
@@ -40,8 +35,14 @@ limit=100
 uid=$(id -u)
 parent=${TMPDIR:-/tmp}
 parent=${parent%/}
+case $parent in
+/*) ;;
+*) refuse "TMPDIR is not an absolute path" ;;
+esac
 [ -d "$parent" ] || refuse "TMPDIR is not a directory"
-need=$(($(printf '%s' "$parent/ltrs.XXXXXX/tmux-$uid/default" | wc -c)))
+# The path tmux binds is the resolved one: /var is /private/var on macOS.
+resolved=$(cd "$parent" && pwd -P) || refuse "TMPDIR cannot be resolved"
+need=$(($(printf '%s' "$resolved/ltrs.XXXXXX/tmux-$uid/default" | wc -c)))
 [ "$need" -le "$limit" ] ||
     refuse "TMPDIR is too long for a tmux socket path; the limit is $limit bytes"
 sandbox=$(mktemp -d "$parent/ltrs.XXXXXX") ||
@@ -90,15 +91,19 @@ sweep() {
 left=
 stuck=
 unscanned=
+blind=
 if command -v "$tmux_bin" >/dev/null 2>&1; then
     swept=$(sweep) || unscanned=1
     left=$(printf '%s\n' "$swept" | sed -n 's/^left / /p' | tr '\n' ',')
     stuck=$(printf '%s\n' "$swept" | sed -n 's/^stuck / /p' | tr '\n' ',')
+elif [ -n "$(find "$sandbox" -type s 2>/dev/null | head -n 1)" ]; then
+    # A socket nothing can be asked about may have a server behind it.
+    blind=1
 fi
 
 # Nothing owns a directory that still holds a server, so it stays, and so does
-# one that could not be searched.
-if [ -z "$stuck" ] && [ -z "$unscanned" ]; then
+# one that could not be searched or asked about.
+if [ -z "$stuck" ] && [ -z "$unscanned" ] && [ -z "$blind" ]; then
     case $sandbox in
     "$parent"/ltrs.??????) rm -rf "${sandbox:?}" ;;
     esac
@@ -106,6 +111,9 @@ fi
 
 if [ -n "$unscanned" ]; then
     printf 'sandbox-runner: could not search the sandbox for sockets; the directory is kept\n' >&2
+    [ "$status" -eq 0 ] && exit 70
+elif [ -n "$blind" ]; then
+    printf 'sandbox-runner: no tmux to ask about the sandbox sockets; the directory is kept\n' >&2
     [ "$status" -eq 0 ] && exit 70
 elif [ -n "$stuck" ]; then
     printf 'sandbox-runner: could not stop the tmux server on socket(s):%s; the directory is kept\n' "${stuck%,}" >&2
