@@ -106,8 +106,8 @@ jobs:
 
       - name: Install tmux
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends tmux
+          ./scripts/apt-get.sh update
+          ./scripts/apt-get.sh install -y --no-install-recommends tmux
           tmux -V
 
       - uses: dtolnay/rust-toolchain@v1
@@ -245,8 +245,8 @@ jobs:
 
       - name: Install tmux
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends tmux
+          ./scripts/apt-get.sh update
+          ./scripts/apt-get.sh install -y --no-install-recommends tmux
           tmux -V
 
       - uses: dtolnay/rust-toolchain@v1
@@ -296,8 +296,8 @@ jobs:
 
       - name: Install tmux
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends tmux
+          ./scripts/apt-get.sh update
+          ./scripts/apt-get.sh install -y --no-install-recommends tmux
           tmux -V
 
       - uses: dtolnay/rust-toolchain@v1
@@ -353,8 +353,8 @@ jobs:
 
       - name: Install tmux build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          ./scripts/apt-get.sh update
+          ./scripts/apt-get.sh install -y --no-install-recommends \
             autoconf automake bison build-essential git libevent-dev \
             libncurses-dev pkg-config tmux
 
@@ -425,8 +425,8 @@ jobs:
 
       - name: Install tmux build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          ./scripts/apt-get.sh update
+          ./scripts/apt-get.sh install -y --no-install-recommends \
             bison \
             build-essential \
             libevent-dev \
