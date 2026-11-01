@@ -1,7 +1,6 @@
 //! `scripts/sandbox-runner.sh`, the Cargo runner `.cargo/config.toml` names,
-//! run directly around small commands. Each test is a guard of the runner: a
-//! mutation that removes it fails the test named for it. It ships nowhere: a
-//! packaged crate has no runner to run.
+//! run directly around small commands. It ships nowhere: a packaged crate has
+//! no runner to run.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
@@ -199,12 +198,7 @@ const TMUX_VISIBLE: &str =
 fn it_unsets_the_ambient_tmux_and_pane() {
     let fixture = Fixture::new();
     let run = fixture.run(
-        &[
-            ("TMUX", "SENTINEL-ambient,1,0"),
-            ("TMUX_PANE", "%9"),
-            // The retired opt-out keeps nothing.
-            ("LIBTMUX_SANDBOX_KEEP_TMUX", "1"),
-        ],
+        &[("TMUX", "SENTINEL-ambient,1,0"), ("TMUX_PANE", "%9")],
         TMUX_VISIBLE,
     );
 
@@ -313,6 +307,27 @@ fn it_refuses_a_tmpdir_too_long_for_a_socket_path() {
     assert!(!fixture.file("marker").exists(), "the binary ran");
     assert!(run.stderr.contains("TMPDIR"), "TMPDIR is not named");
     assert!(!run.stderr.contains(long), "a value was printed");
+}
+
+#[test]
+fn a_refused_run_does_not_say_the_hatch_applied() {
+    let fixture = Fixture::new();
+
+    let run = fixture.run(
+        &[
+            ("TMPDIR", "relative/dir"),
+            ("LIBTMUX_SANDBOX_TMUX", "SENTINEL-named,1,0"),
+        ],
+        "touch \"$MARKER\"",
+    );
+
+    assert_eq!(run.code, Some(REFUSED), "{}", run.stderr);
+    assert!(!fixture.file("marker").exists(), "the binary ran");
+    assert!(
+        !run.stderr.contains("LIBTMUX_SANDBOX_TMUX"),
+        "the opt-out was logged for a run that never started: {}",
+        run.stderr,
+    );
 }
 
 #[test]

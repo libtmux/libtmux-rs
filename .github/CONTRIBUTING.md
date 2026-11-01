@@ -204,11 +204,11 @@ unlinks one. It stops each server that answers with `tmux -S <path>
 kill-server`, then checks that a connection fails, retrying for about three
 seconds. A server that still answers keeps the directory, and so does a
 directory that could not be searched, or that holds a socket when no tmux can
-be found to ask; otherwise the directory is removed. The
-runner exits with the binary's own status, or with 70 when the binary passed
-and left a server: a test that starts a bare `tmux new-session -d` fails the run
-that started it and leaves nothing for the next one. Its messages give socket
-paths relative to the directory.
+be found to ask; otherwise the directory is removed. The runner exits with the
+binary's own status, with 130 when it was interrupted and the binary passed, or
+with 70 when the binary passed and left a server: a test that starts a bare
+`tmux new-session -d` fails the run that started it and leaves nothing for the
+next one. Its messages give socket paths relative to the directory.
 
 `[env]` in the same file covers what the runner does not wrap. It sets the four
 variables to empty, and `TMUX_TMPDIR` and `LIBTMUX_TEST_SANDBOX` to

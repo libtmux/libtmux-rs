@@ -7,7 +7,8 @@
 #
 # Exit status: the binary's own; 78 when the run is refused before the binary
 # starts; 70 when the binary passed but left a server, or the directory could
-# not be checked. Messages name variables and sockets, never values.
+# not be checked; 130 when interrupted and the binary passed. Messages name
+# variables and sockets, never values.
 set -u
 
 refuse() {
@@ -21,13 +22,6 @@ refuse() {
 # TMUX received is never the source, and TMUX_PANE stays unset.
 named_tmux=${LIBTMUX_SANDBOX_TMUX-}
 unset TMUX TMUX_PANE LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH LIBTMUX_SANDBOX_TMUX
-if [ -n "$named_tmux" ]; then
-    TMUX=$named_tmux
-    export TMUX
-    printf 'sandbox-runner: LIBTMUX_SANDBOX_TMUX is set: true; %s\n' \
-        'TMUX comes from it and TMUX_PANE is unset' >&2
-fi
-unset named_tmux
 
 # tmux appends tmux-<uid>/default, and sun_path holds 104 bytes on macOS and
 # 108 on Linux.
@@ -50,6 +44,14 @@ sandbox=$(mktemp -d "$parent/ltrs.XXXXXX") ||
 chmod 700 "$sandbox"
 export TMUX_TMPDIR="$sandbox" LIBTMUX_TEST_SANDBOX="$sandbox"
 
+if [ -n "$named_tmux" ]; then
+    TMUX=$named_tmux
+    export TMUX
+    printf 'sandbox-runner: LIBTMUX_SANDBOX_TMUX is set: true; %s\n' \
+        'TMUX comes from it and TMUX_PANE is unset' >&2
+fi
+unset named_tmux
+
 # Held until the binary exits, so an interrupt still reaches the sweep below.
 trap 'interrupted=1' INT TERM HUP
 "$@"
@@ -59,11 +61,9 @@ trap - INT TERM HUP
 tmux_bin=${LIBTMUX_TEST_TMUX:-tmux}
 command -v "$tmux_bin" >/dev/null 2>&1 || tmux_bin=tmux
 
-# Every socket anywhere under the sandbox, links not followed, since a test can
-# start a server with -S on a path of its own. A socket file nothing answers on
-# is not a server: tmux never unlinks it. A mismatched release answers with a
-# protocol error, which still means something is listening. Prints "left <path>"
-# for each server found and "stuck <path>" for each that survives kill-server.
+# Every socket under the sandbox, links not followed: a test can start a server
+# with -S anywhere in it. A socket file nothing answers on is not a server, and
+# a protocol mismatch still means one listens. Prints "left" and "stuck" paths.
 sweep() {
     find "$sandbox" -type s -exec sh -c '
         tmux_bin=$1 sandbox=$2
