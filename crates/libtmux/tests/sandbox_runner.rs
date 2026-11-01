@@ -151,33 +151,26 @@ fn recorded_server(fixture: &Fixture) -> Option<Recorded> {
     }
 }
 
-#[test]
-fn it_refuses_a_socket_variable_before_anything_runs() {
-    for name in ["LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH"] {
-        let fixture = Fixture::new();
-        let run = fixture.run(&[(name, SENTINEL)], "touch \"$MARKER\"");
+const SOCKET_VISIBLE: &str = "if [ -z \"${LIBTMUX_SOCKET+x}${LIBTMUX_SOCKET_PATH+x}\" ]; \
+     then echo unset; else echo set; fi > \"$OUT\"";
 
-        assert_eq!(run.code, Some(REFUSED), "{name}: {}", run.stderr);
-        assert!(!fixture.file("marker").exists(), "{name}: the binary ran");
-        assert_eq!(fixture.private_directories(), 0, "{name}: made a directory");
-        assert!(run.stderr.contains(name), "{name} is not named");
-        assert!(
-            !run.stderr.contains(SENTINEL),
-            "{name}: a value was printed"
-        );
+#[test]
+fn it_removes_the_socket_variables_before_the_binary_runs() {
+    for (what, value) in [("set", SENTINEL), ("empty", "")] {
+        for names in [
+            &["LIBTMUX_SOCKET"][..],
+            &["LIBTMUX_SOCKET_PATH"],
+            &["LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH"],
+        ] {
+            let fixture = Fixture::new();
+            let environment: Vec<(&str, &str)> = names.iter().map(|name| (*name, value)).collect();
+            let run = fixture.run(&environment, SOCKET_VISIBLE);
+
+            assert_eq!(run.code, Some(0), "{what} {names:?}: {}", run.stderr);
+            assert_eq!(fixture.answer().trim(), "unset", "{what} {names:?}");
+            assert_eq!(run.stderr, "", "{what} {names:?}: a clean run says nothing");
+        }
     }
-}
-
-#[test]
-fn it_lets_an_empty_socket_variable_through() {
-    let fixture = Fixture::new();
-    let run = fixture.run(
-        &[("LIBTMUX_SOCKET", ""), ("LIBTMUX_SOCKET_PATH", "")],
-        "touch \"$MARKER\"",
-    );
-
-    assert_eq!(run.code, Some(0), "{}", run.stderr);
-    assert!(fixture.file("marker").exists());
 }
 
 #[test]

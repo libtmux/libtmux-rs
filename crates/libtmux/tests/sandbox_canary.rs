@@ -1,9 +1,11 @@
 //! The tmux environment Cargo gives every test, checked from inside one.
 //!
-//! `.cargo/config.toml` empties `TMUX` and `TMUX_PANE` and points `TMUX_TMPDIR`
-//! at `.cargo/tmux-sandbox`. This file asserts that, starts a bare tmux client
-//! to see where its default socket lands, and runs itself again in the
-//! environment of a tmux pane, where it must fail. A failure names a variable,
+//! `.cargo/config.toml` empties `TMUX`, `TMUX_PANE`, `LIBTMUX_SOCKET` and
+//! `LIBTMUX_SOCKET_PATH` and points `TMUX_TMPDIR` at `.cargo/tmux-sandbox`; the
+//! runner then unsets the four and gives the process a directory of its own.
+//! This file asserts the result, starts a bare tmux client to see where its
+//! default socket lands, and runs itself again in the environment of a tmux
+//! pane, where it must fail. A failure names a variable,
 //! never its value. It ships nowhere: a packaged crate has no
 //! `.cargo/config.toml` to assert.
 
@@ -49,10 +51,6 @@ fn uid() -> u32 {
     rustix::process::getuid().as_raw()
 }
 
-fn is_set(lookup: Lookup<'_>, name: &str) -> bool {
-    lookup(name).is_some_and(|value| !value.is_empty())
-}
-
 /// Whether anything accepts connections on `socket`. tmux never unlinks its
 /// socket, so a file that is still there says nothing about a server.
 fn listening(socket: &Path) -> bool {
@@ -65,16 +63,9 @@ fn findings(lookup: Lookup<'_>) -> Vec<String> {
 
     // The runner unsets them. `[env]` can only empty them, so empty means the
     // runner did not wrap this process.
-    for name in ["TMUX", "TMUX_PANE"] {
+    for name in ["TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH"] {
         if lookup(name).is_some() {
             found.push(format!("{name} is set; the sandbox runner unsets it"));
-        }
-    }
-    // Nothing empties these yet, and tmux-mcp reads an empty one as invalid
-    // rather than unset, so the run is refused instead.
-    for name in ["LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH"] {
-        if is_set(lookup, name) {
-            found.push(format!("{name} is set; unset it for this run"));
         }
     }
 
@@ -323,11 +314,16 @@ fn each_finding_names_what_is_wrong() {
     let fallback = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/tmux-sandbox");
     let fallback = fallback.to_str().expect("UTF-8 fallback path");
 
-    let cases: [Case<'_>; 14] = [
+    let cases: [Case<'_>; 16] = [
         ("TMUX is set", &[("TMUX", Some("/tmp/decoy.sock,1,0"))]),
         ("TMUX is set", &[("TMUX", Some(""))]),
         ("TMUX_PANE is set", &[("TMUX_PANE", Some("%9"))]),
         ("LIBTMUX_SOCKET is set", &[("LIBTMUX_SOCKET", Some("name"))]),
+        ("LIBTMUX_SOCKET is set", &[("LIBTMUX_SOCKET", Some(""))]),
+        (
+            "LIBTMUX_SOCKET_PATH is set",
+            &[("LIBTMUX_SOCKET_PATH", Some(""))],
+        ),
         (
             "LIBTMUX_SOCKET_PATH is set",
             &[("LIBTMUX_SOCKET_PATH", Some("/tmp/decoy.sock"))],
@@ -402,17 +398,6 @@ fn each_finding_names_what_is_wrong() {
             changes.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
         );
     }
-}
-
-#[test]
-fn an_empty_socket_variable_is_not_a_set_one() {
-    // Empty is what the ADR will make of both, and what Cargo's `[env]` can
-    // set; a refusal on it would stop the run that change makes possible.
-    let emptied = findings(&|name| match name {
-        "LIBTMUX_SOCKET" | "LIBTMUX_SOCKET_PATH" => Some(OsString::new()),
-        _ => process_environment(name),
-    });
-    assert_eq!(emptied, Vec::<String>::new(), "an empty value is not set");
 }
 
 #[test]

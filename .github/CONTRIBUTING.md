@@ -191,12 +191,7 @@ the session it was started from.
 which Cargo puts in front of every test, example and bench binary it starts.
 Before the binary runs, the runner:
 
-- exits 78, naming the variable, while `LIBTMUX_SOCKET` or
-  `LIBTMUX_SOCKET_PATH` holds a value. `tmux-mcp` reads an empty value as an
-  invalid socket, not as unset, so nothing empties them yet; the change that
-  makes an empty value mean unset also makes `[env]` empty them, and the
-  refusal goes with it;
-- unsets `TMUX` and `TMUX_PANE`;
+- unsets `TMUX`, `TMUX_PANE`, `LIBTMUX_SOCKET` and `LIBTMUX_SOCKET_PATH`;
 - makes a fresh owner-only directory with `mktemp -d` under `TMPDIR`, exits 78
   when `TMPDIR` is so long that the default socket path would pass 100 bytes
   (`sun_path` holds 104 on macOS and 108 on Linux), and sets `TMUX_TMPDIR` and
@@ -214,16 +209,16 @@ and left a server: a test that starts a bare `tmux new-session -d` fails the run
 that started it and leaves nothing for the next one. Its messages give socket
 paths relative to the directory.
 
-`[env]` in the same file covers what the runner does not wrap. It sets `TMUX`
-and `TMUX_PANE` to empty, and `TMUX_TMPDIR` and `LIBTMUX_TEST_SANDBOX` to
+`[env]` in the same file covers what the runner does not wrap. It sets the four
+variables to empty, and `TMUX_TMPDIR` and `LIBTMUX_TEST_SANDBOX` to
 `.cargo/tmux-sandbox`, a directory of the checkout. Cargo 1.97.1 runs doctests
 through the runner; 1.85.0 and 1.88.0 do not (measured), so on those toolchains
 a doctest gets `[env]` and no sweep.
 
 - `[env]` empties the variables rather than removing them because it cannot
   unset one. The `libtmux` core, `tmux-workspace` and `tmux-mcp` read an empty
-  `TMUX` as unset. The `from_env` constructors fail on an empty variable as
-  they do on an unset one, with a different error.
+  one as unset. The `from_env` constructors fail on an empty `TMUX` or
+  `TMUX_PANE` as they do on an unset one, with a different error.
 - The fallback directory is committed because tmux ignores a `TMUX_TMPDIR` that
   does not exist and falls back to `/tmp` (measured on 3.8a), which is the
   default socket this exists to avoid. Nothing is meant to listen in it.
@@ -235,11 +230,10 @@ a doctest gets `[env]` and no sweep.
   `scripts/run-examples.sh` does for the server it owns:
   `cargo run --config 'env.TMUX.value="<TMUX>"' --config 'env.TMUX.force=true'`.
 - A test binary started by hand has not been through Cargo, so none of this
-  applies to it. The canary and the `tmux-mcp` binary tests refuse to run
-  there.
+  applies to it. The canary refuses to run there.
 
-`crates/libtmux/tests/sandbox_canary.rs` asserts that the runner applied: `TMUX`
-and `TMUX_PANE` are unset, and `TMUX_TMPDIR` is a directory of this user's that
+`crates/libtmux/tests/sandbox_canary.rs` asserts that the runner applied: the
+four variables are unset, and `TMUX_TMPDIR` is a directory of this user's that
 is not the committed fallback. It resolves the default socket under the sandbox
 and fails if a server is listening on it; a leftover socket file is not one,
 since tmux never unlinks its socket. It starts a bare tmux client, with no `-L`
@@ -254,9 +248,9 @@ The fallback directory takes the checkout's umask, because git records no
 directory modes; the runner's is owner-only. What tmux keeps private is
 `tmux-<uid>` inside either, which tmux creates 0700 and refuses to use when
 others can reach it (measured on 3.8a); the canary checks that one when it
-exists, and that the default socket path fits in `sun_path`. The canary, the
-runner tests and `crates/tmux-mcp/tests/binary.rs` are not packaged: a
-published crate has no `.cargo/config.toml` and no runner.
+exists, and that the default socket path fits in `sun_path`. The canary and the
+runner tests are not packaged: a published crate has no `.cargo/config.toml` and
+no runner.
 
 ## Flaky, or broken?
 

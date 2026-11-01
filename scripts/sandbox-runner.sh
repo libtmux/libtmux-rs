@@ -17,11 +17,8 @@ refuse() {
 
 [ "$#" -ge 1 ] || refuse "no binary to run"
 
-# Nothing empties these yet, and tmux-mcp reads an empty one as invalid.
-for name in LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH; do
-    eval "value=\${$name-}"
-    [ -z "$value" ] || refuse "$name is set; unset it for this run"
-done
+# `[env]` can only empty these, and the core reads an empty one as unset.
+unset LIBTMUX_SOCKET LIBTMUX_SOCKET_PATH
 
 # scripts/run-examples.sh passes the TMUX of a server it owns.
 if [ "${LIBTMUX_SANDBOX_KEEP_TMUX:-}" != 1 ]; then
