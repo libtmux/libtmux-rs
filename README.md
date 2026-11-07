@@ -44,6 +44,7 @@ Protocol.
 **Contents** — [Quick start](#quick-start) ·
 [Is this for you?](#is-this-for-you) ·
 [Query what is there](#query-what-is-there) ·
+[Refresh an object](#refresh-an-object) ·
 [Pick how commands reach tmux](#pick-how-commands-reach-tmux) ·
 [Load workspaces](#load-workspaces-from-yaml) ·
 [Drive tmux from an agent](#drive-tmux-from-an-agent) ·
@@ -211,6 +212,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 With the `serde` feature an expression lowers to a [versioned JSON envelope], so
 a CLI, a config file, or an MCP tool call can carry one.
+
+## Refresh an object
+
+### [`Window::refresh`] and [`Window::refreshed`]: read a held handle again
+
+A `Session`, `Window` or `Pane` you hold is what tmux said when it was read.
+A change made through another handle, another client or tmux itself does not
+reach it. `refresh().await?` reads it again in place, as Python libtmux's
+`.refresh()` does; `refreshed().await?` returns a new handle and leaves the
+receiver as it was. The methods that change an object, such as `rename`, update
+the handle they were called on:
+
+```rust
+use libtmux::test::TestServer;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let server = guard.server();
+
+    let session = server.new_session("work").await?;
+    let mut editor = session.new_window("editor").await?;
+
+    // A second handle to the same window renames it.
+    let mut other = editor.clone();
+    other.rename("build").await?;
+
+    // `editor` still holds what tmux said before the rename.
+    assert_eq!(editor.name().to_string_lossy(), "editor");
+
+    let later = editor.refreshed().await?;
+    assert_eq!(later.name().to_string_lossy(), "build");
+    assert_eq!(editor.name().to_string_lossy(), "editor");
+
+    editor.refresh().await?;
+    assert_eq!(editor.name().to_string_lossy(), "build");
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
+[`Session`] and [`Pane`] have the same two methods. A refresh returns
+`Error::ObjectGone` when the object no longer exists.
 
 ## Pick how commands reach tmux
 
@@ -517,6 +562,10 @@ conditions.
 [versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
 [Three switches]: https://libtmux.org/en/rs/latest/concepts/transports/
 [Folding]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-folding/
+[`Window::refresh`]: https://libtmux.org/en/rs/latest/reference/window-window-refresh/
+[`Window::refreshed`]: https://libtmux.org/en/rs/latest/reference/window-window-refreshed/
+[`Session`]: https://libtmux.org/en/rs/latest/reference/session-session/
+[`Pane`]: https://libtmux.org/en/rs/latest/reference/pane-pane/
 [`Plan::run`]: https://libtmux.org/en/rs/latest/reference/plan-plan-run/
 [`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/server-server-over_control_mode/
 [Control mode]: https://libtmux.org/en/rs/latest/reference/control-controlmode/
