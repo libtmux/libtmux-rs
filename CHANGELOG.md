@@ -21,6 +21,14 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
+### Changed
+
+- CI installs the toolchain `rust-toolchain.toml` pins and caches builds with
+  `actions-rust-lang/setup-rust-toolchain`, where jobs installed `stable` and
+  let the pin override it inside the checkout. Clippy and rustfmt failures now
+  show on the pull request diff. The 1.85.0 and 1.88.0 floors and `nightly`
+  install alongside the pin. (#140)
+
 ## 0.1.2 - 2026-11-01
 
 `libtmux`, `libtmux-macros`, `tmux-workspace` and `tmux-mcp` are all 0.1.2.
