@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/libtmux/libtmux-rs/crates/tmux-workspace/tests/fixtures/tmuxp/expected/syntax-support.schema.json",
+  "title": "Which tmuxp syntax one port's workspace loader supports",
+  "description": "One record per port, written by that port's catalog test from what the test observed loading each example, not by hand. A port's test fails when its checked-in record and what it observes disagree. The features and the examples that exercise them are in syntax-features.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "port", "surface", "tmuxp", "files", "features"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "port": {
+      "description": "The port's name as the docs site spells it, such as `go`.",
+      "type": "string",
+      "minLength": 1
+    },
+    "surface": {
+      "description": "What was loaded: the command, function or type whose output the test compared with the expected structure.",
+      "type": "string",
+      "minLength": 1
+    },
+    "tmuxp": {
+      "description": "The tmuxp release whose examples and expected structure the test used.",
+      "const": "1.74.0"
+    },
+    "files": {
+      "description": "One entry per example, sorted by file name, as the test saw it.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/file" }
+    },
+    "features": {
+      "description": "One entry per feature in syntax-features.json, in that file's order, derived from `files`.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/feature" }
+    }
+  },
+  "$defs": {
+    "featureId": {
+      "type": "string",
+      "pattern": "^[a-z_]+(\\.[a-z_-]+)*$"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "outcome", "deviations", "refusal"],
+      "properties": {
+        "file": { "type": "string", "pattern": "^[^/]+\\.yaml$" },
+        "outcome": {
+          "description": "`matches`: the loaded model equals the expected structure. `deviates`: it loads, and differs in exactly the places `deviations` lists. `refused`: the loader reports an error.",
+          "enum": ["matches", "deviates", "refused"]
+        },
+        "deviations": {
+          "description": "Empty unless `outcome` is `deviates`.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "reason", "features"],
+            "properties": {
+              "path": {
+                "description": "RFC 6901 pointer into the expected file, or into the port's mapped view where the port's model has no counterpart.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why the port differs, in a sentence a reader of the compatibility table can use.",
+                "type": "string",
+                "minLength": 1
+              },
+              "features": {
+                "description": "The features this difference limits.",
+                "type": "array",
+                "minItems": 1,
+                "items": { "$ref": "#/$defs/featureId" }
+              }
+            }
+          }
+        },
+        "refusal": {
+          "description": "null unless `outcome` is `refused`.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["message", "features"],
+              "properties": {
+                "message": {
+                  "description": "The error the loader reports, verbatim.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "features": {
+                  "description": "The features the refusal is about; the rest of the file was not checked.",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "$ref": "#/$defs/featureId" }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "detail", "files"],
+      "properties": {
+        "id": { "$ref": "#/$defs/featureId" },
+        "status": {
+          "description": "`supported`: an example exercises it and its file matched, and none contradicts. `supported_with_difference`: it loads and a deviation names it. `refused`: a refusal names it. `unverified`: no example that matches exercises it, so the test saw nothing either way.",
+          "enum": ["supported", "supported_with_difference", "refused", "unverified"]
+        },
+        "detail": {
+          "description": "null when supported or unverified. The deviation reasons, or the refusal messages, joined with a semicolon.",
+          "type": ["string", "null"]
+        },
+        "files": {
+          "description": "The examples that exercise the feature.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

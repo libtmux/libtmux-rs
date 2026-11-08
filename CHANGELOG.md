@@ -21,6 +21,14 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
+### Added
+
+- `crates/tmux-workspace/tests/fixtures/tmuxp/expected/` holds the structure
+  tmuxp 1.74.0's own loader makes of each of its 23 examples, a schema for it,
+  `generate.py` to rewrite it, and a list of the tmuxp syntax the examples use.
+  Each port copies it beside its own catalog and compares its loaded model.
+  The directory ships in the `tmux-workspace` package. (#144)
+
 ### Changed
 
 - CI installs the toolchain `rust-toolchain.toml` pins and caches builds with

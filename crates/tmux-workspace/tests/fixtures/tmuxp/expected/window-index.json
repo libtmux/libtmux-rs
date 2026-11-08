@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "source": "window-index.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "Window index example",
+    "start_directory": null,
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": "zero",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"this window's index will be zero\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "five",
+      "window_index": 5,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"this window's index will be five\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "one",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"this window's index will be one\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": null
+  }
+}

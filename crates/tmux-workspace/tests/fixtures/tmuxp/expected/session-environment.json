@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "source": "session-environment.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "Environment variables test",
+    "start_directory": null,
+    "environment": {
+      "EDITOR": "/usr/bin/vim",
+      "DJANGO_SETTINGS_MODULE": "my_app.settings.local",
+      "SERVER_PORT": "8009"
+    },
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": "Django project",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "./manage.py runserver 0.0.0.0:@SERVER_PORT@",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "Another Django project",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": {
+        "DJANGO_SETTINGS_MODULE": "my_app.settings.local",
+        "SERVER_PORT": "8010"
+      },
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": {
+            "DJANGO_SETTINGS_MODULE": "my_app.settings.local",
+            "SERVER_PORT": "8010"
+          },
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "./manage.py runserver 0.0.0.0:@SERVER_PORT@",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": {
+            "DJANGO_SETTINGS_MODULE": "my_app.settings.local-testing",
+            "SERVER_PORT": "8011"
+          },
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "./manage.py runserver 0.0.0.0:@SERVER_PORT@",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": null
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "source": "sleep-virtualenv.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "virtualenv",
+    "start_directory": null,
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": null,
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "source .venv/bin/activate",
+              "enter": true,
+              "runtime": {
+                "sleep_before": 1,
+                "sleep_after": 1
+              }
+            },
+            {
+              "cmd": "./manage.py runserver",
+              "enter": true,
+              "runtime": {
+                "sleep_before": 1,
+                "sleep_after": 1
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": null
+  }
+}
