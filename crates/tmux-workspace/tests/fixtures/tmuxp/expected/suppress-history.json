@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "source": "suppress-history.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "suppress",
+    "start_directory": null,
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": "appended",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": true,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"window in the history!\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": false
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "suppressed",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"window not in the history!\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "default",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"session in the history!\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": false
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "mixed",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"command in the history!\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": false
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"command not in the history!\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"window in the history!\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": false
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": false
+  }
+}

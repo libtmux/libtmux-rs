@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "tmuxp": "1.74.0",
+  "features": [
+    {
+      "id": "session.shell_command_before",
+      "title": "shell_command_before on the session",
+      "syntax": "shell_command_before at the top of the file",
+      "files": [
+        "env-variables.yaml",
+        "sleep-virtualenv.yaml"
+      ]
+    },
+    {
+      "id": "window.shell_command_before",
+      "title": "shell_command_before on a window",
+      "syntax": "shell_command_before in a window",
+      "files": [
+        "3-pane.yaml",
+        "4-pane.yaml",
+        "focus-window-and-panes.yaml",
+        "plugin-system.yaml"
+      ]
+    },
+    {
+      "id": "pane.shell_command_before",
+      "title": "shell_command_before on a pane",
+      "syntax": "shell_command_before in a pane",
+      "files": []
+    },
+    {
+      "id": "session.before_script",
+      "title": "before_script",
+      "syntax": "before_script at the top of the file",
+      "files": [
+        "env-variables.yaml"
+      ]
+    },
+    {
+      "id": "sleep_before",
+      "title": "sleep_before",
+      "syntax": "sleep_before on a pane or a command, including those in shell_command_before",
+      "files": [
+        "sleep-pane-level.yaml",
+        "sleep-virtualenv.yaml",
+        "sleep.yaml"
+      ]
+    },
+    {
+      "id": "sleep_after",
+      "title": "sleep_after",
+      "syntax": "sleep_after on a pane or a command, including those in shell_command_before",
+      "files": [
+        "sleep-virtualenv.yaml",
+        "sleep.yaml"
+      ]
+    },
+    {
+      "id": "session.plugins",
+      "title": "plugins",
+      "syntax": "plugins at the top of the file",
+      "files": [
+        "plugin-system.yaml"
+      ]
+    },
+    {
+      "id": "window.window_shell",
+      "title": "window_shell",
+      "syntax": "window_shell in a window",
+      "files": [
+        "pane-shell.yaml"
+      ]
+    },
+    {
+      "id": "pane.shell",
+      "title": "pane shell",
+      "syntax": "shell in a pane",
+      "files": [
+        "pane-shell.yaml"
+      ]
+    },
+    {
+      "id": "suppress_history",
+      "title": "suppress_history",
+      "syntax": "suppress_history at any level",
+      "files": [
+        "pane-shell.yaml",
+        "suppress-history.yaml"
+      ]
+    },
+    {
+      "id": "window.focus",
+      "title": "window focus",
+      "syntax": "focus: true on a window",
+      "files": [
+        "focus-window-and-panes.yaml",
+        "suppress-history.yaml"
+      ]
+    },
+    {
+      "id": "pane.focus",
+      "title": "pane focus",
+      "syntax": "focus: true on a pane",
+      "files": [
+        "blank-panes.yaml",
+        "focus-window-and-panes.yaml"
+      ]
+    },
+    {
+      "id": "session.options",
+      "title": "session options",
+      "syntax": "options at the top of the file",
+      "files": [
+        "options.yaml"
+      ]
+    },
+    {
+      "id": "session.global_options",
+      "title": "global options",
+      "syntax": "global_options at the top of the file",
+      "files": [
+        "options.yaml"
+      ]
+    },
+    {
+      "id": "window.options",
+      "title": "window options",
+      "syntax": "options in a window",
+      "files": [
+        "env-variables.yaml",
+        "main-pane-height-percentage.yaml",
+        "main-pane-height.yaml",
+        "options.yaml",
+        "pane-shell.yaml"
+      ]
+    },
+    {
+      "id": "window.options_after",
+      "title": "window options_after",
+      "syntax": "options_after in a window",
+      "files": [
+        "2-pane-synchronized.yaml"
+      ]
+    },
+    {
+      "id": "pane.string",
+      "title": "a pane written as a string",
+      "syntax": "- command",
+      "files": [
+        "2-pane-synchronized.yaml",
+        "2-pane-vertical.yaml",
+        "3-pane.yaml",
+        "4-pane.yaml",
+        "blank-panes.yaml",
+        "plugin-system.yaml",
+        "session-environment.yaml",
+        "shorthands.yaml",
+        "start-directory.yaml",
+        "suppress-history.yaml",
+        "window-index.yaml"
+      ]
+    },
+    {
+      "id": "pane.list",
+      "title": "a pane written as a list",
+      "syntax": "- [command, command]",
+      "files": []
+    },
+    {
+      "id": "pane.shell_command_string",
+      "title": "shell_command as a string",
+      "syntax": "shell_command: command",
+      "files": [
+        "blank-panes.yaml",
+        "session-environment.yaml",
+        "shorthands.yaml",
+        "skip-send-pane-level.yaml"
+      ]
+    },
+    {
+      "id": "pane.command_mapping",
+      "title": "a command written as a mapping",
+      "syntax": "- cmd: command",
+      "files": [
+        "skip-send.yaml",
+        "sleep-pane-level.yaml",
+        "sleep.yaml"
+      ]
+    },
+    {
+      "id": "pane.blank",
+      "title": "a blank pane",
+      "syntax": "a null pane, `blank` or `pane`",
+      "files": [
+        "blank-panes.yaml",
+        "focus-window-and-panes.yaml",
+        "minimal.yaml"
+      ]
+    },
+    {
+      "id": "pane.empty_command",
+      "title": "an empty command",
+      "syntax": "- \"\" in a pane",
+      "files": [
+        "blank-panes.yaml"
+      ]
+    },
+    {
+      "id": "command.enter",
+      "title": "enter: false",
+      "syntax": "enter on a pane or a command",
+      "files": [
+        "skip-send-pane-level.yaml",
+        "skip-send.yaml"
+      ]
+    },
+    {
+      "id": "expand.environment_variable",
+      "title": "${VAR} and $VAR",
+      "syntax": "a variable reference in a value",
+      "files": [
+        "env-variables.yaml",
+        "options.yaml",
+        "session-environment.yaml"
+      ]
+    },
+    {
+      "id": "expand.tilde",
+      "title": "~ in start_directory",
+      "syntax": "start_directory: ~",
+      "files": [
+        "main-pane-height-percentage.yaml",
+        "main-pane-height.yaml",
+        "options.yaml",
+        "start-directory.yaml"
+      ]
+    },
+    {
+      "id": "session.start_directory",
+      "title": "session start_directory",
+      "syntax": "start_directory at the top of the file",
+      "files": [
+        "env-variables.yaml",
+        "main-pane-height-percentage.yaml",
+        "main-pane-height.yaml",
+        "options.yaml",
+        "start-directory.yaml"
+      ]
+    },
+    {
+      "id": "window.start_directory",
+      "title": "window start_directory",
+      "syntax": "start_directory in a window",
+      "files": [
+        "env-variables.yaml",
+        "start-directory.yaml"
+      ]
+    },
+    {
+      "id": "pane.start_directory",
+      "title": "pane start_directory",
+      "syntax": "start_directory in a pane",
+      "files": [
+        "blank-panes.yaml",
+        "main-pane-height-percentage.yaml",
+        "main-pane-height.yaml",
+        "options.yaml"
+      ]
+    },
+    {
+      "id": "start_directory.relative_to_session",
+      "title": "a relative window start_directory",
+      "syntax": "a window path joined onto the session's",
+      "files": [
+        "start-directory.yaml"
+      ]
+    },
+    {
+      "id": "start_directory.dot_relative",
+      "title": "a ./ start_directory",
+      "syntax": "start_directory: ./",
+      "files": [
+        "start-directory.yaml"
+      ]
+    },
+    {
+      "id": "session.environment",
+      "title": "session environment",
+      "syntax": "environment at the top of the file",
+      "files": [
+        "session-environment.yaml"
+      ]
+    },
+    {
+      "id": "window.environment",
+      "title": "window environment",
+      "syntax": "environment in a window",
+      "files": [
+        "session-environment.yaml"
+      ]
+    },
+    {
+      "id": "pane.environment",
+      "title": "pane environment",
+      "syntax": "environment in a pane",
+      "files": [
+        "session-environment.yaml"
+      ]
+    },
+    {
+      "id": "window.window_index",
+      "title": "window_index",
+      "syntax": "window_index in a window",
+      "files": [
+        "window-index.yaml"
+      ]
+    },
+    {
+      "id": "window.layout.even-vertical",
+      "title": "layout even-vertical",
+      "syntax": "layout: even-vertical",
+      "files": [
+        "pane-shell.yaml"
+      ]
+    },
+    {
+      "id": "window.layout.main-horizontal",
+      "title": "layout main-horizontal",
+      "syntax": "layout: main-horizontal",
+      "files": [
+        "main-pane-height-percentage.yaml",
+        "main-pane-height.yaml",
+        "options.yaml"
+      ]
+    },
+    {
+      "id": "window.layout.main-vertical",
+      "title": "layout main-vertical",
+      "syntax": "layout: main-vertical",
+      "files": [
+        "3-pane.yaml"
+      ]
+    },
+    {
+      "id": "window.layout.tiled",
+      "title": "layout tiled",
+      "syntax": "layout: tiled",
+      "files": [
+        "4-pane.yaml",
+        "plugin-system.yaml"
+      ]
+    }
+  ]
+}

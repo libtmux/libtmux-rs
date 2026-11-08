@@ -1,0 +1,338 @@
+{
+  "schema_version": 1,
+  "source": "start-directory.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "start directory",
+    "start_directory": "/var/",
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": "should be /var/",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": "/var/",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/var/",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"\\033c",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "it trickles down from session-level\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": "/var/",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo hello",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "should be /var/log",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": "/var/log",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/var/log",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo '\\033c",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "window start_directory concatenates to session start_directory",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "if it is not absolute'",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": "/var/log",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo hello",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "should be ~",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": "/@HOME@",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/@HOME@",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \\\\033c ~ has precedence. note: remember to quote ~ in YAML",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": "/@HOME@",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo hello",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "should be /bin",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": "/bin",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/bin",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo '\\033c absolute paths also have precedence.'",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": "/bin",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo hello",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "should be workspace file's dir",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": "/var",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/var",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo '\\033c",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "./ is relative to workspace file location",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "../ will be parent of workspace file",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "./test will be \\\"test\\\" dir inside dir of workspace file'",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": "/var",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo '\\033c",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "This way you can load up workspaces from projects and maintain",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "relative paths.'",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": null
+  }
+}

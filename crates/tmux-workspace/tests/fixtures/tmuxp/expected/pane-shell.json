@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "source": "pane-shell.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "Pane shell example",
+    "start_directory": null,
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": "first",
+      "window_index": null,
+      "layout": "even-vertical",
+      "options": {
+        "remain-on-exit": true
+      },
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": "/usr/bin/python2",
+      "focus": false,
+      "panes": [
+        {
+          "shell": "/usr/bin/python3",
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "print('This is python 3')",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": false
+          }
+        },
+        {
+          "shell": "/usr/bin/vim -u none",
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "iAll panes have the `remain-on-exit` setting on.",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "When you exit out of the shell or application, the panes will remain.",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "Use tmux command `:kill-pane` to remove the pane.",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "Use tmux command `:respawn-pane` to restart the shell in the pane.",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "Use <Escape> and then `:q!` to get out of this vim window. :-)",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": false
+          }
+        },
+        {
+          "shell": "/usr/bin/python2",
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "print('Hello World 2')",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": false
+          }
+        },
+        {
+          "shell": "/usr/bin/top",
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [],
+          "runtime": {
+            "suppress_history": false
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": null
+  }
+}

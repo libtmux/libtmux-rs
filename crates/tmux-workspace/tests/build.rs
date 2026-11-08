@@ -1300,6 +1300,57 @@ fn every_tmuxp_example_parses() {
     assert!(read >= 20, "only {read} examples were found to read");
 }
 
+/// Each example has the expected structure tmuxp's loader produced for it, and
+/// no expected file is left without its example. `generate.py --check` is the
+/// check that the contents are current; this one needs no Python, so it keeps
+/// the pairing honest where `uv` is not installed.
+#[test]
+fn every_tmuxp_example_has_its_expected_structure() {
+    let catalog = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tmuxp");
+    let expected = catalog.join("expected");
+    let mut examples = Vec::new();
+    for entry in std::fs::read_dir(&catalog).expect("the fixtures are present") {
+        let path = entry.expect("a directory entry").path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yaml")
+        {
+            examples.push(path.file_stem().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    let mut documents = Vec::new();
+    for entry in std::fs::read_dir(&expected).expect("the expected files are present") {
+        let name = entry
+            .expect("a directory entry")
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        let Some(stem) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if !stem.ends_with(".schema") && stem != "syntax-features" {
+            documents.push(stem.to_owned());
+        }
+    }
+    examples.sort();
+    documents.sort();
+    assert_eq!(
+        examples, documents,
+        "each example has one expected file and the reverse"
+    );
+    for stem in &examples {
+        let text = std::fs::read_to_string(expected.join(format!("{stem}.json"))).unwrap();
+        assert!(
+            text.contains(&format!("\"source\": \"{stem}.yaml\"")),
+            "{stem}.json names another example as its source"
+        );
+        assert!(
+            text.contains("\"tmuxp\": \"1.74.0\""),
+            "{stem}.json is from another tmuxp"
+        );
+    }
+}
+
 /// tmuxp reads an empty entry, `pane` and `blank` as a pane with no command.
 #[test]
 fn a_blank_pane_is_a_pane_without_a_command() {

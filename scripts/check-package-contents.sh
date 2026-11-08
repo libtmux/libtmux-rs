@@ -103,6 +103,7 @@ workspace_crate_files=(
     "$workspace_crate_root"/examples/*.rs
     "$workspace_crate_root"/libtmux-macros-README.md
     "$workspace_crate_root"/tests/fixtures/tmuxp/*
+    "$workspace_crate_root"/tests/fixtures/tmuxp/expected/*
     "$workspace_crate_root"/src/cli/bridge.py
 )
 
@@ -135,6 +136,9 @@ for file in "${mcp_files[@]}"; do
 done
 
 for file in "${workspace_crate_files[@]}"; do
+    # `tests/fixtures/tmuxp/*` also matches the `expected` directory, whose
+    # files are listed on their own line above.
+    [[ -d "$file" ]] && continue
     require_line "$workspace_crate_package" \
         "${file#"$workspace_crate_root"/}" "tmux-workspace"
 done

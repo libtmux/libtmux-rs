@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/libtmux/libtmux-rs/crates/tmux-workspace/tests/fixtures/tmuxp/expected/expected.schema.json",
+  "title": "Structure tmuxp builds from one workspace file",
+  "description": "What a builder has to honour after tmuxp 1.74.0 loads, expands and trickles a workspace file. Every key is present; null means the file did not set it, at that level or above it. Values are as tmuxp produced them, except that the host's HOME, PWD, USER and the variables in README.md are placeholders written between at-signs. Keys under `runtime` are recorded because tmuxp reads them, but they act on timing, scripts, plugins or shell history, not on the tmux objects a built session holds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "tmuxp", "session", "windows", "runtime"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "source": {
+      "description": "File name of the example this was generated from.",
+      "type": "string",
+      "pattern": "^[^/]+\\.yaml$"
+    },
+    "tmuxp": {
+      "description": "Version of tmuxp whose loader produced the file.",
+      "const": "1.74.0"
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_name", "start_directory", "environment", "options", "global_options"],
+      "properties": {
+        "session_name": { "type": ["string", "null"] },
+        "start_directory": {
+          "description": "After expansion. A window below it inherits it: no window value takes it, a relative one is joined onto it.",
+          "type": ["string", "null"]
+        },
+        "environment": { "$ref": "#/$defs/environment" },
+        "options": {
+          "description": "`set-option` on the session, in file order.",
+          "$ref": "#/$defs/optionMap"
+        },
+        "global_options": {
+          "description": "`set-option -g`, in file order.",
+          "$ref": "#/$defs/optionMap"
+        }
+      }
+    },
+    "windows": {
+      "description": "In file order. A window the file gave no panes holds one pane with no commands.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/window" }
+    },
+    "runtime": {
+      "description": "Session keys that do not shape the built session.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before_script", "plugins", "suppress_history"],
+      "properties": {
+        "before_script": {
+          "description": "Script run before any window is built, after expansion.",
+          "type": ["string", "null"]
+        },
+        "plugins": {
+          "description": "Plugin import paths, as written.",
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "suppress_history": {
+          "description": "The session-level value as written. Each window and pane below carries the value tmuxp applies to it.",
+          "type": ["boolean", "null"]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "environment": {
+      "description": "Variables set for the session, window or pane.",
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "string" }
+    },
+    "optionMap": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "type": ["string", "number", "boolean"]
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "window_name",
+        "window_index",
+        "layout",
+        "options",
+        "options_after",
+        "start_directory",
+        "environment",
+        "shell",
+        "focus",
+        "panes"
+      ],
+      "properties": {
+        "window_name": { "type": ["string", "null"] },
+        "window_index": {
+          "description": "As written. null leaves the index to tmux.",
+          "type": ["integer", "string", "null"]
+        },
+        "layout": {
+          "description": "Applied once after every pane exists.",
+          "type": ["string", "null"]
+        },
+        "options": {
+          "description": "`set-window-option` as each window is created, before its panes are filled.",
+          "$ref": "#/$defs/optionMap"
+        },
+        "options_after": {
+          "description": "`set-window-option` once the window's panes are built.",
+          "$ref": "#/$defs/optionMap"
+        },
+        "start_directory": {
+          "description": "After expansion and after the session's directory is joined on.",
+          "type": ["string", "null"]
+        },
+        "environment": { "$ref": "#/$defs/environment" },
+        "shell": {
+          "description": "`window_shell` as written. Each pane's `shell` already holds it when the pane names none.",
+          "type": ["string", "null"]
+        },
+        "focus": {
+          "description": "The window selected when the build ends.",
+          "type": "boolean"
+        },
+        "panes": {
+          "description": "In file order; the first is the window's first pane.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/pane" }
+        }
+      }
+    },
+    "pane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shell", "start_directory", "environment", "focus", "commands", "runtime"],
+      "properties": {
+        "shell": {
+          "description": "The pane's own `shell`, else its window's `window_shell`.",
+          "type": ["string", "null"]
+        },
+        "start_directory": {
+          "description": "The pane's own, after expansion, else its window's.",
+          "type": ["string", "null"]
+        },
+        "environment": {
+          "description": "The pane's own map, else its window's; never both merged.",
+          "$ref": "#/$defs/environment"
+        },
+        "focus": {
+          "description": "The pane selected in its window when the build ends.",
+          "type": "boolean"
+        },
+        "commands": {
+          "description": "Session, window and pane `shell_command_before`, then the pane's own `shell_command`, each as one command. A blank pane has none.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/command" }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["suppress_history"],
+          "properties": {
+            "suppress_history": {
+              "description": "tmuxp sends each command with a leading space unless the pane, else its window, else the session sets this to false. The value that applies, true when none is set.",
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cmd", "enter", "runtime"],
+      "properties": {
+        "cmd": {
+          "description": "The text typed, after variable expansion. The empty string is a pane that only receives Enter.",
+          "type": "string"
+        },
+        "enter": {
+          "description": "Whether Enter follows the text. The pane's `enter` starts it at true; a command that sets it holds that value for the commands after it.",
+          "type": "boolean"
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sleep_before", "sleep_after"],
+          "properties": {
+            "sleep_before": {
+              "description": "Seconds to wait before typing, under the same carry-forward rule as `enter`.",
+              "type": ["number", "null"]
+            },
+            "sleep_after": {
+              "description": "Seconds to wait after typing, under the same carry-forward rule as `enter`.",
+              "type": ["number", "null"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

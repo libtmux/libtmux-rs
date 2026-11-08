@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "source": "env-variables.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "session - @USER@ (/@MY_ENV_VAR@)",
+    "start_directory": "/@PWD@/test",
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": "editor",
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": "/var/log",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/var/log",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo /@PWD@",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "tail -F /var/log/syslog",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    },
+    {
+      "window_name": "logging for @USER@",
+      "window_index": null,
+      "layout": null,
+      "options": {
+        "automatic-rename": true
+      },
+      "options_after": null,
+      "start_directory": "/@PWD@/test",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/@PWD@/test",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo /@PWD@",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "htop",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "ls /@PWD@",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": "/@MY_ENV_VAR@/test3.sh",
+    "plugins": null,
+    "suppress_history": null
+  }
+}

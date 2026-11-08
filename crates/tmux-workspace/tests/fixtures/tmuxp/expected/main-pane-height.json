@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "source": "main-pane-height.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "main-pane-height",
+    "start_directory": "/@HOME@",
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": "my window name",
+      "window_index": null,
+      "layout": "main-horizontal",
+      "options": {
+        "main-pane-height": 30
+      },
+      "options_after": null,
+      "start_directory": "/@HOME@",
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": "/@HOME@",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "top",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": "/@HOME@",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"hey\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        },
+        {
+          "shell": null,
+          "start_directory": "/@HOME@",
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"moo\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": null,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": null
+  }
+}

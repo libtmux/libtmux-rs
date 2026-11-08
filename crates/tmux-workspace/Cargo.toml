@@ -27,6 +27,7 @@ include = [
     "/src/cli/python_version_check.py",
     "/tests/**/*.rs",
     "/tests/fixtures/tmuxp/*",
+    "/tests/fixtures/tmuxp/expected/*",
     "/tests/fixtures/layout-preflight.json",
     "/tests/fixtures/terminal_lifecycle.py",
     "/tests/fixtures/terminal_handoff.py",

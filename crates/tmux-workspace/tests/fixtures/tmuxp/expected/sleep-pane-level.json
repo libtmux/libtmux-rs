@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "source": "sleep-pane-level.yaml",
+  "tmuxp": "1.74.0",
+  "session": {
+    "session_name": "Pause / skip command execution (pane-level)",
+    "start_directory": null,
+    "environment": null,
+    "options": null,
+    "global_options": null
+  },
+  "windows": [
+    {
+      "window_name": null,
+      "window_index": null,
+      "layout": null,
+      "options": null,
+      "options_after": null,
+      "start_directory": null,
+      "environment": null,
+      "shell": null,
+      "focus": false,
+      "panes": [
+        {
+          "shell": null,
+          "start_directory": null,
+          "environment": null,
+          "focus": false,
+          "commands": [
+            {
+              "cmd": "echo \"___$((11 + 1))___\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": 2,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "echo \"___$((1 + 3))___\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": 2,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "echo \"___$((1 + 3))___\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": 2,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "echo \"Stuff rendering here!\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": 2,
+                "sleep_after": null
+              }
+            },
+            {
+              "cmd": "echo \"2 seconds later\"",
+              "enter": true,
+              "runtime": {
+                "sleep_before": 2,
+                "sleep_after": null
+              }
+            }
+          ],
+          "runtime": {
+            "suppress_history": true
+          }
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "before_script": null,
+    "plugins": null,
+    "suppress_history": null
+  }
+}
