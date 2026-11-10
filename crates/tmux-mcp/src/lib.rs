@@ -72,7 +72,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use libtmux::Server;
-use rmcp::model::{ErrorData, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorData, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool_handler};
 
 use tail::Tails;
@@ -222,10 +222,10 @@ impl ServerHandler for TmuxTools {
         Ok(resources::capabilities(self.capability_report.as_ref())?.into())
     }
 
-    fn get_info(&self) -> ServerInfo {
-        // ServerInfo is #[non_exhaustive], so it is built from the default
+    fn get_info(&self) -> ServerConfig {
+        // ServerConfig is #[non_exhaustive], so it is built from the default
         // rather than named field by field.
-        let mut info = ServerInfo::default();
+        let mut info = ServerConfig::default();
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_resources()
