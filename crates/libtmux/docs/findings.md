@@ -32,6 +32,7 @@ is shaped the way it is.
 - [Example coverage is counted per crate-root type](#example-coverage-is-counted-per-crate-root-type)
 - [Waiting on a channel or a pane](#waiting-on-a-channel-or-a-pane)
 - [Why pane waits poll the scrollback](#why-pane-waits-poll-the-scrollback)
+- [A just-forked pane is named `tmux` by `automatic-rename`](#a-just-forked-pane-is-named-tmux-by-automatic-rename)
 
 ## Five option-refusal messages map to three error kinds
 
@@ -955,3 +956,23 @@ The doorbell stays unbuilt, and the feature cost decides that more than the
 clock does. The clock says a doorbell would help: under three milliseconds on a
 marker, six times faster on a moderate flood, and nothing once the flood is
 large enough. A default build still could not use it.
+
+## A just-forked pane is named `tmux` by `automatic-rename`
+
+tmux reads `#{pane_current_command}` from the process in the pane's terminal
+foreground. Between `fork` and `exec` that process is the forked server, whose
+command line is `tmux`, so a pane that has not exec'd its shell yet reports
+`tmux`. On a loaded machine, tmux 3.8a reported it for a fresh window's pane
+for about 30ms.
+
+Turning `automatic-rename` on in that interval names the window `tmux`. The
+shell's first output marks the pane changed, but tmux renames at most once per
+500ms, so a loader that returns first leaves the window named `tmux`. The
+tmuxp parity job saw this on `env-variables` and `options`, the two fixtures
+that set `automatic-rename` in a window's `options`.
+
+`tmux-workspace` sets that one option after it has seen the first pane's cursor
+move, the signal it already waits for before typing. When it does not wait,
+because readiness is off or the pane has its own command, the option is set
+straight after the window is made, as before. libtmux has no wait for a pane to
+exec, which a caller that names windows this way would need.
