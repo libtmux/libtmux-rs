@@ -20,6 +20,14 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Changed
+
+- Requires `rmcp` 3.9 or later. Releases before 3.9.0 read Streamable HTTP
+  response bodies with no size limit
+  ([fix](https://github.com/modelcontextprotocol/rust-sdk/commit/3e0156c1eaf1573a1b878e2a8998d2fa2d0b1439)).
+  `tmux-mcp` does not enable those HTTP client transports; the floor keeps the
+  lockfile off the affected releases.
+
 ## 0.1.2 - 2026-11-01
 
 No entries for `tmux-mcp`.
