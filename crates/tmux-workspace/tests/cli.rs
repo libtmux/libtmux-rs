@@ -587,6 +587,68 @@ async fn run_shell_style_load_has_no_terminal_and_no_tmux_pane() {
     guard.shutdown().await.unwrap();
 }
 
+/// tmux names a window after the process in its pane's foreground, and a pane
+/// whose shell has not yet been exec'd still runs the forked server, `tmux`.
+/// Turning `automatic-rename` on that early leaves the window named `tmux`
+/// until a later rename, which the loader's exit can precede.
+#[tokio::test]
+async fn automatic_rename_is_enabled_only_once_the_panes_shell_has_drawn() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let log = directory.path().join("set-option.log");
+    // Record the cursor of the window's pane each time a window option is set:
+    // 0,0 means the shell has drawn nothing yet.
+    guard
+        .server()
+        .cmd(
+            libtmux::Command::new("set-hook")
+                .arg("-g")
+                .arg("after-set-option")
+                .arg(format!(
+                    "run-shell \"printf '%s|%s\\n' '#{{window_name}}' '#{{cursor_x}},#{{cursor_y}}' >> {}\"",
+                    log.display()
+                )),
+        )
+        .await
+        .unwrap();
+    // A shell that takes a moment to start, so the pane is still forking when
+    // an early option lands, however fast this machine is.
+    let slow = directory.path().join("slow-shell");
+    libtmux::test::install_executable(&slow, "#!/bin/sh\nsleep 0.4\nexec /bin/sh\n").unwrap();
+    std::fs::write(
+        directory.path().join("ws.json"),
+        serde_json::json!({"session_name":"renamed","global_options":{"default-shell":slow},"windows":[
+            {"window_name":"named","options":{"automatic-rename":true},"panes":["blank"]}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &[
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--json",
+            "ws.json",
+        ],
+        directory.path(),
+    )
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let recorded = std::fs::read_to_string(&log).unwrap();
+    let cursor = recorded
+        .lines()
+        .find_map(|line| line.strip_prefix("named|"))
+        .unwrap_or_else(|| panic!("automatic-rename was never set on the window: {recorded:?}"));
+    assert_ne!(
+        cursor, "0,0",
+        "automatic-rename was set before the pane's shell drew anything"
+    );
+    guard.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn load_sizes_a_created_session_from_tmuxp_environment_variables() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
