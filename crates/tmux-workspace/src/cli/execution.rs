@@ -1185,8 +1185,18 @@ async fn build_window(
     effects.changed = true;
     effects.windows.push(window.id().to_string());
     report.event("window-created", json!({"input_index":input,"session_id":session.id().to_string(),"window_index":window.index(),"window_id":window.id().to_string()}))?;
+    // `automatic-rename` names the window after its pane's foreground process,
+    // and a pane tmux has forked but not yet exec'd still runs `tmux` itself.
+    // Where this loader waits for the first pane's shell, the option waits too,
+    // so the window is never named `tmux`.
+    let wait_first = readiness && first.shell.is_none();
+    let mut deferred = Vec::new();
     for (name, value) in &config.options {
-        window.set_option(name, value).await?;
+        if wait_first && name == "automatic-rename" {
+            deferred.push((name, value));
+        } else {
+            window.set_option(name, value).await?;
+        }
     }
     let mut panes = vec![
         window
@@ -1229,6 +1239,11 @@ async fn build_window(
         report.event("pane-created", pane_fields.clone())?;
         if readiness && config.shell.is_none() {
             wait_for_prompt(pane, report).await?;
+        }
+        if pane_index == 0 {
+            for (name, value) in deferred.drain(..) {
+                window.set_option(name, value).await?;
+            }
         }
         send_commands(pane, &config.commands).await?;
         if let Some(progress) = &mut report.progress {
