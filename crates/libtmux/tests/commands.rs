@@ -2382,9 +2382,14 @@ async fn a_predicate_wait_arrives_or_runs_to_its_deadline() {
     let pane = session.panes().await.expect("panes").remove(0);
 
     // Wider than the pane, so equality holds only if the wrap is joined; and
-    // the echoed command contains the text without being equal to it.
+    // the echoed command contains the text without being equal to it. The
+    // leading newline matters: keys sent before `sh` has drawn its first prompt
+    // are echoed by the tty, then `sh` draws `$ ` and runs the command on that
+    // same row, so a first printed line would read `$ PPP...` and never equal
+    // `wide`. Starting the output on a fresh row makes the lines the same
+    // whenever the prompt arrives.
     let wide = "P".repeat(300);
-    pane.send_line(format!("printf '%s\\n' {wide} {wide}"))
+    pane.send_line(format!("printf '\\n%s\\n' {wide} {wide}"))
         .await
         .expect("keys are sent");
     let outcome = pane
@@ -2480,7 +2485,8 @@ async fn a_predicate_wait_runs_over_a_control_connection() {
         .expect("a routed handle");
     let pane = routed.panes().await.expect("panes").remove(0);
 
-    pane.send_line("printf 'ROUTED-%s\\n' 1")
+    // The leading newline keeps the output off a prompt drawn after the keys.
+    pane.send_line("printf '\\nROUTED-%s\\n' 1")
         .await
         .expect("keys are sent");
     let outcome = pane

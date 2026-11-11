@@ -420,7 +420,9 @@ impl Pane {
     /// # let guard = libtmux::test::TestServer::builder().start().await?;
     /// # let session = guard.server().new_session("counting").await?;
     /// # let pane = session.panes().await?.remove(0);
-    /// pane.send_line("for n in 1 2 3; do echo tick; done").await?;
+    /// // The leading `echo` starts the output on a row of its own: keys sent
+    /// // before the shell's first prompt would otherwise print `$ tick`.
+    /// pane.send_line("echo; for n in 1 2 3; do echo tick; done").await?;
     ///
     /// // The echoed command contains `tick`; only the output is a line equal to it.
     /// let ticked = pane
