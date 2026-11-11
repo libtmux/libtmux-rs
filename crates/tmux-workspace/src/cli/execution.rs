@@ -1241,9 +1241,7 @@ async fn build_window(
             wait_for_prompt(pane, report).await?;
         }
         if pane_index == 0 {
-            for (name, value) in deferred.drain(..) {
-                window.set_option(name, value).await?;
-            }
+            name_after_first_shell(&window, &mut deferred, wait_first).await?;
         }
         send_commands(pane, &config.commands).await?;
         if let Some(progress) = &mut report.progress {
@@ -1279,6 +1277,48 @@ async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand
         tokio::time::sleep(command.after).await;
     }
     Ok(())
+}
+
+/// Sets the options held back until the first pane's shell started, then waits
+/// for the window's name to follow it.
+async fn name_after_first_shell(
+    window: &libtmux::Window,
+    deferred: &mut Vec<(&String, &String)>,
+    wait: bool,
+) -> Result<()> {
+    for (name, value) in deferred.drain(..) {
+        window.set_option(name, value).await?;
+    }
+    if wait {
+        wait_for_window_name(window).await;
+    }
+    Ok(())
+}
+
+/// Waits, up to two seconds, until an automatically named window carries the
+/// name its pane's process gives it.
+///
+/// tmux renames at most every 500ms, so a name taken while the pane was still
+/// the forked `tmux` can outlive the shell's start. Without this the window
+/// is `tmux` to whatever reads it as the loader exits. A window that is not
+/// renamed automatically, or a probe that fails, ends the wait at once.
+async fn wait_for_window_name(window: &libtmux::Window) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        let Ok(reading) = window
+            .format("#{automatic-rename}|#{window_name}|#{pane_current_command}")
+            .await
+        else {
+            return;
+        };
+        let reading = reading.to_string_lossy();
+        let mut fields = reading.splitn(3, '|');
+        match (fields.next(), fields.next(), fields.next()) {
+            (Some("1"), Some(name), Some(command)) if name != command => {}
+            _ => return,
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<()> {
