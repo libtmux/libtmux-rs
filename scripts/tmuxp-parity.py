@@ -427,6 +427,47 @@ def settle_window_names(tmux_bin: str, socket: str, env: dict[str, str], session
         time.sleep(CAPTURE_INTERVAL / 4)
 
 
+def command_view(tmux_bin: str, socket: str, env: dict[str, str]) -> list[str]:
+    """Each window's naming mode, name and panes' commands, in tmux's order."""
+    result = tmux(
+        tmux_bin, socket, env, "list-panes", "-s", "-F",
+        "#{window_index}.#{pane_index}|#{automatic-rename}|#{window_name}|#{pane_current_command}",
+    )
+    view = []
+    for line in result.stdout.splitlines():
+        position, _, rest = line.partition("|")
+        automatic, _, rest = rest.partition("|")
+        name, _, command = rest.partition("|")
+        view.append(f"{position}|{name if automatic == '1' else ''}|{command.lstrip('-')}")
+    return view
+
+
+def settle_pair(tmux_bin: str, sockets: tuple[str, str], env: dict[str, str]) -> None:
+    """Wait until both servers report the same panes running the same commands.
+
+    tmuxp types into a pane the instant it exists and does not wait for the
+    shell, so a command it typed (`htop`) sits unread in the terminal until
+    the shell's line editor starts. Until then the pane reads as a bare shell
+    and its window is named for one, which looks exactly like a pane with
+    nothing typed into it. The terminal's own echo shows the typed text
+    either way, so neither the screen nor the process table says whether the
+    shell has read its input; the other loader's session, whose panes
+    tmux-workspace types into only once the prompt is up, does. Compare both
+    until they agree on two reads in a row, bounded by CAPTURE_TIMEOUT, after
+    which whatever is there is compared and reported.
+    """
+    deadline = time.monotonic() + CAPTURE_TIMEOUT
+    agreed = 0
+    while time.monotonic() < deadline:
+        first, second = (command_view(tmux_bin, socket, env) for socket in sockets)
+        if not first or not second:
+            return  # a loader that refused has no panes to wait for
+        agreed = agreed + 1 if first == second else 0
+        if agreed >= 2:
+            return
+        time.sleep(CAPTURE_INTERVAL / 4)
+
+
 def read_session(tmux_bin: str, socket: str, env: dict[str, str], doc: DocFacts) -> Session | None:
     sessions = tmux(tmux_bin, socket, env, "list-sessions", "-F", "#{session_name}")
     names = [line for line in sessions.stdout.splitlines() if line]
@@ -791,12 +832,12 @@ def run_fixture(
         tmuxp_proc = run_loader(
             [args.tmuxp, "load", "-d", "-y", "-L", TMUXP_SOCKET, str(fixture.path)], env, cwd
         )
-        tmuxp_session = read_session(args.tmux, TMUXP_SOCKET, env, fixture.doc)
-        tmuxp_result = RunResult(tmuxp_proc.returncode, tmuxp_proc.stdout, tmuxp_proc.stderr, tmuxp_session)
-
         workspace_proc = run_loader(
             [str(args.binary), "load", "-d", "-y", "-L", WORKSPACE_SOCKET, str(fixture.path)], env, cwd
         )
+        settle_pair(args.tmux, (TMUXP_SOCKET, WORKSPACE_SOCKET), env)
+        tmuxp_session = read_session(args.tmux, TMUXP_SOCKET, env, fixture.doc)
+        tmuxp_result = RunResult(tmuxp_proc.returncode, tmuxp_proc.stdout, tmuxp_proc.stderr, tmuxp_session)
         workspace_session = read_session(args.tmux, WORKSPACE_SOCKET, env, fixture.doc)
         workspace_result = RunResult(
             workspace_proc.returncode, workspace_proc.stdout, workspace_proc.stderr, workspace_session
