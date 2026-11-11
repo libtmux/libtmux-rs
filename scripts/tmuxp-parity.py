@@ -401,12 +401,39 @@ def settle_pane(tmux_bin: str, socket: str, env: dict[str, str], pane_target: st
         time.sleep(CAPTURE_INTERVAL)
 
 
+def settle_window_names(tmux_bin: str, socket: str, env: dict[str, str], session: str) -> None:
+    """Wait until every automatically named window carries its pane's command.
+
+    tmux renames a window at most every 500ms, and a pane tmux has forked but
+    not yet exec'd runs `tmux`, so a window can be named `tmux` for a moment
+    after either loader returns. Both tmuxp and tmux-workspace do this, so the
+    name has to be read once tmux has caught up. Bounded by CAPTURE_TIMEOUT,
+    after which whatever is there is compared.
+    """
+    deadline = time.monotonic() + CAPTURE_TIMEOUT
+    while time.monotonic() < deadline:
+        result = tmux(
+            tmux_bin, socket, env, "list-windows", "-t", session, "-F",
+            "#{automatic-rename}|#{window_name}|#{pane_current_command}",
+        )
+        pending = False
+        for line in result.stdout.splitlines():
+            automatic, _, rest = line.partition("|")
+            name, _, command = rest.partition("|")
+            if automatic == "1" and name != command:
+                pending = True
+        if not pending:
+            return
+        time.sleep(CAPTURE_INTERVAL / 4)
+
+
 def read_session(tmux_bin: str, socket: str, env: dict[str, str], doc: DocFacts) -> Session | None:
     sessions = tmux(tmux_bin, socket, env, "list-sessions", "-F", "#{session_name}")
     names = [line for line in sessions.stdout.splitlines() if line]
     if not names:
         return None
     name = names[0]
+    settle_window_names(tmux_bin, socket, env, name)
 
     def options(*scope: str) -> dict[str, str]:
         result = tmux(tmux_bin, socket, env, "show-options", *scope)
