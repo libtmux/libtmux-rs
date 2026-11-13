@@ -3624,8 +3624,7 @@ async fn selection_paste_and_channel_handlers_change_tmux() {
             tools
                 .capture_pane(args(serde_json::json!({"pane": first})))
                 .await
-                .ok()
-                .is_some_and(|capture| {
+                .is_ok_and(|capture| {
                     json(capture)["text"]
                         .as_str()
                         .unwrap()

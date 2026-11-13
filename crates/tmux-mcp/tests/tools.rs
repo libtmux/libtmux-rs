@@ -129,8 +129,7 @@ async fn capture_can_include_scrollback() {
         tools
             .capture_pane(args(serde_json::json!({"pane": pane, "history": true})))
             .await
-            .ok()
-            .is_some_and(|capture| json(capture)["text"].as_str().unwrap().contains("200"))
+            .is_ok_and(|capture| json(capture)["text"].as_str().unwrap().contains("200"))
     })
     .await
     .expect("history contains command output");
