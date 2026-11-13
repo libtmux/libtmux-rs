@@ -255,6 +255,8 @@ impl ProducerIdentity {
     }
 
     fn fresh() -> Self {
+        // `try_update` replaces `fetch_update` but postdates the MSRV.
+        #[allow(deprecated)]
         let Ok(id) = NEXT_PRODUCER_ID
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         else {

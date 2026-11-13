@@ -1388,6 +1388,8 @@ impl PaneOutput {
     /// noise, so it does not end the stream by itself; only a listing that
     /// completes without the watched pane in it does.
     fn narrow(&mut self) {
+        // `try_update` replaces `fetch_update` but postdates the MSRV.
+        #[allow(deprecated)]
         let transition =
             self.narrowing
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
