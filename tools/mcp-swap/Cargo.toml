@@ -17,7 +17,7 @@ clap = { version = "4.6", features = ["derive"] }
 rustix = { version = "1", features = ["fs", "process"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 toml_edit = "0.25"
 
 [dev-dependencies]

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::fs::{self, DirBuilder, File};
 use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -876,7 +876,12 @@ pub fn sync_directory(path: &Path) -> Result<(), FsError> {
 /// Compute a lowercase SHA-256 digest.
 #[must_use]
 pub fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    let mut hex = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        // Writing to a `String` cannot fail.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
 }
 
 fn identity(metadata: &fs::Metadata, bytes: &[u8]) -> FileIdentity {
@@ -920,7 +925,21 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{FsError, remove_exact_with_hook, stable_snapshot, stable_snapshot_with_hook};
+    use super::{
+        FsError, digest, remove_exact_with_hook, stable_snapshot, stable_snapshot_with_hook,
+    };
+
+    #[test]
+    fn digest_is_the_lowercase_hex_of_sha256() {
+        assert_eq!(
+            digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            digest(&[]),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
 
     #[test]
     fn stable_snapshot_rejects_a_same_size_in_place_write() {
