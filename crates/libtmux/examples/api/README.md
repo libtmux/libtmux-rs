@@ -4,10 +4,13 @@ Run one task from its imports through daemon cleanup. Each `api_*.rs` file
 contains its own entrypoint and error handling; no Rustdoc setup or example
 helper is added before execution.
 
-You need a Unix environment, tmux 3.3a or newer, and the Rust toolchain in
-the repository's `rust-toolchain.toml`. Each program creates a private socket
-under `/tmp/libtmux-rs-dev/` and reads `/dev/null` as its tmux configuration.
-It does not connect to the default server or the server named by `$TMUX`.
+You need a Unix environment, tmux 3.3a or newer, and the Rust toolchain in the
+repository's `rust-toolchain.toml`. Each program starts a private server of
+its own:
+
+- Its socket is under `/tmp/libtmux-rs-dev/`, and its configuration is
+  `/dev/null`.
+- It never connects to the default server or the one `$TMUX` names.
 
 ## Run a source example
 
@@ -53,11 +56,12 @@ Submit a shell command and capture its complete output lines:
 $ cargo run --locked -p libtmux --example api_capture
 ```
 
-`send_keys` sends literal text without Enter. `send_key_names` interprets
-tmux key names such as `Enter`. `send_line` submits literal text and Enter
-in one dispatch. The input and capture programs wait for the shell prompt
-before sending anything and compare complete output lines, so the echoed
-command cannot satisfy the output check.
+- `send_keys` sends literal text without Enter.
+- `send_key_names` interprets tmux key names such as `Enter`.
+- `send_line` submits literal text and Enter in one dispatch.
+
+The input and capture programs wait for the shell prompt before sending, and
+compare complete output lines, so the echoed command cannot satisfy the check.
 
 ## Run as a separate consumer
 
@@ -75,43 +79,35 @@ $ mkdir src &&
   cargo run --quiet
 ```
 
-To try another task, copy its complete `api_*.rs` file to `src/main.rs`.
-The same Cargo and toolchain files apply to every program. The consumer
-declares its Tokio and tempfile dependencies explicitly and uses the
-library's default query feature; it does not enable `test-support`.
+To try another task, copy its `api_*.rs` file to `src/main.rs`. The Cargo and
+toolchain files serve every program. The consumer declares Tokio and tempfile,
+and does not enable `test-support`.
 
 ## Results and cleanup
 
-Successful output goes to stdout. It reports the task's result rather than
-process IDs or socket paths. Errors go to stderr through Rust's `Result`
-entrypoint. These lines teach the examples; they are not a versioned output
-format for other applications.
+Success goes to stdout, as the task's result rather than process IDs or socket
+paths. Errors go to stderr through Rust's `Result` entrypoint. The output
+teaches the examples; it is not a format for other programs to parse.
 
 | Exit status | Meaning |
 | --- | --- |
 | `0` | The task's result checks and cleanup succeeded. |
 | nonzero | Setup, a tmux operation, a result check, the deadline or cleanup failed. |
 
-Each task has a ten-second deadline, and commands have a five-second
-timeout. Cancelling a task does not skip cleanup. The program calls
-`Server::kill` to stop only its own daemon, then `Server::shutdown` to close
-the client executor. It reports both task and cleanup errors. If either
-cleanup operation fails, the diagnostic names the retained directory for
-inspection; otherwise it removes the directory even when the task failed.
+- **Deadlines.** A task has ten seconds, and each command five.
+- **Cleanup.** Cancelling a task does not skip it. The program calls
+  `Server::kill` to stop only its own daemon, then `Server::shutdown` to close
+  the client executor, and reports task and cleanup errors alike.
+- **Leftovers.** If cleanup fails, the diagnostic names the retained
+  directory. Otherwise the directory is removed, even when the task failed.
 
 ## Source mapping
 
-`manifest.json` names the complete source files, their expected output and
-the public API declarations that they teach. Its targets are checked against
-the native `public-api.txt` inventory. No declaration or example is inferred
-from a file's name alone.
-
-Validate that mapping and the complete file boundaries:
+`manifest.json` names each program, its expected output and the public API it
+teaches. Check the mapping against the public API inventory:
 
 ```console
 $ just api-examples
 ```
 
-The ordinary `just examples` gate also executes every program. This source
-gate is separate from the documentation site's exact copied-file, native
-consumer and rendered clipboard receipts.
+`just examples` also runs every program.

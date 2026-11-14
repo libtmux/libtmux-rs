@@ -223,10 +223,10 @@ $ tmux-workspace debug-info
 
 ## Coming from tmuxp
 
-Your workspace files load unchanged: the same keys, the same `.tmuxp.yaml`
-project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
-`~/.tmuxp`) and the same [`load`][cli-load] flags (`-d`, `-s`, `-a`, `-L`,
-`-S`, `-f`, `-2`, `-y`). Where it differs:
+Your workspace files load unchanged: the same keys, `.tmuxp.yaml` project
+files, directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`, `~/.tmuxp`) and
+[`load`][cli-load] flags (`-d`, `-s`, `-a`, `-L`, `-S`, `-f`, `-2`, `-y`). Where
+it differs:
 
 - An unknown key is refused rather than ignored. Prefix a key with `x-` to
   carry your own fields; [`convert`][cli-convert] preserves them.
@@ -238,14 +238,12 @@ project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
   a value.
 - [`freeze`][cli-freeze] saves only where `-o` says, or prints with
   [`--json`].
-- [`plugins`] and custom `workspace_builder`s run through tmuxp itself, so they
-  need tmuxp 1.74.x and a Python libtmux that requires tmux 3.3a or newer,
-  plus `libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION >= 2`. Select that
-  environment with [`TMUX_WORKSPACE_PYTHON`].
+- [`plugins`] and custom `workspace_builder`s run through tmuxp itself, so
+  they need a tmuxp environment. Select it with [`TMUX_WORKSPACE_PYTHON`].
 
 [The command reference](docs/cli.md) has the complete list, and its
-[Python extensions](docs/cli.md#python-extensions) section names the Python
-libtmux change they depend on.
+[Python extensions](docs/cli.md#python-extensions) section names what that
+environment must provide.
 
 ## Scripting
 
@@ -372,9 +370,7 @@ Lets an MCP client read the sessions a workspace built, as
 - **Versions.** Releases are numbered `0.1.N`, and any release may change
   commands and flags. Pin an exact version.
 - **tmux 3.3a or newer**, on `PATH`, and **Rust 1.85** to build.
-- **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS
-  is supported on a best-effort basis; the release workflow builds binaries
-  there, and CI does not run the tests.
+- **Linux, including WSL.** macOS is best-effort.
 - **Prebuilt binaries** for Linux and macOS come with a release when it
   carries them.
 
@@ -395,9 +391,6 @@ The tests drive a real tmux on an isolated socket, so tmux must be on `$PATH`:
 ```console
 $ cargo test -p tmux-workspace --all-features
 ```
-
-They parse every command on this page against the real argument parser, and
-load every workspace file it shows.
 
 ## License
 

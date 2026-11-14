@@ -49,17 +49,15 @@ for output you did not start, [follow][capture_since] a pane across turns, and
 
 ## Quick start
 
-You need tmux 3.3a or newer on `PATH`, and Rust 1.88 to build.
+You need tmux 3.3a or newer on `PATH`, and Rust 1.88 to build. Some tools need
+a newer tmux:
 
-Basic listing, capture, direct input, layout and channel tools work on 3.3a.
-`paste_text` needs 3.4 for safe named-buffer cleanup; an empty paste without
-Enter needs no buffer. `wait_for_text` streams pane output on tmux 3.7 or
-newer and polls the visible screen with `capture-pane` below that, chosen from
-the daemon's version before any control client is attempted; a match that
-appears and scrolls off between two reads is missed on the polling path.
-`capture_since` and `run_shell_command` need tmux 3.7 or newer because they
-acquire a control client; unavailable operations return an
-`unsupported_version` refusal before control acquisition or paste staging.
+- **3.3a:** listing, capture, direct input, layout and channel tools.
+- **3.4:** `paste_text`, for named-buffer cleanup.
+- **3.7:** `capture_since` and `run_shell_command`. `wait_for_text` streams
+  from 3.7 and polls the screen below it.
+
+A tool the daemon cannot serve returns an `unsupported_version` refusal.
 
 ```console
 $ cargo install tmux-mcp
@@ -249,10 +247,9 @@ stdio server with command `tmux-mcp`.
 
 ### Passing options: a socket or a toolset
 
-Every client above starts the same command, so a socket or a toolset goes
-where the client keeps a command's arguments and environment. Claude Code
-takes both on the command line. This offers the read tools only, on the tmux
-socket named `work`:
+A socket or a toolset goes where the client keeps a command's arguments and
+environment. Claude Code takes both on the command line. This offers the read
+tools only, on the tmux socket named `work`:
 
 ```console
 $ claude mcp add tmux \
@@ -276,10 +273,9 @@ A JSON client takes the same two settings as `args` and `env`:
 
 ### Anything else: the command and no arguments
 
-Any client that runs a stdio MCP server takes the same two pieces: the command
-`tmux-mcp`, and no arguments. That default passes tmux no socket, so tmux picks
-the server: the one `TMUX` names when the client runs inside tmux, and tmux's
-default socket otherwise.
+Any client that runs a stdio MCP server takes the command `tmux-mcp` and no
+arguments. That passes tmux no socket, so tmux picks the server: the one `TMUX`
+names inside tmux, else its default socket.
 
 ## Choose which tmux it drives
 
@@ -289,12 +285,9 @@ it. [Settings](#settings) lists every flag and variable, and
 
 ### [`--socket-name`][guide-existing-server]: pick a socket by name
 
-With no flag and neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET` set, the
-server passes tmux no socket, and tmux picks the server: the one `TMUX` names
-when the client runs inside tmux, and tmux's default socket otherwise. Its
-tools name the sessions that server already has.
-
-To work with a tmux server on another socket, name it:
+With no flag and neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET` set, tmux
+picks the server, as above. To work with a tmux server on another socket, name
+it:
 
 ```console
 $ tmux-mcp --socket-name work
@@ -308,20 +301,21 @@ $ tmux-mcp --socket-name work
 $ tmux-mcp --socket /tmp/tmux-1000/work
 ```
 
-`-S` is the short form. A socket name and a path are mutually exclusive as
-flags. [`LIBTMUX_SOCKET_PATH`][contract-server] and
-[`LIBTMUX_SOCKET`][contract-server] make the same choices from the
-environment, which is how a client's configuration sets them. A flag wins over
-both variables, and `LIBTMUX_SOCKET_PATH` wins when both are set, as tmux's
-`-S` does over `-L`. [`LIBTMUX_TMUX_CONFIG`][contract-server] names the tmux
-configuration for a daemon the server starts.
+`-S` is the short form.
+
+- A socket name and a path are mutually exclusive as flags.
+- [`LIBTMUX_SOCKET_PATH`][contract-server] and
+  [`LIBTMUX_SOCKET`][contract-server] make the same choices from the
+  environment, which is how a client's configuration sets them.
+- A flag wins over both variables, and `LIBTMUX_SOCKET_PATH` wins over
+  `LIBTMUX_SOCKET`, as tmux's `-S` does over `-L`.
+- [`LIBTMUX_TMUX_CONFIG`][contract-server] names the tmux configuration for a
+  daemon the server starts.
 
 ## Run work and wait for it
 
 The server earns its keep once an agent has to wait, look, or avoid breaking
-the terminal it works in. `run_shell_command` and `capture_since` read a
-control-mode stream. `wait_for_text` streams on tmux 3.7 or newer and polls
-the visible screen below that; `capture_pane` reads the rendered screen.
+the terminal it works in.
 
 ### [`run_shell_command`][run_shell_command]: run a command and read its exit status
 
@@ -351,11 +345,13 @@ inspect the pane before sending more input.
 
 ### [`wait_for_text`][wait_for_text]: wait for what a pane prints
 
-[`wait_for_text`][wait_for_text] watches the pane's output stream for a
-pattern, with stop patterns for the failures you already know. On tmux 3.7 or
-newer a line that scrolls past between looks is still seen, because it reads
-the stream. Below 3.7 it polls the visible screen, and a line that scrolls off
-between two reads is missed.
+[`wait_for_text`][wait_for_text] watches the pane's output for a pattern, with
+stop patterns for the failures you already know:
+
+- **tmux 3.7 or newer** reads the output stream, so a line that scrolls past
+  between looks is still seen.
+- **Below 3.7** polls the visible screen, so a line that scrolls off between
+  two reads is missed.
 
 The same example starts a background job that prints `server is ready` a second
 later, waits for that line, and prints `waited: Matched`.
@@ -416,12 +412,9 @@ Each result row keeps its own `content`, `structuredContent`, `_meta`, and
 
 ## The tools
 
-The tools belong to unordered toolsets, and an operator grants or withholds a
-toolset as a whole. Each tool carries one machine-readable capability record.
-Registration, descriptions, annotations, selection, and
-[`tmux://capabilities`] all read it. The
-[generated tool reference](TOOLS.md) records every route and capability
-directly from that registry, and the [tool pages][tools] publish it.
+Tools belong to toolsets, and an operator grants or withholds a toolset as a
+whole. The [generated tool reference](TOOLS.md) lists every tool's routes and
+capabilities, and the [tool pages][tools] publish it.
 
 | Toolset | Intent | Tools |
 |---|---|---|
@@ -488,6 +481,7 @@ $ LIBTMUX_TOOLSETS=inspect \
 
 An unknown tool, an unknown toolset, or an empty item in any nonempty list
 stops startup before tmux is opened, so a typo never widens the surface.
+
 Naming [`call_read_tools_batch`][call_read_tools_batch] with an empty toolset
 list offers only the batch, and an excluded operation leaves its nested
 authority:
@@ -543,9 +537,10 @@ fields.
 ### Asking first: annotations
 
 The server has no confirmation policy. A client decides whether to ask a
-person before a call from each tool's four MCP annotations, which derive from
-the tool's capability record. Selecting tools shapes what a client is offered
-and leaves the tmux user's authority as it was.
+person before a call from each tool's four MCP annotations, derived from its
+capability record.
+
+Selecting tools shapes what a client is offered, not the tmux user's authority.
 [The contract][contract-asking] maps tools to annotations.
 
 ## What comes back
@@ -600,9 +595,8 @@ as the server's log.
 ## What it can reach
 
 One process is bound to one tmux socket, and no tool takes a socket argument.
-That limits which tmux objects the tools can name. It does not confine
-filesystem, network, credential, or process access, and filtering the tools
-does not authorize anything.
+That limits which tmux objects the tools can name; it does not confine
+filesystem, network, credential or process access.
 
 - **Input runs with your authority.** Execute tools type into panes, and the
   pane program runs what arrives.
@@ -690,9 +684,7 @@ README][workspace-agent] has the two commands.
   tool surface. Pin an exact version.
 - **tmux 3.3a or newer**, on `PATH`.
 - **Rust 1.88 to build.** The libraries under it build on 1.85.
-- **Linux, including WSL.** CI runs the workspace's tests on Linux. macOS
-  is supported on a best-effort basis; the release workflow builds binaries
-  there, and CI does not run the tests.
+- **Linux, including WSL.** macOS is best-effort.
 - **Windows.** Native Windows is unsupported because tmux is unavailable
   there.
 
@@ -718,9 +710,6 @@ $ cargo test -p tmux-mcp
 ```
 
 The tests drive a real tmux on an isolated socket, so tmux must be on `$PATH`.
-They pass every command and client configuration on this page through the
-binary's own argument and setting validation, and `just examples` runs each
-example.
 
 ## Related
 

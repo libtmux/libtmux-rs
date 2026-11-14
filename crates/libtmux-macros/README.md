@@ -77,10 +77,11 @@ let retried = fields.name.starts_with("bui").and(fields.attempts.gt(2));
 assert_eq!(jobs.iter().matching(&retried).count(), 1);
 ```
 
-Field types are read from the struct, and they decide which operations exist:
-`attempts.gt(2)` compiles because the field is an integer, and `name.gt(..)`
-does not, because text has no ordering. Getting that wrong is a compile error
-that names the field.
+Field types come from the struct and decide which operations exist:
+
+- `attempts.gt(2)` compiles, because the field is an integer.
+- `name.gt(..)` does not, because text has no ordering. The error names the
+  field.
 
 ## Relations
 
