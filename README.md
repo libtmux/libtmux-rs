@@ -26,9 +26,8 @@
 [License]: https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg
 [license]: https://github.com/libtmux/libtmux-rs/blob/master/LICENSE-MIT
 
-**Drive tmux from Rust: typed, async control over servers, sessions, windows,
-and panes — and a query layer that makes "which pane is running the tests?" one
-expression instead of a parsing problem.**
+**Drive tmux from Rust: typed, async control over servers, sessions, windows
+and panes, and typed queries over what is running.**
 
 </div>
 
@@ -102,16 +101,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The examples on this page run against a throwaway tmux. To connect to an
-existing server, use `libtmux::Server::new()?` instead of creating the guard,
-and omit `guard.shutdown()`. With neither `LIBTMUX_SOCKET_PATH` nor
-`LIBTMUX_SOCKET` set, `Server::new` passes tmux no socket and tmux picks the
-server. That route needs no `test-support` feature; leave the daemon's
-lifetime to its owner.
+- **Throwaway tmux.** Every example on this page runs on a socket of its own,
+  not yours.
+- **Your own server.** Use `libtmux::Server::new()?` in place of the guard, and
+  omit `guard.shutdown()`. It needs no `test-support` feature.
+- **Which server.** With neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET`
+  set, `Server::new` names no socket and tmux chooses the server.
 
-Everything that reaches tmux is `async`. Everything that reads an
-already-taken snapshot is not, so walking a tree you already have costs no
-round trips.
+Everything that reaches tmux is `async`. Reading a snapshot you already hold is
+not, so walking it costs no round trips.
 
 ## Is this for you?
 
@@ -217,12 +215,15 @@ a CLI, a config file, or an MCP tool call can carry one.
 
 ### [`Window::refresh`] and [`Window::refreshed`]: read a held handle again
 
-A `Session`, `Window` or `Pane` you hold is what tmux said when it was read.
-A change made through another handle, another client or tmux itself does not
-reach it. `refresh().await?` reads it again in place, as Python libtmux's
-`.refresh()` does; `refreshed().await?` returns a new handle and leaves the
-receiver as it was. The methods that change an object, such as `rename`, update
-the handle they were called on:
+A `Session`, `Window` or `Pane` you hold is what tmux said when it was read. A
+change made through another handle, another client or tmux itself does not
+reach it.
+
+- `refresh().await?` reads it again in place, as Python libtmux's `.refresh()`
+  does.
+- `refreshed().await?` returns a new handle and leaves the receiver as it was.
+- Methods that change an object, such as `rename`, update the handle they were
+  called on.
 
 ```rust
 use libtmux::test::TestServer;
@@ -261,12 +262,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### [`Plan::run`]: the same work at different costs
 
-[Three switches], each a Cargo feature, none of them the default. This is the
-baseline workload under each, printed by
-`cargo run --example matrix --all-features -- --baseline`.
+[Three switches] set what a run costs. This is the baseline workload under
+each, printed by `cargo run --example matrix --all-features -- --baseline`.
 
-- Every column but `wall` is exact and checked against this block by
-  `just example-tables`. The timings are one run on one developer machine.
+- `wall` is one run on one developer machine; the other columns are exact.
 - `processes` is counted: the example runs tmux through a wrapper that logs
   each start.
 - `routed` is [`Plan::run`] on a [`Server::over_control_mode`] handle.
@@ -291,15 +290,13 @@ the same failure, dispatched two ways:
   reports one status for the group whichever member failed.
 ```
 
-The result is the same and the cost differs, and so does the *evidence*:
+The result is the same. The cost differs, and so does what a failure tells you:
 
 - **[Folding]** a chain into one tmux invocation halves the dispatches. tmux
-  reports one status for the group, so a failure cannot be blamed on a member,
-  and attribution degrades to `unknown` rather than guessing.
-- **[Control mode]** keeps per-command evidence over one persistent connection
-  after its version probes. Run the example without `-- --baseline` to include
-  control rows with a compatible client and a daemon ranking at 3.7 or
-  newer.
+  reports one status for the group, so a failure is not blamed on a member:
+  attribution becomes `unknown`.
+- **[Control mode]** keeps per-command attribution over one connection. Run the
+  example without `-- --baseline` to add its rows, on tmux 3.7 or newer.
 
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
 has the behavior table, the how-to-turn-it-on table, and the named presets.
@@ -352,33 +349,21 @@ it into an MCP client.
 [tmux-workspace]: https://img.shields.io/crates/v/tmux-workspace.svg?label=tmux-workspace
 [workspace-crate]: https://crates.io/crates/tmux-workspace
 
-[`libtmux`](crates/libtmux) does not require proc macros: its own
-[`Filterable`] implementations are hand-written, and the derive exists for
-structs outside this workspace.
-
-The last two crates are also how the API gets used from outside it. When
-either needs a workaround, that is treated as a finding about `libtmux` rather
-than about them.
-
 ### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux)
 
-The async tmux client and object model: servers, sessions, windows, and panes
-as typed handles, and the query layer over them.
+The async tmux client and object model: typed handles for servers, sessions,
+windows and panes, and the query layer over them.
 
 [![libtmux]][libtmux-crate] [API reference][libtmux-api] ·
 [docs.rs][libtmux-docsrs] · [Guide][libtmux-guide] ·
 [Programs][libtmux-examples]
 
-The examples above are this crate's: [Quick start](#quick-start),
-[Query what is there](#query-what-is-there), and
-[Pick how commands reach tmux](#pick-how-commands-reach-tmux). The programs
-under `examples/` are longer.
+The examples above are this crate's.
 
 ### [`libtmux-macros`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-macros)
 
-`#[derive(Filterable)]`, so your own structs take the same typed query grammar
-as tmux objects. You do not depend on this crate: `libtmux` re-exports the
-derive behind its `derive` feature.
+`#[derive(Filterable)]`: your own structs take the same typed queries as tmux
+objects. `libtmux` re-exports it behind its `derive` feature.
 
 [![libtmux-macros]][macros-crate] [API reference][macros-docsrs] ·
 [Guide][macros-guide]
@@ -387,15 +372,13 @@ derive behind its `derive` feature.
 $ cargo add libtmux --features derive
 ```
 
-The example in [its README][macros-guide] derives `Filterable` for a `Job`
-struct and filters a list of jobs with the expressions `libtmux` uses for
-panes.
+[Its README][macros-guide] filters a list of `Job` structs with the expressions
+`libtmux` uses for panes.
 
 ### [`tmux-workspace`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-workspace)
 
-A native tmuxp: it loads tmuxp workspace files, freezes running sessions back
-into them, and imports tmuxinator and teamocil projects, as one binary with no
-Python.
+A native tmuxp, as one binary with no Python: it loads workspace files, freezes
+running sessions back into them, and imports tmuxinator and teamocil projects.
 
 [![tmux-workspace]][workspace-crate] [Command reference][workspace-cli] ·
 [API reference][workspace-api] · [docs.rs][workspace-docsrs] ·
@@ -420,14 +403,14 @@ $ tmux-workspace freeze dev -o dev.yaml
 
 ### [`tmux-mcp`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp)
 
-A Model Context Protocol server over `libtmux`. It is read-biased, and every
-tool that changes state names what it changes.
+A Model Context Protocol server over `libtmux`, read-biased: every tool that
+changes state names what it changes.
 
 [![tmux-mcp]][mcp-crate] [Tools][mcp-tools] · [API reference][mcp-api] ·
 [docs.rs][mcp-docsrs] · [Connect a client][mcp-connect] · [Guide][mcp-guide]
 
-Register it with Claude Code. [Its README][mcp-guide] has the same step for
-Codex, Gemini, Cursor, VS Code, and the other clients:
+Register it with Claude Code. [Its README][mcp-guide] covers the other
+clients:
 
 ```console
 $ claude mcp add tmux -- tmux-mcp
@@ -455,19 +438,12 @@ $ claude mcp add tmux \
 ## Support and status
 
 - **Rust 1.85 or newer** for the libraries. `tmux-mcp` needs 1.88.
-- **tmux 3.3a or newer.** CI builds pinned tmux 3.3a and 3.8 from source on each
-  push, and 3.3a, 3.4, 3.5a, 3.6b, 3.7b, and 3.8 every week and on demand, and
-  runs the whole workspace against each, because tmux's output and error
-  wording change between releases. tmux release candidates are not
-  supported: a candidate such as `X.Y-rcN` ranks below `X.Y`, and a feature
-  can require one only until its release ships. See
-  [Release candidates](https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates).
-- **A refusal on two releases.** [`run_shell`] refuses on 3.3a and 3.4, which
-  drop the command's output instead of returning it.
-- **Linux, including WSL.** CI runs the tests on Linux. macOS is supported
-  on a best-effort basis; the release workflow builds binaries there, and CI
-  does not run the tests.
-- **Unix only.** Native Windows is unsupported because tmux is unavailable
+- **tmux 3.3a or newer.** See the [supported releases][tmux-support].
+  [Release candidates][tmux-rc] are not supported.
+- **A refusal on two releases.** [`run_shell`] refuses on tmux 3.3a and 3.4,
+  which drop the command's output.
+- **Linux, including WSL.** macOS is best-effort.
+- **Unix only.** Native Windows is unsupported, because tmux does not run
   there.
 
 ## Documentation
@@ -499,22 +475,9 @@ Cargo commands.
 $ just check
 ```
 
-That runs what CI runs: formatting, Clippy, tests, doctests, docs, the feature
-powerset, `cargo deny`, both MSRV builds, and a packaging check.
-
-Tests run against real tmux rather than a mock. [`libtmux::test::TestServer`]
-gives each test an isolated socket under `/tmp/libtmux-rs-test/` and
-deterministic cleanup.
-
-Every Rust example on this page is compiled by `cargo test --doc`, including
-the ones in this file. See
-[`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) for the gates and the
-things that will bite, and [`.github/WRITING.md`](.github/WRITING.md) for how
-the prose reads.
-
-The `tmux-workspace` commands and the workspace YAML on this page are parsed by
-that crate's tests, and the `tmux-mcp` commands by that crate's, against the
-real command lines.
+That runs what CI runs. [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md)
+has the gates and the things that will bite, and
+[`.github/WRITING.md`](.github/WRITING.md) says how the prose reads.
 
 ## AI policy
 
@@ -564,6 +527,8 @@ conditions.
 [mcp-docsrs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
 [mcp-connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
 [mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/README.md
+[tmux-support]: https://libtmux.org/en/tmux/guides/tmux-support/
+[tmux-rc]: https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates
 
 [Typed field handles]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
 [versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
