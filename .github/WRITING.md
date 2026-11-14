@@ -82,19 +82,63 @@ what using it feels like, how to install it, and where everything else lives.
   flag dump does not. `--help` and the API documentation own the switches.
 - Say who it is not for, and name the alternative. The paragraph that turns a
   reader away is worth more than the one that keeps the wrong reader.
-- Compatibility is content, not an afterthought: supported tmux releases, the
-  MSRV, and the platforms belong in the README under their own heading.
+- Compatibility is content, not an afterthought: the tmux floor, the MSRV, and
+  the platforms belong in the README under their own heading, as floors a
+  reader can act on.
 - A Rust example on a README is compiled by `cargo test --doc`, on the five
   pages wired in for it. Write examples that run; one that cannot compile is
   not an example. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists which pages those
   are, and says that adding a README means wiring it in.
-- Badges: CI, the published crates, MSRV, license. That is the set.
+- Badges: CI, the published crates, the libtmux.org docs, MSRV, license. That
+  is the set.
 
 The version warning is worded the same in every libtmux port. Do not reword it:
 
 > Releases are numbered `0.1.N`, and each release increments `N`. The API is not
 > settled: any release may change or remove exported identifiers, and the
 > changelog marks each break. Pin an exact version to avoid one.
+
+## README shape
+
+A README is read at a glance, so it is made of short parts a reader can find by
+scanning. This is the shape of the repository README and of each crate's.
+
+- **Header.** The logo, a centred title, and a badge row. Add no badge or link
+  for a registry or libtmux.org page that does not return 200.
+- **Sections are tasks.** A `##` heading names what the reader came to do, in
+  their words: "Find sessions, windows and panes".
+- **Headings are the API.** A `###` heading is an API name linked to its
+  libtmux.org reference page, then a colon and its job in plain words: the
+  linked `Server::sessions`, a colon, and "what tmux has now".
+- **Under a heading:** a line or two linking sibling APIs, the example, what it
+  prints, at most one short note, and a `More:` link to the guide.
+- **No paragraph over three lines.** A list of facts is a bullet list.
+- **No feature inventory.** The sections and their examples show what exists.
+- **Requirements are floors.** "tmux 3.3a or newer", "Rust 1.85 or newer". No
+  patch versions of a toolchain, no CI matrix, no kernel or libc detail; link
+  the page that holds it.
+- **Cut what a reader would assume or never need.** That examples are tested,
+  how the docs are built, what the checks cover, and words like "evidence",
+  "qualification" or "contract" used as filler.
+- **Packages.** Keep the table. Under it, one heading per crate linking its
+  directory on the trunk branch, a one-line description, then a line of links
+  to the API reference, the registry and the changelog.
+- **Support and status, What it leaves out.** Short bullets with a bold lead.
+- **Add, never remove.** An example, a command block, an index table, a package
+  list or a guide table stays. Shorten the prose around it and move detail to a
+  guide.
+- **Examples start with their imports,** so a reader can paste one into a file
+  and run it. In a section of examples, later ones may continue from the first.
+- **Examples own their tmux server.** They start a private server through the
+  library, `TestServer` here, and clean it up through the library. A step that
+  needs `tmux ...` in the shell, `tmux kill-server` or `rm` is a missing
+  library call, not an example.
+- **Every displayed example comes from a file CI runs.** A Rust block on a
+  README is a doctest, and a longer program lives in `examples/` where
+  `just examples` runs it. Wire a new README in before writing examples on it.
+- **Show the headline features the crate has.** Typed queries, the planner and
+  `Planner::explain`, chaining, and control mode each get a section with a
+  linked heading and an example. Describe none the crate lacks.
 
 ## API documentation
 
