@@ -45,6 +45,7 @@ Protocol.
 [Query what is there](#query-what-is-there) ·
 [Refresh an object](#refresh-an-object) ·
 [Pick how commands reach tmux](#pick-how-commands-reach-tmux) ·
+[Watch tmux change](#watch-tmux-change) ·
 [Load workspaces](#load-workspaces-from-yaml) ·
 [Drive tmux from an agent](#drive-tmux-from-an-agent) ·
 [Packages](#packages) · [What it leaves out](#what-it-leaves-out) ·
@@ -301,6 +302,123 @@ The result is the same. The cost differs, and so does what a failure tells you:
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
 has the behavior table, the how-to-turn-it-on table, and the named presets.
 
+### [`Planner::explain`]: chain commands, and see what each step costs
+
+A plan, behind the `plan` feature, records commands without sending them. Ask a
+planner how it would group them before anything runs:
+
+- [`Planner::Sequential`] is one tmux process per command, and names the one
+  that failed.
+- [`Planner::Folding`] shares a process between neighbours that need no answer.
+- [`Planner::Marked`] also folds in the first commands sent to a new pane.
+
+```rust
+# // `plan` is behind a Cargo feature, so the example is compiled only when it
+# // is on.
+# #[cfg(not(feature = "plan"))]
+# fn main() {}
+# #[cfg(feature = "plan")]
+use libtmux::plan::{NewSession, Plan, Planner, SendKeys, SplitWindow, StepReason};
+# #[cfg(feature = "plan")]
+use libtmux::test::TestServer;
+
+# #[cfg(feature = "plan")]
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let server = guard.server();
+
+    // Recording sends nothing: a step can name a pane an earlier step makes.
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("build"));
+    let pane = plan.add(SplitWindow::new(session.window()).focus());
+    plan.add(SendKeys::new(pane).text("echo one").enter());
+    plan.add(SendKeys::new(pane).text("echo two").enter());
+
+    assert_eq!(Planner::Sequential.steps(&plan).len(), 4);
+    assert_eq!(Planner::Marked.steps(&plan).len(), 2);
+
+    // `explain` names what keeps a step in a process of its own.
+    let reasons: Vec<StepReason> = Planner::Folding
+        .explain(&plan)
+        .into_iter()
+        .map(|(_, reason)| reason)
+        .collect();
+    assert_eq!(
+        reasons,
+        [StepReason::CreatesId, StepReason::CreatesId, StepReason::Folded],
+    );
+
+    let result = plan.run(server, Planner::Marked).await?;
+    assert!(result.is_complete());
+    assert_eq!(result.dispatches(), 2);
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
+[`Plan::run_over_control_mode`] sends the same plan down one control connection
+instead. More:
+[the `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux).
+
+## Watch tmux change
+
+### [`ControlMode::attach`]: hear changes as tmux makes them
+
+Control mode keeps one tmux client attached. It needs the `control-mode`
+feature and tmux 3.7 or newer. [`ControlSender::subscribe`] has tmux watch a
+format and report each change, so nothing polls, and
+[`Server::over_control_mode`] sends every typed call down the same connection:
+
+```rust
+# // `control` is behind `control-mode`, so the example is compiled only when
+# // that feature is on.
+# #[cfg(not(feature = "control-mode"))]
+# fn main() {}
+# #[cfg(feature = "control-mode")]
+use libtmux::control::{ControlMode, Event, Subscription};
+# #[cfg(feature = "control-mode")]
+use libtmux::test::TestServer;
+
+# #[cfg(feature = "control-mode")]
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+# let version = guard.server().capabilities().await?.tmux_version().clone();
+# if !version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
+#     guard.shutdown().await?;
+#     return Ok(());
+# }
+    let session = guard.server().new_session("watching").await?;
+    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
+        .await?
+        .split();
+
+    commands
+        .subscribe("windows", &Subscription::Session, "#{session_windows}")
+        .await?;
+
+    // The first report arrives with nothing changed: a subscription reads the
+    // value as well as watching it.
+    while let Some(event) = events.next_event().await {
+        if let Event::SubscriptionChanged { name, value, .. } = event? {
+            println!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
+            break;
+        }
+    }
+
+    commands.unsubscribe("windows").await?;
+    events.shutdown().await?;
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
+It prints `windows = 1`. tmux reports a value at most once a second, and says
+what it became, not the steps between. More:
+[the `libtmux` guide](crates/libtmux/README.md#watch-tmux-change).
+
 ## Load workspaces from YAML
 
 ### [`tmux-workspace load`][workspace-cli-load]: build a session from a file
@@ -539,6 +657,13 @@ conditions.
 [`Session`]: https://libtmux.org/en/rs/latest/reference/session-session/
 [`Pane`]: https://libtmux.org/en/rs/latest/reference/pane-pane/
 [`Plan::run`]: https://libtmux.org/en/rs/latest/reference/plan-plan-run/
+[`Plan::run_over_control_mode`]: https://libtmux.org/en/rs/latest/reference/plan-plan-run_over_control_mode/
+[`Planner::explain`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-explain/
+[`Planner::Sequential`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-sequential/
+[`Planner::Folding`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-folding/
+[`Planner::Marked`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-marked/
+[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/control-controlmode-attach/
+[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/control-controlsender-subscribe/
 [`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/server-server-over_control_mode/
 [Control mode]: https://libtmux.org/en/rs/latest/reference/control-controlmode/
 [`run_shell`]: https://libtmux.org/en/rs/latest/reference/server-server-run_shell/
