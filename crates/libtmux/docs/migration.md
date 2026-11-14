@@ -40,7 +40,7 @@ does not exist. Nested `split-window -p` on exactly 3.4, and `:` or `.` in a
 session or window name on exactly 3.7, only produce a tmux error. On exact
 3.7, name every nested or bound `break-pane` with `-n NAME`, including the
 one `prefix !` runs, or upgrade to 3.7a; the
-[contract](contracts.md#commands-nested-in-another-command) has the table.
+[contract][nested] has the table.
 
 ### Upgrade the workspace Python backend
 
@@ -328,3 +328,5 @@ closures with inferred arguments.
 `TmuxText` implements `AsRef<[u8]>`. Use `server.session(session.name())`
 and `session.window(window.name())` directly. The conversion borrows the
 original bytes and never decodes them lossily.
+
+[nested]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/contracts.md#commands-nested-in-another-command
