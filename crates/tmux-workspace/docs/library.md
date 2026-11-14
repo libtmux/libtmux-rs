@@ -230,20 +230,3 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
 </details>
-
-## Why this crate exists
-
-It exists to drive the `libtmux` public API from outside the crate that
-defines it. Tests written inside `libtmux` can reach `pub(crate)` items and
-can be written around whatever shape the internals happen to have; a separate
-crate cannot. So this one builds something real — sessions, windows, panes,
-splits, and the layout a workspace file describes — using only what a
-published consumer can see. An API that is awkward to use from here is
-awkward for everyone, and that shows up as a compile error rather than as a
-review comment.
-
-Being published is part of that rather than beside it. A crate that is only
-ever built inside its own workspace never proves its dependency requirements
-resolve, and this one could not have been published at all until `libtmux`
-shipped the `plan` feature it asks for — which is exactly the kind of thing
-that is invisible from inside the tree.

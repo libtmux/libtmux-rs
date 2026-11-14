@@ -161,24 +161,25 @@ Python-extension loads fail before touching tmux; other commands work.
 
 ## Python extensions
 
-`plugins` and `workspace_builder` run through a bridge to tmuxp: a nonempty
-plugin list or builder string needs tmuxp 1.74.x and Python libtmux declaring a
-hard tmux minimum of 3.3a or newer with per-command daemon version check, plus
-`libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION >= 2`. Select the
-environment through `TMUX_WORKSPACE_PYTHON` or `PATH`. Runtime discovery and
-each builder or shell child check both contracts before tmuxp imports; the
-Python backend then enforces each operation's daemon requirements. An absent or
-empty plugin/builder value keeps the native builder. The bridge's request
-travels in an environment variable rather than the child's command line. `shell`
-also runs tmuxp's Python shell.
+`plugins` and `workspace_builder` run through a bridge to tmuxp. A nonempty
+plugin list or builder string needs a Python environment with:
 
-The backend depends on the coordinated [Python libtmux tmux-support
-change](https://github.com/tmux-python/libtmux/pull/779) and [optional-feature
-policy](https://github.com/tmux-python/libtmux/pull/780), which have not been
-released. CI qualifies the pinned feature-policy source with tmux 3.3a. Released tmuxp 1.74.0
-pins libtmux below 0.62, so installing that release alone does not qualify the
-bridge. Use a compatible tmuxp environment carrying the updated Python library,
-and select it with `TMUX_WORKSPACE_PYTHON`.
+- tmuxp 1.74.x.
+- A Python libtmux that declares tmux 3.3a or newer as a hard minimum, with a
+  per-command daemon version check.
+- `libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION >= 2`.
+
+Select the environment through `TMUX_WORKSPACE_PYTHON` or `PATH`. Both
+requirements are checked before tmuxp imports. An absent or empty plugin or
+builder value keeps the native builder. The bridge's request travels in an
+environment variable, not the child's command line, and `shell` also runs
+tmuxp's Python shell.
+
+The backend depends on two Python libtmux changes that are not released: the
+[tmux-support change](https://github.com/tmux-python/libtmux/pull/779) and the
+[optional-feature policy](https://github.com/tmux-python/libtmux/pull/780).
+Released tmuxp 1.74.0 pins libtmux below 0.62, so installing it alone does not
+qualify the bridge. Use a tmuxp environment carrying the updated library.
 
 ## Imports
 
