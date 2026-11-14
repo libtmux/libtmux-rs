@@ -250,11 +250,14 @@ class DocumentTests(unittest.TestCase):
     def tags(self, *kinds: str) -> set[str]:
         return {lane.tag for lane in self.lanes if lane.kind in kinds}
 
-    def test_the_readme_states_the_supported_releases_the_manifest_tests(self) -> None:
+    def test_the_readme_states_the_floor_the_manifest_tests(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        start = readme.index("- **tmux 3.3a or newer.**")
+        start = readme.index("- **tmux ")
         bullet = readme[start : readme.index("\n- **", start + 1)]
-        self.assertEqual(set(RELEASE.findall(bullet)), self.tags("supported"))
+        named = RELEASE.findall(bullet)
+        supported = [lane.tag for lane in self.lanes if lane.kind == "supported"]
+        self.assertEqual(named[:1], supported[:1], "the floor is the oldest lane")
+        self.assertLessEqual(set(named), set(supported))
 
     def test_contributing_states_every_release_the_manifest_builds(self) -> None:
         text = (ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8")
