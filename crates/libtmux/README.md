@@ -716,7 +716,9 @@ tmux permits names, titles, and pane contents that are not valid UTF-8, so they
 arrive as [`TmuxText`] rather than `String`. There is no implicit conversion:
 
 ```rust
-let text = libtmux::TmuxText::from("editor");
+use libtmux::TmuxText;
+
+let text = TmuxText::from("editor");
 
 assert_eq!(text.as_bytes(), b"editor");
 assert_eq!(text.as_str().expect("valid UTF-8"), "editor");
