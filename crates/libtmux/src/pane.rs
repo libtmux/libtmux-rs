@@ -34,6 +34,214 @@ const fn pane_mode_is_active(count: u32) -> bool {
 /// several sessions. The handle retains the link it was discovered through so
 /// traversal back up the hierarchy lands where the caller came from.
 ///
+/// # What is on here
+///
+/// The methods on a `Pane` fall into a few groups:
+///
+/// **Finding the pane you are in.** Resolve the pane this process is running
+/// in, through `TMUX_PANE` or through a value you pass. Both report `Ok(None)`
+/// when tmux no longer has that pane, and fail when the value is absent or not
+/// a pane ID.
+///
+/// [`from_env`], [`from_env_value`]
+///
+/// **Reading the snapshot.** Getters are synchronous: they read the snapshot
+/// this handle owns and send nothing to tmux, so a value is as old as the
+/// snapshot. `current_path` is `None` when tmux reported none, which a pane
+/// straight from `split` can do until its process has started. `pid` is
+/// `None` when tmux reports none, as 3.8 does after the process has exited, and
+/// a value is not evidence the process is alive: `is_dead` says that, and only
+/// when `remain-on-exit` keeps the pane. Refreshing updates this handle in place or
+/// returns a new one and fails with [`Error::ObjectGone`] when the pane no
+/// longer exists; `get` reads any snapshot field, including those with no
+/// getter, and needs the `query` feature, which is on by default.
+///
+/// - Identity: [`id`], [`window_id`], [`window_index`], [`session_id`],
+///   [`index`]
+/// - Process: [`current_command`], [`current_path`], [`pid`], [`tty`],
+///   [`is_dead`]
+/// - Geometry: [`width`], [`height`], [`left`], [`top`], [`is_at_top`],
+///   [`is_at_bottom`], [`is_at_left`], [`is_at_right`]
+/// - State: [`title`], [`is_active`], [`is_in_mode`], [`is_input_disabled`],
+///   [`is_synchronized`], [`is_piped`]
+/// - Any field: [`get`]
+/// - Refresh: [`refresh`], [`refreshed`]
+///
+/// **Window and session.** Both re-read tmux rather than the snapshot, so a
+/// rename or a move since discovery shows as it is now. `window` reports
+/// `Ok(None)` when the pane has no resolvable containing window, and `session`
+/// when the session is gone. A window can be linked into several sessions, so
+/// `session` is the one this handle was reached through, not the pane's only
+/// one.
+///
+/// [`window`], [`session`]
+///
+/// **Sending input.** Text goes to the pane as if typed, and it is marked
+/// sensitive, so it never reaches `Debug`, an error, or a tracing span.
+/// `send_keys` sends it literally, so a key name such as `C-c` is typed rather
+/// than interpreted; `send_key_names` takes tmux's key vocabulary and fails on
+/// a name tmux does not recognize; `send_line` sends the text and Enter as one
+/// dispatch, so a dropped future cannot leave a line typed and not submitted.
+/// A retry can type the line twice.
+///
+/// - Keys: [`send_keys`], [`send_key_names`], [`send_line`], [`send_prefix`]
+/// - Paste: [`paste_buffer`]
+/// - Clear: [`clear_history`]
+///
+/// **Reading output.** `capture` reads the visible screen as [`TmuxText`] lines,
+/// because a terminal can print any bytes. `capture_with` reaches into
+/// scrollback, and `capture_lines` also reports the shell prompts tmux marked,
+/// which needs tmux 3.7 and reports none unless the shell emits OSC 133.
+/// `stream_output` reports every byte the pane writes from then on over a
+/// control-mode connection, needs the `control-mode` feature, and stops the pane
+/// if it is left unread. `pipe` copies output to a shell command, and tmux
+/// expands that command as a format, so a `%` is a time conversion.
+///
+/// - Capture: [`capture`], [`capture_with`], [`capture_lines`]
+/// - Stream: [`stream_output`], [`stream_output_with_limits`]
+/// - Pipe: [`pipe`]
+///
+/// **Waiting.** A wait polls every 120ms, looks before it first sleeps, and
+/// reads scrollback with wrapped lines joined. Running out of time is
+/// [`PaneWait::TimedOut`], not an error, and a pane whose process ends answers
+/// [`PaneWait::Dead`] rather than running to the deadline. `wait_for_text`
+/// matches a literal needle, `wait_until` takes a predicate over the lines, and
+/// `wait_for_quiet` waits for a silence.
+///
+/// [`wait_for_text`], [`wait_until`], [`wait_for_quiet`]
+///
+/// **Splitting and arranging.** `split` divides the pane you name, where
+/// `Window::split` divides whichever is active, and it fails when the pane is
+/// too small. `break_out` and `join_into` consume the handle, because the
+/// pane's window changes; `join_into` fails for a pane in its own window, and
+/// `swap_with` and `join_into` return [`Error::ServerMismatch`] for a pane on
+/// another server. Zooming is one toggle, and `resize_by` moves one edge by a
+/// number of cells.
+///
+/// - Add: [`split`]
+/// - Move: [`break_out`], [`join_into`], [`swap_with`]
+/// - Size: [`resize`], [`resize_by`], [`toggle_zoom`]
+/// - Focus: [`select`]
+/// - Title: [`set_title`]
+///
+/// **Modes.** Copy mode is entered with `copy_mode`. `exit_mode` leaves any
+/// mode and leaves a pane in no mode alone rather than refusing it.
+///
+/// [`copy_mode`], [`exit_mode`], [`clock_mode`]
+///
+/// **Restarting and ending.** `respawn` restarts the pane's command in place,
+/// and under [`Respawn::OnlyIfDead`] it fails while the command is still
+/// running. Killing consumes the handle, and killing a window's last pane
+/// closes the window.
+///
+/// [`respawn`], [`kill`]
+///
+/// **Options and hooks.** Read and set options at this pane's scope: listings
+/// report what this pane has set, not what it inherits, and `typed_option`
+/// reads `Ok(None)` for an option that holds nothing here.
+/// `set_typed_option` checks the value against tmux's option table before
+/// anything is sent, `set_option` sends text and leaves tmux to refuse it, and
+/// [`OptionValue`] says how the reads and writes fit together. tmux does not
+/// enumerate the hooks set on a pane, so there is no listing: read one by name
+/// with `hook`, which gives `Ok(None)` when it holds nothing.
+///
+/// - Read: [`option_names`], [`options`], [`typed_option`]
+/// - Write: [`set_typed_option`], [`set_option`], [`append_option`],
+///   [`unset_option`]
+/// - Hooks: [`set_hook`], [`unset_hook`], [`hook`]
+///
+/// **Formats and messages.** Expand a tmux format in this pane's context and
+/// get the text back, or show a message to the clients viewing its window. Both
+/// read their text as a format, so command and recursive formats can run shell
+/// commands, and `display` succeeds when nobody is watching.
+///
+/// [`format`], [`display`]
+///
+/// Anything tmux can do to a pane that is not here is reachable through
+/// [`cmd`], which runs an arbitrary command against it and hands back its
+/// result.
+///
+/// [`from_env`]: Pane::from_env
+/// [`from_env_value`]: Pane::from_env_value
+/// [`id`]: Pane::id
+/// [`window_id`]: Pane::window_id
+/// [`window_index`]: Pane::window_index
+/// [`session_id`]: Pane::session_id
+/// [`index`]: Pane::index
+/// [`current_command`]: Pane::current_command
+/// [`current_path`]: Pane::current_path
+/// [`pid`]: Pane::pid
+/// [`tty`]: Pane::tty
+/// [`is_dead`]: Pane::is_dead
+/// [`width`]: Pane::width
+/// [`height`]: Pane::height
+/// [`left`]: Pane::left
+/// [`top`]: Pane::top
+/// [`is_at_top`]: Pane::is_at_top
+/// [`is_at_bottom`]: Pane::is_at_bottom
+/// [`is_at_left`]: Pane::is_at_left
+/// [`is_at_right`]: Pane::is_at_right
+/// [`title`]: Pane::title
+/// [`is_active`]: Pane::is_active
+/// [`is_in_mode`]: Pane::is_in_mode
+/// [`is_input_disabled`]: Pane::is_input_disabled
+/// [`is_synchronized`]: Pane::is_synchronized
+/// [`is_piped`]: Pane::is_piped
+/// [`get`]: Pane::get
+/// [`refresh`]: Pane::refresh
+/// [`refreshed`]: Pane::refreshed
+/// [`window`]: Pane::window
+/// [`session`]: Pane::session
+/// [`send_keys`]: Pane::send_keys
+/// [`send_key_names`]: Pane::send_key_names
+/// [`send_line`]: Pane::send_line
+/// [`send_prefix`]: Pane::send_prefix
+/// [`paste_buffer`]: Pane::paste_buffer
+/// [`clear_history`]: Pane::clear_history
+/// [`capture`]: Pane::capture
+/// [`capture_with`]: Pane::capture_with
+/// [`capture_lines`]: Pane::capture_lines
+/// [`stream_output`]: Pane::stream_output
+/// [`stream_output_with_limits`]: Pane::stream_output_with_limits
+/// [`pipe`]: Pane::pipe
+/// [`wait_for_text`]: Pane::wait_for_text
+/// [`wait_until`]: Pane::wait_until
+/// [`wait_for_quiet`]: Pane::wait_for_quiet
+/// [`split`]: Pane::split
+/// [`break_out`]: Pane::break_out
+/// [`join_into`]: Pane::join_into
+/// [`swap_with`]: Pane::swap_with
+/// [`resize`]: Pane::resize
+/// [`resize_by`]: Pane::resize_by
+/// [`toggle_zoom`]: Pane::toggle_zoom
+/// [`select`]: Pane::select
+/// [`set_title`]: Pane::set_title
+/// [`copy_mode`]: Pane::copy_mode
+/// [`exit_mode`]: Pane::exit_mode
+/// [`clock_mode`]: Pane::clock_mode
+/// [`respawn`]: Pane::respawn
+/// [`kill`]: Pane::kill
+/// [`option_names`]: Pane::option_names
+/// [`options`]: Pane::options
+/// [`typed_option`]: Pane::typed_option
+/// [`set_typed_option`]: Pane::set_typed_option
+/// [`set_option`]: Pane::set_option
+/// [`append_option`]: Pane::append_option
+/// [`unset_option`]: Pane::unset_option
+/// [`set_hook`]: Pane::set_hook
+/// [`unset_hook`]: Pane::unset_hook
+/// [`hook`]: Pane::hook
+/// [`format`]: Pane::format
+/// [`display`]: Pane::display
+/// [`cmd`]: Pane::cmd
+/// [`Error::ObjectGone`]: crate::Error::ObjectGone
+/// [`Error::ServerMismatch`]: crate::Error::ServerMismatch
+/// [`PaneWait::TimedOut`]: crate::PaneWait::TimedOut
+/// [`PaneWait::Dead`]: crate::PaneWait::Dead
+/// [`Respawn::OnlyIfDead`]: crate::Respawn::OnlyIfDead
+/// [`OptionValue`]: crate::OptionValue
+/// [`TmuxText`]: crate::TmuxText
+///
 /// # Examples
 ///
 /// ```
