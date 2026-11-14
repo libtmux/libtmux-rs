@@ -40,7 +40,7 @@ does not exist. Nested `split-window -p` on exactly 3.4, and `:` or `.` in a
 session or window name on exactly 3.7, only produce a tmux error. On exact
 3.7, name every nested or bound `break-pane` with `-n NAME`, including the
 one `prefix !` runs, or upgrade to 3.7a; the
-[README](../README.md#quick-start) has the table.
+[contract](contracts.md#commands-nested-in-another-command) has the table.
 
 ### Upgrade the workspace Python backend
 

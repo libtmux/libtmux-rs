@@ -1,8 +1,8 @@
 # libtmux contracts
 
 What `libtmux` promises beyond the [README](../README.md): how it checks the
-tmux version, how a command ends, what an error tells a caller, and what the
-test guard isolates. [`design.md`](design.md) says why the crate is shaped this
+tmux version, which operations need a newer tmux, how a command ends, what an
+error tells a caller, and what the test guard isolates. [`design.md`](design.md) says why the crate is shaped this
 way, and [`findings.md`](findings.md) lists the tmux defects it works around.
 
 ## The tmux version check
@@ -47,6 +47,66 @@ no representation over an open control connection.
 Async operations need an entered Tokio runtime. The default executable is
 `tmux`, resolved through the `PATH` captured when the [`Server`] is built. Use
 [`ServerBuilder::tmux_executable`] to select another.
+
+## Operations with narrower requirements
+
+Ordinary subprocess operations and polling waits need tmux 3.3a or newer.
+Some operations need more, or are refused on particular releases:
+
+| Operation | Qualified daemon |
+| --- | --- |
+| Ordinary subprocess operations and polling waits | 3.3a or newer |
+| Named-buffer deletion or rename, including managed paste cleanup | 3.4 or newer |
+| Captured `run-shell` output | 3.5 or newer |
+| Control acquisition, pane streams and subscriptions | A daemon ranking at or above 3.7 final |
+| Literal `break-pane` | Refused on exact 3.7; available again on 3.7a |
+| Literal `split-window -p` | Refused on 3.4; typed percentages use `-l N%` |
+| Literal `select-layout` with a layout operand | On 3.3a, a unique preset or standard serialized header; unsafe operands refuse |
+| Capture flags `-T` / `-F` | 3.4 / 3.7 or newer |
+| Literal `refresh-client -l` (clipboard query) | 3.6a or newer; earlier releases can stop the server |
+
+Managed control acquisition accepts a daemon ranking at or above 3.7 final,
+including `3.8` and `next-3.8`; `next-3.7` and 3.7 release candidates rank
+below it and refuse. Eligibility comes from the checked daemon and assumes a
+natively compatible client/daemon pair.
+
+Direct literal argv commands and flat batches are checked before dispatch.
+`Command::requires_tmux` carries a managed staging requirement across the whole
+chain. Alias bodies are not read, and shell programs keep native semantics.
+
+On the pinned Linux builds, 3.3a, 3.4 and 3.5 clients cannot register a control
+connection to an exact 3.7 daemon; 3.7d can. Those older clients exit without
+changing the daemon, including on a plain native attachment. Use a compatible
+client for control; this does not raise the 3.3a subprocess baseline.
+
+## Commands nested in another command
+
+The guard reads the command it is given and nothing nested in it. A refused
+command carried in the text of another command reaches the daemon as written:
+inside `if-shell`, `run-shell -C`, `bind-key`, `set-hook`, `confirm-before`, a
+menu, a prompt or `choose-*` template, or a brace block. What happens then
+depends on the command and the release:
+
+| Nested command | Releases | Result |
+| --- | --- | --- |
+| `break-pane` without `-n` | exactly 3.7 | The server exits. Fixed in 3.7a. |
+| `select-layout` with an invalid string that has no checksum | 3.3 and 3.3a | The server exits. 3.2a and 3.4 answer with an error and stay up. |
+| `refresh-client -l` | below 3.6a | The server exits when an attached client leaves or does not answer the clipboard query. |
+| `delete-buffer -b NAME`, `set-buffer -b NAME -n` | below 3.4 | Silently acts on the most recent buffer when `NAME` does not exist. |
+| `split-window -p` | exactly 3.4 | tmux reports an error and nothing changes. |
+| `:` or `.` in a session or window name | exactly 3.7 | tmux reports an error and nothing changes. |
+
+On exact tmux 3.7, name every `break-pane` you nest or bind with `-n NAME`,
+including the one the `prefix !` binding runs, or upgrade to 3.7a or later. A
+direct literal `break-pane` is refused on exact 3.7 whatever its flags.
+
+Upstream sources:
+
+- the [`break-pane` fix](https://github.com/tmux/tmux/blob/3.7a/CHANGES#L3) in
+  3.7a, and its
+  [cause](https://github.com/tmux/tmux/blob/3.7/cmd-break-pane.c#L117-L124)
+- the [`prefix !` binding](https://github.com/tmux/tmux/blob/3.7/key-bindings.c#L358)
+- the [clipboard query](https://github.com/tmux/tmux/blob/3.6a/CHANGES#L21)
 
 ## Deadlines, cancellation, and shutdown
 
