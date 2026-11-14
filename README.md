@@ -42,6 +42,7 @@ Protocol.
 
 **Contents** — [Quick start](#quick-start) ·
 [Is this for you?](#is-this-for-you) ·
+[Work in panes](#work-in-panes) ·
 [Query what is there](#query-what-is-there) ·
 [Refresh an object](#refresh-an-object) ·
 [Pick how commands reach tmux](#pick-how-commands-reach-tmux) ·
@@ -125,6 +126,55 @@ not, so walking it costs no round trips.
 Not for you if you need Windows without WSL, because tmux does not run there,
 or a synchronous-first API. A blocking caller drives the async API through
 [`blocking::Runtime`].
+
+## Work in panes
+
+### [`Window::split`]: split a window, type into the new pane, and read it back
+
+[`Pane::send_line`] types, [`Pane::capture`] reads the screen, and
+[`Pane::capture_with`] reaches into scrollback. [`Pane::split`] divides a pane
+you name, and [`Pane::resize`] and [`Window::resize`] set a size in cells:
+
+```rust
+use std::time::Duration;
+
+use libtmux::test::TestServer;
+use libtmux::{PaneWait, SplitDirection, SplitOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let session = guard.server().new_session("work").await?;
+    let mut window = session.active_window().await?.expect("a session has a window");
+
+    // No client sizes this window, so say how big it is.
+    window.resize(100, 40).await?;
+
+    // The new pane runs `sh`, so what it prints does not depend on your shell.
+    let mut pane = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sh"))
+        .await?;
+    pane.resize(100, 10).await?;
+    assert_eq!((pane.width(), pane.height()), (100, 10));
+
+    pane.send_line("echo $((6 * 7))").await?;
+    let seen = pane.wait_for_text("42", Duration::from_secs(5)).await?;
+    assert_eq!(seen, PaneWait::Arrived);
+    let screen = pane.capture().await?;
+    assert!(screen.iter().any(|line| line.to_string_lossy() == "42"));
+
+    pane.kill().await?;
+    assert_eq!(window.panes().await?.len(), 1);
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
+- Kill with [`Pane::kill`], [`Window::kill`], [`Session::kill`] or
+  [`Server::kill`].
+- Set and read an option with [`Session::set_option`] and
+  [`Session::typed_option`], and set a hook with [`Session::set_hook`].
 
 ## Query what is there
 
@@ -671,6 +721,19 @@ conditions.
 [`libtmux::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
 [`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
 [`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_line/
+[`Window::split`]: https://libtmux.org/en/rs/latest/reference/window-window-split/
+[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/pane-pane-split/
+[`Pane::kill`]: https://libtmux.org/en/rs/latest/reference/pane-pane-kill/
+[`Pane::resize`]: https://libtmux.org/en/rs/latest/reference/pane-pane-resize/
+[`Window::resize`]: https://libtmux.org/en/rs/latest/reference/window-window-resize/
+[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture/
+[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture_with/
+[`Window::kill`]: https://libtmux.org/en/rs/latest/reference/window-window-kill/
+[`Session::kill`]: https://libtmux.org/en/rs/latest/reference/session-session-kill/
+[`Server::kill`]: https://libtmux.org/en/rs/latest/reference/server-server-kill/
+[`Session::set_option`]: https://libtmux.org/en/rs/latest/reference/session-session-set_option/
+[`Session::typed_option`]: https://libtmux.org/en/rs/latest/reference/session-session-typed_option/
+[`Session::set_hook`]: https://libtmux.org/en/rs/latest/reference/session-session-set_hook/
 [`SessionTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-sessiontree/
 [`WindowTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-windowtree/
 [`blocking::Runtime`]: https://libtmux.org/en/rs/latest/reference/blocking-runtime/
