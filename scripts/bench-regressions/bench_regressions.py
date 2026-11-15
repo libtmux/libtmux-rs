@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Report criterion's change against the previous run, and fail on a doubling.
 
 Criterion compares each run with the last one it saved under `target/criterion`
@@ -13,6 +17,8 @@ would otherwise cancel out. Every change is printed, so a drift below either
 limit is still visible.
 
 The first run has nothing to compare with and passes.
+
+    bench_regressions.py target/criterion [--limit 2.0] [--machine-limit 3.0]
 """
 
 from __future__ import annotations
@@ -64,7 +70,9 @@ def main(argv: list[str]) -> int:
         if relative > args.limit:
             slower.append(f"{name} is {relative:.2f}x slower than the run's other benchmarks moved")
     if factor > args.machine_limit:
-        slower.append(f"every benchmark moved together by {factor:.2f}x, past {args.machine_limit:g}x")
+        slower.append(
+            f"every benchmark moved together by {factor:.2f}x, past {args.machine_limit:g}x"
+        )
     if slower:
         # First, so a reader of the summary sees the verdict before the table.
         rows = ["**Regressed:**", ""] + [f"- {line}" for line in slower] + [""] + rows

@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Report which crate-root types have a runnable example, and which do not.
 
 The bar this repository sets is that a caller can land on any type's page and
@@ -8,6 +12,12 @@ someone who arrived from a search with nothing to copy.
 
 Scoped to what `use libtmux::X` reaches. A private helper's page is not where
 anyone lands, and a trivial accessor inherits the example on its type.
+
+    example_coverage.py [--require-all] target/doc/libtmux.json
+
+The JSON comes from `cargo +nightly rustdoc -p libtmux --all-features -- \
+-Zunstable-options --output-format json`. `--require-all` fails when a type
+has no example.
 """
 
 from __future__ import annotations
@@ -99,7 +109,7 @@ if __name__ == "__main__":
     paths = [value for value in arguments if value != "--require-all"]
     if len(paths) != 1:
         print(
-            "usage: example-coverage.py [--require-all] <rustdoc.json>",
+            "usage: example_coverage.py [--require-all] <rustdoc.json>",
             file=sys.stderr,
         )
         raise SystemExit(2)

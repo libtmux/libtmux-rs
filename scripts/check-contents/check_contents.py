@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Fail when a document's Contents list and its sections disagree.
 
 A long document opens with a `## Contents` list so a reader can find a section
@@ -6,6 +10,8 @@ without reading down to it. A list is a copy of the headings, and a copy
 drifts: a section is added or renamed, the list keeps rendering, and the reader
 is sent to an anchor that no longer exists. This compares the two, in order,
 and checks each link against the anchor GitHub gives its heading.
+
+    check_contents.py DOCUMENT [DOCUMENT ...]
 """
 
 from __future__ import annotations

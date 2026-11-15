@@ -153,7 +153,7 @@ jobs:
           cache-bin: false
       - uses: taiki-e/install-action@v2
         with:
-          tool: just
+          tool: just,uv
       - run: just api-check
       # Same toolchain and the same rustdoc JSON, so it rides along here
       # rather than paying for a second nightly build.
@@ -256,6 +256,10 @@ jobs:
         with:
           build-warnings: ""
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: uv
+
       - name: Restore the previous run
         uses: actions/cache/restore@v6
         with:
@@ -269,7 +273,7 @@ jobs:
           cargo bench --locked --features test-support,control-mode --bench waits
 
       - name: Compare with the previous run
-        run: python3 scripts/bench-regressions.py target/criterion
+        run: uv run scripts/bench-regressions/bench_regressions.py target/criterion
 
       # Only a run that passed becomes the baseline. Saving a regressed one
       # would make it next week's normal, and the regression would fail once.

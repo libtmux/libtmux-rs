@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Fail when a doc comment has been split across two items.
 
 A doc comment is an attribute, so neither rustdoc nor the compiler checks that
@@ -22,6 +26,8 @@ first sentence stands alone" -- so a second sentence on the line after the
 summary is the mark. Both real splits this rule found were a block inserted one
 line too low, which left the item below wearing its neighbour's summary and the
 item further down with none.
+
+    check_doc_blocks.py [FILE_OR_DIRECTORY ...]    # default: crates
 """
 
 from __future__ import annotations
@@ -39,12 +45,12 @@ def summary_lines(lines: list[str]) -> list[tuple[int, str]]:
     found = []
     for index, line in enumerate(lines):
         stripped = line.strip()
-        if not (stripped.startswith("///") or stripped.startswith("//!")):
+        if not (stripped.startswith(("///", "//!"))):
             continue
 
         # Only the first line of a block.
         previous = lines[index - 1].strip() if index else ""
-        if previous.startswith("///") or previous.startswith("//!"):
+        if previous.startswith(("///", "//!")):
             continue
 
         body = stripped[3:].strip()
@@ -135,8 +141,7 @@ def offenders(path: pathlib.Path) -> list[str]:
 
     for number, body, intruder in run_on_summaries(lines):
         reported.append(
-            f"{path}:{number}: two sentences in one summary: "
-            f"{body[:48]!r} then {intruder[:48]!r}"
+            f"{path}:{number}: two sentences in one summary: {body[:48]!r} then {intruder[:48]!r}"
         )
 
     return reported

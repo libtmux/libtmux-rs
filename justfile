@@ -176,7 +176,7 @@ ci-test:
 example-coverage:
     cargo +nightly rustdoc -p libtmux --all-features \
         -- -Zunstable-options --output-format json > /dev/null
-    python3 scripts/example-coverage.py target/doc/libtmux.json
+    uv run scripts/example-coverage/example_coverage.py target/doc/libtmux.json
 
 # Needs nightly for rustdoc's JSON output, so it runs beside `api-check`
 # rather than in `just check`.
@@ -186,7 +186,7 @@ example-coverage:
 example-coverage-check:
     cargo +nightly rustdoc -p libtmux --all-features \
         -- -Zunstable-options --output-format json > /dev/null
-    python3 scripts/example-coverage.py --require-all target/doc/libtmux.json
+    uv run scripts/example-coverage/example_coverage.py --require-all target/doc/libtmux.json
 
 # Which format names each listing asks tmux for.
 #
@@ -340,12 +340,12 @@ changelogs:
 # Report formats tmux publishes that the catalog does not carry
 [group: 'docs']
 format-coverage-check:
-    python3 scripts/format-coverage.py --check
+    uv run scripts/format-coverage.py --check
 
 # Rerecord the ledger against a tmux checkout
 [group: 'release']
 format-coverage source:
-    python3 scripts/format-coverage.py {{ source }}
+    uv run scripts/format-coverage.py {{ source }}
 
 # rustdoc attaches prose to whatever item follows it and never checks that the
 # two match, so a block inserted one line too high gives a type its
@@ -354,7 +354,7 @@ format-coverage source:
 # Report doc comments that were split across two items
 [group: 'docs']
 doc-blocks:
-    python3 scripts/check-doc-blocks.py crates
+    uv run scripts/check-doc-blocks/check_doc_blocks.py crates
 
 # A block of program output pasted into prose is a copy, and a copy drifts:
 # the example grows a column, the prose keeps rendering, and the reader is
@@ -370,7 +370,7 @@ example-tables:
 # Report Contents lists that disagree with their document's sections
 [group: 'docs']
 doc-contents:
-    python3 scripts/check-contents.py crates/libtmux/docs/design.md \
+    uv run scripts/check-contents/check_contents.py crates/libtmux/docs/design.md \
         crates/libtmux/docs/findings.md
 
 # rustdoc supplies a doctest's `fn main`, so a block whose body is only a
@@ -382,7 +382,7 @@ doc-contents:
 # Report doctests that compile a definition and execute nothing
 [group: 'docs']
 doctests-run:
-    python3 scripts/check-doctests-run.py crates
+    uv run scripts/check-doctests-run/check_doctests_run.py crates
 
 # Build documentation including dependencies, so intra-doc links resolve
 [group: 'docs']
@@ -408,7 +408,7 @@ bench-waits *args:
 # Compare the last benchmark run with the one before it; fails past 2x
 [group: 'bench']
 bench-compare *args:
-    python3 scripts/bench-regressions.py target/criterion {{ args }}
+    uv run scripts/bench-regressions/bench_regressions.py target/criterion {{ args }}
 
 # Build the crates that get published, and verify what they contain
 #
@@ -432,7 +432,7 @@ package:
 # Regenerate the tmux option schema from tmux's own source
 [group: 'release']
 option-schema path:
-    python3 scripts/generate-option-schema.py {{ path }}
+    uv run scripts/generate-option-schema.py {{ path }}
 
 # Run every gate CI runs
 [group: 'check']

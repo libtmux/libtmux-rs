@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Fail when a doctest does not run the example it shows.
 
 rustdoc supplies a doctest's `fn main` only when the block does not define
@@ -47,6 +51,8 @@ Closing the whole class needs a different instrument: an `assert!(false)`
 placed in a body, where a doctest that still passes proves the body never
 ran. That needs no theory about which constructs execute, and it costs a
 compile and a run of the suite rather than a read of it.
+
+    check_doctests_run.py [FILE_OR_DIRECTORY ...]
 """
 
 from __future__ import annotations
@@ -158,8 +164,8 @@ def _text(line: str) -> str:
     return stripped[1:].strip() if stripped.startswith("#") else stripped
 
 
-def reached(body: str) -> tuple[int, int]:
-    """Return how many of the lines a reader sees are reached, and how many there are."""
+def reached(body: str) -> tuple[int, int, int]:
+    """Return how many visible lines are reached, how many there are, and the entry statements."""
     raw = body.splitlines()
     lines = [_clean(line) for line in raw]
 
@@ -242,9 +248,8 @@ def reached(body: str) -> tuple[int, int]:
         if opening:
             # rustdoc calls the `main` a block defines, so its body is the
             # entry level rather than a scope below it.
-            item = (
-                gate_of.get(index) != "main"
-                and bool(ITEM_SCOPE.match(text) or DEFERRED.search(text) or index in gate_of)
+            item = gate_of.get(index) != "main" and bool(
+                ITEM_SCOPE.match(text) or DEFERRED.search(text) or index in gate_of
             )
             nested.extend([item] * opening)
         for _ in range(min(text.count("}"), len(nested))):
@@ -267,7 +272,9 @@ def main(roots: list[str]) -> int:
     invisible: list[str] = []
     inert: list[str] = []
 
-    sources = [(path, rust_blocks) for root in roots for path in sorted(pathlib.Path(root).rglob("*.rs"))]
+    sources = [
+        (path, rust_blocks) for root in roots for path in sorted(pathlib.Path(root).rglob("*.rs"))
+    ]
     sources += [(path, markdown_blocks) for path in sorted(included_markdown(roots))]
 
     for path, reader in sources:

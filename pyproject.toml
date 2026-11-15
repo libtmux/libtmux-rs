@@ -26,9 +26,14 @@ exclude-newer = "3 days"
 # Each script is a plain module in its own directory, so its tests import it by
 # directory.
 pythonpath = [
+  "scripts/bench-regressions",
   "scripts/check-api-examples",
   "scripts/check-changelogs",
+  "scripts/check-contents",
+  "scripts/check-doc-blocks",
+  "scripts/check-doctests-run",
   "scripts/check-example-tables",
+  "scripts/example-coverage",
   "scripts/public-api",
 ]
 testpaths = ["scripts"]
@@ -52,9 +57,14 @@ extend-select = ["B", "C4", "I", "RUF", "SIM", "UP"]
 [tool.ty.environment]
 python-version = "3.12"
 extra-paths = [
+  "scripts/bench-regressions",
   "scripts/check-api-examples",
   "scripts/check-changelogs",
+  "scripts/check-contents",
+  "scripts/check-doc-blocks",
+  "scripts/check-doctests-run",
   "scripts/check-example-tables",
+  "scripts/example-coverage",
   "scripts/public-api",
 ]
 

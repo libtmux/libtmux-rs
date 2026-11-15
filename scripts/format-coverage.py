@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Compare the format catalog against tmux's own `format_table[]`.
 
 The catalog is hand-maintained, so a format tmux gained -- or one nobody ever
@@ -8,6 +12,10 @@ way `public-api.txt` records the public surface.
 
 `--check` reads the recorded ledger and the catalog and fails when they
 disagree. Regenerating needs a tmux checkout; checking does not.
+
+    format-coverage.py --check
+    format-coverage.py --check-source TMUX_SOURCE
+    format-coverage.py TMUX_SOURCE          # rerecord the ledger
 """
 
 from __future__ import annotations
@@ -53,7 +61,7 @@ def published(source: pathlib.Path) -> dict[str, str]:
 
     scopes = {}
     for name in sorted(set(re.findall(r'\{ "([a-z_0-9]+)", ', text))):
-        body = re.search(rf"format_cb_{name}\(struct format_tree \*ft.*?\n\}}", text, re.S)
+        body = re.search(rf"format_cb_{name}\(struct format_tree \*ft.*?\n\}}", text, re.DOTALL)
         if not body:
             scopes[name] = "unknown"
             continue
@@ -62,7 +70,9 @@ def published(source: pathlib.Path) -> dict[str, str]:
 
     for path in sorted(source.glob("*.c")):
         body = path.read_text()
-        for name in re.findall(r'(?:format_add|format_add_cb|cmdq_add_format)\([a-z_>.-]+, "([a-z_0-9]+)"', body):
+        for name in re.findall(
+            r'(?:format_add|format_add_cb|cmdq_add_format)\([a-z_>.-]+, "([a-z_0-9]+)"', body
+        ):
             scopes.setdefault(name, f"context: {path.stem}")
 
     return scopes
@@ -99,10 +109,7 @@ def classify(name: str, scope: str, have: set[str]) -> str:
 def expected_ledger(source: pathlib.Path) -> dict[str, str]:
     """Build the ledger implied by one tmux source tree."""
     have = catalogued()
-    return {
-        name: classify(name, scope, have)
-        for name, scope in published(source).items()
-    }
+    return {name: classify(name, scope, have) for name, scope in published(source).items()}
 
 
 def check() -> int:
@@ -147,9 +154,7 @@ def check_source(source: pathlib.Path) -> int:
         elif name not in expected:
             problems.append(f"{name}: recorded in the ledger, absent from tmux")
         elif recorded[name] != expected[name]:
-            problems.append(
-                f"{name}: recorded as {recorded[name]!r}, expected {expected[name]!r}"
-            )
+            problems.append(f"{name}: recorded as {recorded[name]!r}, expected {expected[name]!r}")
 
     if problems:
         for line in problems:
