@@ -21,8 +21,25 @@ const LEFT_A_SERVER: i32 = 70;
 /// A value no message may repeat.
 const SENTINEL: &str = "SENTINEL-must-not-be-printed";
 
+/// The runner, started once before any test uses it. `uv` builds the
+/// environment a script runs in on the first run, and two first runs at the
+/// same moment can find it half built and fail with "Failed to spawn". The
+/// tests run in parallel, so the first run is made here, alone.
 fn runner() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/sandbox/sandbox_runner.py")
+    static WARM: std::sync::Once = std::sync::Once::new();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/sandbox/sandbox_runner.py")
+        .canonicalize()
+        .expect("the runner is in the checkout");
+    WARM.call_once(|| {
+        let status = Command::new(&path)
+            .arg("true")
+            .stdin(Stdio::null())
+            .status()
+            .expect("the runner starts");
+        assert!(status.success(), "the runner runs a command that passes");
+    });
+    path
 }
 
 fn tmux_is_available() -> bool {
