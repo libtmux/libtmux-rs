@@ -251,6 +251,24 @@ jobs:
                 )
 
 
+class ScriptModeTests(unittest.TestCase):
+    def test_a_python_file_is_executable_exactly_when_it_has_a_shebang(self) -> None:
+        # ruff's EXE001 and EXE002 check this, but not under WSL, so a contributor
+        # there would only learn of a wrong mode from CI.
+        files = [
+            *sorted((ROOT / "scripts").rglob("*.py")),
+            *sorted((ROOT / "crates/tmux-workspace/tests/fixtures").glob("*.py")),
+        ]
+        self.assertGreater(len(files), 20)
+        wrong = []
+        for path in files:
+            has_shebang = path.read_text(encoding="utf-8").startswith("#!")
+            is_executable = bool(path.stat().st_mode & 0o111)
+            if has_shebang != is_executable:
+                wrong.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(wrong, [])
+
+
 class DocumentTests(unittest.TestCase):
     lanes = ci_plan.parse_manifest((ROOT / ".github" / "ci-matrix.txt").read_text(encoding="utf-8"))
 
