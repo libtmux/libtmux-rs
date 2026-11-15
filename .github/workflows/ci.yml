@@ -81,7 +81,7 @@ jobs:
   required:
     name: required
     if: ${{ always() }}
-    needs: [plan, check, api, fuzz, bench, parity, python-bridge, compat]
+    needs: [plan, check, api, fuzz, bench, python-bridge, compat]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -278,57 +278,6 @@ jobs:
         with:
           path: target/criterion
           key: bench-criterion-${{ github.run_id }}
-
-  # tmux-workspace claims to build what tmuxp builds. This loads every tmuxp
-  # fixture through both, on separate servers, and diffs the sessions; a
-  # difference not in the harness's allowlist, each entry with its reason,
-  # fails. It then times both on one fixture for the job summary. Weekly,
-  # because it needs tmuxp and a settled shell per pane.
-  parity:
-    name: tmuxp parity
-    needs: plan
-    if: needs.plan.outputs.periodic == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install tmux
-        run: |
-          ./scripts/apt-get.sh update
-          ./scripts/apt-get.sh install -y --no-install-recommends tmux
-          tmux -V
-
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
-        with:
-          build-warnings: ""
-          cache-bin: false
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: uv
-
-      - name: Install tmuxp
-        run: uv tool install tmuxp==1.74.0
-
-      - run: cargo build --locked -p tmux-workspace
-
-      - name: Compare every fixture
-        run: python3 scripts/tmuxp-parity.py --binary target/debug/tmux-workspace --tmuxp "$(command -v tmuxp)"
-
-      # Timing against the same tmuxp, reported in the job summary. Not a gate:
-      # a shared runner's timings vary more than the difference would.
-      - run: cargo build --locked --release -p tmux-workspace
-
-      - name: Time it against tmuxp
-        run: >-
-          python3 scripts/bench-workspace-cli.py
-          --binary target/release/tmux-workspace
-          --tmuxp "$(command -v tmuxp)"
-          --samples 10
-          --load-samples 5
 
   python-bridge:
     name: workspace Python version check

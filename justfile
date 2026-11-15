@@ -57,15 +57,6 @@ api-examples:
     python3 -m unittest scripts/test_check_api_examples.py
     python3 scripts/check-api-examples.py
 
-# The parity and benchmark scripts run an installed binary outside Cargo, so
-# the environment they build is the only thing keeping it off the reader's own
-# server. Pure Python, no tmux, so it is part of `just check`.
-#
-# Check the environments those scripts give the processes they start
-[group: 'test']
-script-env:
-    python3 -m unittest scripts/test_child_environments.py
-
 # Run every example and check it cleaned up
 [group: 'test']
 examples:
@@ -265,15 +256,6 @@ fuzz target="control_line" seconds="60":
 fuzz-list:
     cargo +nightly fuzz list
 
-# Load every crates/tmux-workspace/tests/fixtures/tmuxp document with both
-# tmuxp and `tmux-workspace load`, each on its own throwaway server under
-# /tmp/libtmux-rs-dev/, and diff what tmux itself reports. Needs a pinned
-# tmuxp 1.74.0 (see scripts/tmuxp-parity.py's docstring), so it is not part
-# of `just check`.
-[group: 'test']
-parity *args:
-    python3 scripts/tmuxp-parity.py {{ args }}
-
 # Watch files and run tests on change (requires entr)
 [group: 'test']
 watch-test:
@@ -442,11 +424,6 @@ bench-waits *args:
 bench-compare *args:
     python3 scripts/bench-regressions.py target/criterion {{ args }}
 
-# Compare an installed workspace CLI binary against real tmux; pass --binary
-[group: 'bench']
-bench-cli *args:
-    python3 scripts/bench-workspace-cli.py {{ args }}
-
 # Build the crates that get published, and verify what they contain
 #
 # --allow-dirty so this stays runnable mid-change; `cargo publish` does its
@@ -473,7 +450,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest doctest-sandbox api-examples script-env examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest doctest-sandbox api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

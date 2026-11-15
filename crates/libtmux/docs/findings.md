@@ -967,9 +967,9 @@ for about 30ms.
 
 Turning `automatic-rename` on in that interval names the window `tmux`. The
 shell's first output marks the pane changed, but tmux renames at most once per
-500ms, so a loader that returns first leaves the window named `tmux`. The
-tmuxp parity job saw this on `env-variables` and `options`, the two fixtures
-that set `automatic-rename` in a window's `options`.
+500ms, so a loader that returns first leaves the window named `tmux`. A run
+of the tmuxp fixtures saw this on `env-variables` and `options`, the two
+fixtures that set `automatic-rename` in a window's `options`.
 
 `tmux-workspace` sets that one option after it has seen the first pane's cursor
 move, the signal it already waits for before typing. When it does not wait,

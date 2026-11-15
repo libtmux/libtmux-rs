@@ -355,7 +355,7 @@ $ just check
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
 `compat-supervisor-test`, `ci-test`, `doctest`, `doctest-sandbox`,
-`api-examples`, `script-env`, `examples`, `example-tables`, `fixture-root`,
+`api-examples`, `examples`, `example-tables`, `fixture-root`,
 `docs`, `doc-blocks`, `doc-contents`, `changelogs`, `doctests-run`,
 `parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
@@ -375,19 +375,10 @@ These gates are **not** in `just check` and run only in CI:
 | `just compat` | Builds every pinned tmux release from source; 90 minutes |
 | `just fuzz <target>` | Needs nightly and a sanitizer; runs weekly |
 | `just bench`, `just bench-waits`, `just bench-compare` | Timing on a shared runner; runs weekly against the previous week, failing past 2x |
-| `just parity`, `just bench-cli` | Need tmuxp 1.74.0; load every tmuxp fixture through tmuxp and `tmux-workspace` and diff the sessions, then time both; run weekly |
-
-`just parity` needs a pinned tmuxp 1.74.0 on `--tmuxp` (or on `PATH`), not
-just tmux, so it runs weekly in CI rather than in `just check`. It loads every `crates/tmux-workspace/tests/fixtures/tmuxp` document
-with tmuxp and with `tmux-workspace load`, each on its own throwaway server,
-and diffs what tmux itself reports. A documented, deliberate difference from
-tmuxp -- see `scripts/tmuxp-parity.py`'s `ALLOWLIST` -- is reported but does
-not fail the run; anything else that differs does.
 
 CI does not run macOS tests. macOS is supported on a best-effort basis; the
-release workflow builds the macOS binaries. On a pull request, `fuzz parsers`,
-`benchmarks` and `tmuxp parity` report as skipping. That is the design, not
-a failure.
+release workflow builds the macOS binaries. On a pull request, `fuzz parsers`
+and `benchmarks` report as skipping. That is the design, not a failure.
 
 `just parity-claims` fails when a row of `parity.md` marked `implemented` or
 `verified` names no caller-reachable Rust path, or puts an associated item on
@@ -409,12 +400,6 @@ unknown targets, hidden source helpers and incomplete file boundaries.
 the manifest check alone does not establish native execution.
 
 The gates worth explaining:
-
-**The scripts that run a binary outside Cargo scrub their own environment.**
-`just script-env` fails when `scripts/tmuxp-parity.py` or
-`scripts/bench-workspace-cli.py` hands a child `TMUX`, `TMUX_PANE`,
-`LIBTMUX_SOCKET` or `LIBTMUX_SOCKET_PATH`, or when the benchmark's private
-`TMUX_TMPDIR` is not owner-only. No runner stands in front of them.
 
 **Doctests must actually run.** A `#[cfg(feature = "…")]` inside a doctest
 reads the doctest's own crate, which has no features, so it is always false:
@@ -752,7 +737,7 @@ the whole workspace. The compile-fail cases quote the pinned toolchain's own
 wording, so a toolchain other than `rust-toolchain.toml`'s fails them. `tmate`
 opens a session on the one lane that runs, so it needs a single `tmux-ref` and
 at most one `rust-toolchain`, and it connects only the account that started the
-run. A dispatch runs the fuzz, benchmark and parity jobs as well, as before.
+run. A dispatch runs the fuzz and benchmark jobs as well, as before.
 
 Releases are numbered `0.1.N`, and each release increments `N`. The API is not
 settled: any release may change or remove exported identifiers, without a

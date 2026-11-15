@@ -9,7 +9,7 @@
 A push or pull request runs the first and last supported release. The whole
 manifest runs for the weekly schedule and for a dispatch with scope=full. A
 dispatch with scope=custom runs the tmux versions, tags, branches or commits it
-names. The fuzz, bench and parity jobs run on a schedule and on any dispatch.
+names. The fuzz and bench jobs run on a schedule and on any dispatch.
 
 Inputs reach this script only through the environment: INPUT_SCOPE,
 INPUT_TMUX_REF, INPUT_RUST_TOOLCHAIN, INPUT_OS and INPUT_TMATE. Any other event
@@ -33,7 +33,7 @@ KINDS = ("supported", "witness", "refused", "development")
 RUNNERS = ("ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04")
 TMATE_MODES = ("off", "before-tests", "on-failure")
 SCOPES = ("edges", "full", "custom")
-PERIODIC_JOBS = ("fuzz", "bench", "parity")
+PERIODIC_JOBS = ("fuzz", "bench")
 DEFAULT_MANIFEST = (
     pathlib.Path(__file__).resolve().parent.parent / ".github" / "ci-matrix.txt"
 )
@@ -136,7 +136,7 @@ class Plan:
     #: The compatibility legs, one tmux lane and one toolchain each.
     legs: list[dict[str, str]]
     os: str
-    #: Whether the fuzz, bench and parity jobs run.
+    #: Whether the fuzz and bench jobs run.
     periodic: bool
     #: Jobs the plan leaves out of scope, which may be skipped.
     skip: list[str]

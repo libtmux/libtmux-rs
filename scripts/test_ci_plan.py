@@ -131,7 +131,7 @@ class EventTests(unittest.TestCase):
 
 
 class PeriodicJobTests(unittest.TestCase):
-    def test_the_fuzz_bench_and_parity_jobs_run_on_a_schedule_and_a_dispatch(
+    def test_the_fuzz_and_bench_jobs_run_on_a_schedule_and_a_dispatch(
         self,
     ) -> None:
         for event in ("schedule", "workflow_dispatch"):
@@ -145,7 +145,7 @@ class PeriodicJobTests(unittest.TestCase):
             with self.subTest(event):
                 result = run(event)
                 self.assertFalse(result.periodic)
-                self.assertEqual(result.skip, ["fuzz", "bench", "parity"])
+                self.assertEqual(result.skip, ["fuzz", "bench"])
 
 
 class CustomScopeTests(unittest.TestCase):
@@ -360,7 +360,7 @@ class CommandTests(unittest.TestCase):
         fields = dict(line.split("=", 1) for line in output.splitlines())
         self.assertEqual(fields["scope"], "edges")
         self.assertEqual(fields["periodic"], "false")
-        self.assertEqual(fields["skip"], "fuzz bench parity")
+        self.assertEqual(fields["skip"], "fuzz bench")
         self.assertEqual(fields["jobs"], "2")
         self.assertEqual(
             [leg["lane"] for leg in json.loads(fields["lanes"])], ["3.3a", "3.8"]
