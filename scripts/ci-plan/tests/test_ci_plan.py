@@ -16,6 +16,7 @@ import unittest
 from typing import Any
 
 import ci_plan
+import compat_lanes
 
 SCRIPTS = pathlib.Path(__file__).resolve().parents[2]
 ROOT = SCRIPTS.parent
@@ -396,41 +397,16 @@ class RealManifestTests(unittest.TestCase):
         result = ci_plan.plan(self.lanes, ci_plan.Inputs(event="pull_request"))
         self.assertEqual([leg["lane"] for leg in result.legs], [supported[0], supported[-1]])
 
-    def test_the_bash_loader_and_the_plan_read_the_same_lanes(self) -> None:
-        script = (
-            f"source {SCRIPTS / 'compat-lanes.sh'}; load_lanes {MANIFEST} || exit 1; "
-            'for tag in "${lane_tags[@]}"; do '
-            'echo "${lane_kind[$tag]} $tag ${lane_commit[$tag]} ${lane_version[$tag]} '
-            '${lane_contract[$tag]} ${lane_requires[$tag]}"; done'
-        )
-        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
-        from_bash = [tuple(line.split()) for line in result.stdout.splitlines()]
+    def test_the_harness_loader_and_the_plan_read_the_same_lanes(self) -> None:
+        from_harness = [
+            (lane.kind, lane.tag, lane.commit, lane.version, lane.contract, lane.requires)
+            for lane in compat_lanes.load_lanes(MANIFEST)
+        ]
         from_plan = [
-            (
-                lane.kind,
-                lane.tag,
-                lane.commit,
-                lane.version,
-                lane.contract,
-                ",".join(lane.requires) or "-",
-            )
+            (lane.kind, lane.tag, lane.commit, lane.version, lane.contract, lane.requires)
             for lane in self.lanes
         ]
-        self.assertEqual(from_bash, from_plan)
-
-    def test_each_kind_has_a_contract_the_script_runs(self) -> None:
-        allowed = {
-            "supported": {"workspace", "format-catalog"},
-            "witness": {"feature-boundary"},
-            "refused": {"reject-core", "reject-boundary", "reject-pre-probe"},
-            "development": {"development"},
-        }
-        script = (SCRIPTS / "test-tmux-format-compat.sh").read_text(encoding="utf-8")
-        for lane in self.lanes:
-            with self.subTest(lane.tag):
-                self.assertIn(lane.contract, allowed[lane.kind])
-                if lane.contract != "workspace":
-                    self.assertIn(f'"{lane.contract}"', script)
+        self.assertEqual(from_harness, from_plan)
 
 
 if __name__ == "__main__":

@@ -1139,7 +1139,7 @@ here publishes: a path-only dependency cannot be published at all.
 
 ## Compatibility lanes
 
-`scripts/test-tmux-format-compat.sh` builds each pinned tmux from source and
+`scripts/tmux-format-compat` builds each pinned tmux from source and
 runs the whole workspace against it, all targets and all features. The lanes
 are 3.3a, 3.4, 3.5a, 3.6b, 3.7b, and 3.8: the floor, the ceiling, and the
 releases in between that are known to differ. 3.4 and 3.5a are the two that

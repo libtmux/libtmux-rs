@@ -1,6 +1,11 @@
-#!/usr/bin/env python3
+"""Exercise the compatibility supervisor against hostile real processes.
 
-"""Exercise the compatibility supervisor against hostile real processes."""
+    supervisor_cases.py [CASE ...]
+
+Each case runs in a process of its own under outer containment, so a case that
+kills, stops or forks its way out of the supervisor cannot reach this one.
+`test_tmux_format_compat_supervisor.py` runs each as a pytest case. Linux only.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,6 @@ import importlib.util
 import os
 import pathlib
 import select
-import shlex
 import shutil
 import signal
 import stat
@@ -24,12 +28,11 @@ import types
 import typing as t
 
 # Test failures include the exact process identity at the assertion site.
-# ruff: noqa: BLE001, EM101, EM102, TRY003
+# ruff: noqa: BLE001
 
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-SUPERVISOR = SCRIPT_DIR / "tmux-format-compat-supervisor.py"
-WRAPPER = SCRIPT_DIR / "test-tmux-format-compat.sh"
+SUPERVISOR = SCRIPT_DIR.parent / "tmux_format_compat_supervisor.py"
 WAIT_TIMEOUT = 12.0
 CASE_TIMEOUT = 20.0
 CASE_CLEANUP_TIMEOUT = 6.0
@@ -639,7 +642,7 @@ def raw_clone_without_exit_signal() -> tuple[int, int]:
 
 
 @contextlib.contextmanager
-def fixture() -> t.Iterator[Fixture]:
+def fixture() -> t.Generator[Fixture]:
     """Create real Bash and Python descendants for one test."""
     with tempfile.TemporaryDirectory(prefix="libtmux-supervisor-test-") as raw:
         directory = pathlib.Path(raw)
@@ -704,9 +707,7 @@ def supervisor_process(
             os.close(parent_fd)
 
 
-def wait_for_path(
-    process: subprocess.Popen[str], path: pathlib.Path, timeout: float = 5.0
-) -> None:
+def wait_for_path(process: subprocess.Popen[str], path: pathlib.Path, timeout: float = 5.0) -> None:
     """Wait for a fixture milestone while checking early supervisor exit."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -831,18 +832,14 @@ def require_process_start_time(process: subprocess.Popen[str]) -> int:
     """Capture the exact identity of one newly spawned direct child."""
     start_time = proc_start_time(process.pid)
     if start_time is None:
-        raise AssertionError(
-            f"process vanished before identity capture: pid={process.pid}"
-        )
+        raise AssertionError(f"process vanished before identity capture: pid={process.pid}")
     return start_time
 
 
 def proc_task_states(pid: int, expected_start: int) -> dict[int, str]:
     """Read all task states while authenticating the process identity."""
     if proc_start_time(pid) != expected_start:
-        raise AssertionError(
-            f"process identity changed: pid={pid} start={expected_start}"
-        )
+        raise AssertionError(f"process identity changed: pid={pid} start={expected_start}")
     states: dict[int, str] = {}
     for task in pathlib.Path(f"/proc/{pid}/task").iterdir():
         if not task.name.isdigit():
@@ -854,9 +851,7 @@ def proc_task_states(pid: int, expected_start: int) -> dict[int, str]:
         fields = data[command_end + 2 :].split()
         states[int(task.name)] = fields[0].decode("ascii")
     if proc_start_time(pid) != expected_start:
-        raise AssertionError(
-            f"process identity changed: pid={pid} start={expected_start}"
-        )
+        raise AssertionError(f"process identity changed: pid={pid} start={expected_start}")
     return states
 
 
@@ -879,13 +874,11 @@ def wait_for_exact_process_stopped(
         except FileNotFoundError:
             if process.poll() is not None:
                 raise AssertionError(
-                    f"process exited before stop: pid={process.pid} "
-                    f"start={expected_start}"
+                    f"process exited before stop: pid={process.pid} start={expected_start}"
                 ) from None
         time.sleep(0.01)
     raise AssertionError(
-        f"process did not stop: pid={process.pid} start={expected_start} "
-        f"states={latest}"
+        f"process did not stop: pid={process.pid} start={expected_start} states={latest}"
     )
 
 
@@ -907,13 +900,9 @@ def wait_for_hook_marker(
             marker = os.read(hook_read_fd, 1)
             if marker == b"1":
                 return
-            raise AssertionError(
-                f"post-mask hook closed without marker: pid={process.pid}"
-            )
+            raise AssertionError(f"post-mask hook closed without marker: pid={process.pid}")
         if process.poll() is not None:
-            raise AssertionError(
-                f"process exited before post-mask hook: pid={process.pid}"
-            )
+            raise AssertionError(f"process exited before post-mask hook: pid={process.pid}")
     raise AssertionError(f"post-mask hook did not run: pid={process.pid}")
 
 
@@ -928,9 +917,7 @@ def assert_hook_capability_consumed(pid: int, hook_fd: int) -> None:
 
 def proc_signal_mask(pid: int, field: str) -> int:
     """Read one hexadecimal signal-mask field for an exact live process."""
-    for line in (
-        pathlib.Path(f"/proc/{pid}/status").read_text(encoding="ascii").splitlines()
-    ):
+    for line in pathlib.Path(f"/proc/{pid}/status").read_text(encoding="ascii").splitlines():
         label, separator, raw_mask = line.partition(":")
         if separator and label == field:
             return int(raw_mask.strip(), 16)
@@ -964,13 +951,9 @@ def wait_for_signal_pending(
         if pending & bit:
             return
         if process.poll() is not None:
-            raise AssertionError(
-                f"process exited before signal became pending: pid={process.pid}"
-            )
+            raise AssertionError(f"process exited before signal became pending: pid={process.pid}")
         time.sleep(0.01)
-    raise AssertionError(
-        f"signal did not become pending: pid={process.pid} signal={signal_number}"
-    )
+    raise AssertionError(f"signal did not become pending: pid={process.pid} signal={signal_number}")
 
 
 def identities(control: pathlib.Path) -> list[tuple[str, int, int]]:
@@ -1032,9 +1015,7 @@ def record_process_identity(
     """Record the exact live identity of one nested supervisor."""
     start_time = proc_start_time(process.pid)
     if start_time is None:
-        raise AssertionError(
-            f"process vanished before identity capture: pid={process.pid}"
-        )
+        raise AssertionError(f"process vanished before identity capture: pid={process.pid}")
     append_identity_record(control, label, process.pid, start_time)
 
 
@@ -1069,9 +1050,7 @@ def kill_recorded_identities(control: pathlib.Path) -> None:
         pending = pidfds
         while pending and time.monotonic() < deadline:
             pending = [
-                identity
-                for identity in pending
-                if not select.select([identity[3]], [], [], 0)[0]
+                identity for identity in pending if not select.select([identity[3]], [], [], 0)[0]
             ]
             if pending:
                 time.sleep(0.01)
@@ -1124,11 +1103,7 @@ def owned_root_has_entry(owner: OwnedBuildRoot, name: str) -> bool:
 
 def cleanup_exact_owners(*owners: OwnedBuildRoot) -> None:
     """Delete only explicitly supplied creation-time owners."""
-    failures = [
-        failure
-        for owner in owners
-        if (failure := cleanup_owned_root(owner)) is not None
-    ]
+    failures = [failure for owner in owners if (failure := cleanup_owned_root(owner)) is not None]
     if failures:
         raise AssertionError("exact owner cleanup failed: " + "; ".join(failures))
 
@@ -1397,87 +1372,6 @@ def test_status_37_and_streams() -> None:
         assert outcome.stdout == "worker stdout\n", outcome
         assert outcome.stderr == "worker stderr\n", outcome
         assert not root_entry_exists(root), root
-
-
-def test_wrapper_skips_python_without_pidfd() -> None:
-    """The wrapper selects the first python3 with working pidfd primitives."""
-    with tempfile.TemporaryDirectory(prefix="libtmux-wrapper-python-") as raw:
-        directory = pathlib.Path(raw)
-        incompatible_dir = directory / "incompatible"
-        capable_dir = directory / "capable"
-        incompatible_dir.mkdir()
-        capable_dir.mkdir()
-        wrapper = directory / WRAPPER.name
-        supervisor = directory / SUPERVISOR.name
-        control = directory / "control"
-        control.mkdir()
-        shutil.copy2(WRAPPER, wrapper)
-
-        incompatible = incompatible_dir / "python3"
-        incompatible.write_text(
-            """#!/usr/bin/env bash
-if [[ "${1:-}" == "-c" ]]; then
-    printf 'probe\n' >> "$TFC_CONTROL/incompatible-probes"
-    exit 1
-fi
-: > "$TFC_CONTROL/wrong-python"
-""",
-            encoding="utf-8",
-        )
-        incompatible.chmod(0o700)
-
-        capable = capable_dir / "python3"
-        capable.write_text(
-            f"""#!/usr/bin/env bash
-export TFC_SELECTED_PYTHON=capable
-exec {shlex.quote(os.path.realpath(sys.executable))} "$@"
-""",
-            encoding="utf-8",
-        )
-        capable.chmod(0o700)
-
-        supervisor.write_text(
-            """from __future__ import annotations
-
-import os
-import pathlib
-
-control = pathlib.Path(os.environ["TFC_CONTROL"])
-(control / "selected-python").write_text(
-    os.environ.get("TFC_SELECTED_PYTHON", "missing"),
-    encoding="utf-8",
-)
-""",
-            encoding="utf-8",
-        )
-
-        environment = os.environ.copy()
-        environment["PATH"] = os.pathsep.join(
-            [
-                os.fspath(incompatible_dir),
-                os.fspath(incompatible_dir),
-                os.fspath(capable_dir),
-                environment["PATH"],
-            ]
-        )
-        environment["TFC_CONTROL"] = os.fspath(control)
-        bash = shutil.which("bash")
-        assert bash is not None
-        outcome = subprocess.run(
-            [os.path.realpath(bash), os.fspath(wrapper)],
-            cwd=directory,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-            check=False,
-        )
-        assert outcome.returncode == 0, outcome
-        assert not (control / "wrong-python").exists(), outcome
-        assert (control / "incompatible-probes").read_text(
-            encoding="utf-8"
-        ).splitlines() == ["probe"]
-        assert (control / "selected-python").read_text(encoding="utf-8") == "capable"
 
 
 def test_hup_int_term_statuses() -> None:
@@ -1786,9 +1680,7 @@ def test_frontier_timeout_defers_root_cleanup_to_enclosing_owner() -> None:
                     FRONTIER_TIMEOUT_CONTROL_ENV: os.fspath(control),
                 },
             )
-            root = pathlib.Path(
-                (control / "frontier-root").read_text(encoding="utf-8").strip()
-            )
+            root = pathlib.Path((control / "frontier-root").read_text(encoding="utf-8").strip())
             assert status == 1, status
             assert (control / "root-retained-for-owner").exists(), control
             assert not root_entry_exists(root), root
@@ -1837,9 +1729,7 @@ def test_frontier_residue_reaches_outer_containment() -> None:
                 },
                 after_owner_validation=stop_outer_before_containment,
             )
-            root = pathlib.Path(
-                (control / "frontier-root").read_text(encoding="utf-8").strip()
-            )
+            root = pathlib.Path((control / "frontier-root").read_text(encoding="utf-8").strip())
             assert live_before_containment == expected_labels, live_before_containment
             assert outcome.status == -signal.SIGKILL, outcome
             assert (control / "root-retained-for-owner").exists(), control
@@ -2043,7 +1933,7 @@ def test_preclaim_exchange_is_refused_before_recursive_mutation() -> None:
             )
             exchanged = True
 
-    original._verify_root_name = exchange_after_validation  # type: ignore[method-assign]
+    original._verify_root_name = exchange_after_validation  # ty: ignore[invalid-assignment]
     try:
         failure: Exception | None = None
         try:
@@ -2112,10 +2002,7 @@ def test_same_device_mount_boundary_is_refused() -> None:
 
         def different_child_mount_id(descriptor: int) -> int:
             opened = os.fstat(descriptor)
-            if (
-                opened.st_dev == nested_stat.st_dev
-                and opened.st_ino == nested_stat.st_ino
-            ):
+            if opened.st_dev == nested_stat.st_dev and opened.st_ino == nested_stat.st_ino:
                 return root_mount_id + 1
             return original_mount_id(descriptor)
 
@@ -2163,9 +2050,7 @@ def test_dangling_symlink_root_residue_is_rejected() -> None:
             cleanup_timeout=0.5,
             environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
         )
-        root = pathlib.Path(
-            (control / "dangling-root").read_text(encoding="utf-8").strip()
-        )
+        root = pathlib.Path((control / "dangling-root").read_text(encoding="utf-8").strip())
         assert outcome.status == 1, outcome
         assert "supervised root entry remains" in outcome.stderr, outcome
         assert not root_entry_exists(root), root
@@ -2180,9 +2065,7 @@ def test_top_level_runner_term_closes_the_active_case() -> None:
         try:
             record_process_identity(control, "top-level-runner", process)
             wait_for_path(process, control / "ready")
-            root = pathlib.Path(
-                (control / "outer-root").read_text(encoding="utf-8").strip()
-            )
+            root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
             signal.pidfd_send_signal(pidfd, signal.SIGTERM)
             stdout, stderr = process.communicate(timeout=WAIT_TIMEOUT)
             assert process.returncode == 128 + signal.SIGTERM, (
@@ -2261,9 +2144,7 @@ def test_failed_case_has_outer_containment() -> None:
             [RUNNER_FAILURE_PROBE],
             environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
         )
-        root = pathlib.Path(
-            (control / "outer-root").read_text(encoding="utf-8").strip()
-        )
+        root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
         assert status == 1, status
         assert not root_entry_exists(root), root
         assert_identities_gone(control)
@@ -2286,9 +2167,7 @@ def test_timed_out_case_has_outer_containment() -> None:
         )
         assert armed, "the probe never became ready, so no deadline was tested"
         elapsed = time.monotonic() - armed[0]
-        root = pathlib.Path(
-            (control / "outer-root").read_text(encoding="utf-8").strip()
-        )
+        root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
         assert status == 1, status
         assert elapsed < 6.5, elapsed
         assert not root_entry_exists(root), root
@@ -2304,12 +2183,8 @@ def test_failed_case_cleans_nested_supervisor_root() -> None:
                 [RUNNER_INNER_FAILURE_PROBE],
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
             )
-            inner_root = pathlib.Path(
-                (control / "inner-root").read_text(encoding="utf-8").strip()
-            )
-            outer_root = pathlib.Path(
-                (control / "outer-root").read_text(encoding="utf-8").strip()
-            )
+            inner_root = pathlib.Path((control / "inner-root").read_text(encoding="utf-8").strip())
+            outer_root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
             assert status == 1, status
             assert not root_entry_exists(outer_root), outer_root
             assert not root_entry_exists(inner_root), inner_root
@@ -2335,12 +2210,8 @@ def test_timed_out_case_cleans_nested_supervisor_root() -> None:
             )
             assert armed, "the nested supervisor never started"
             elapsed = time.monotonic() - armed[0]
-            inner_root = pathlib.Path(
-                (control / "inner-root").read_text(encoding="utf-8").strip()
-            )
-            outer_root = pathlib.Path(
-                (control / "outer-root").read_text(encoding="utf-8").strip()
-            )
+            inner_root = pathlib.Path((control / "inner-root").read_text(encoding="utf-8").strip())
+            outer_root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
             assert status == 1, status
             assert elapsed < 6.5, elapsed
             assert not root_entry_exists(outer_root), outer_root
@@ -2374,12 +2245,8 @@ def test_topmost_failure_has_independent_containment() -> None:
             )
             assert armed, "the outer supervisor never stopped"
             elapsed = time.monotonic() - armed[0]
-            inner_root = pathlib.Path(
-                (control / "inner-root").read_text(encoding="utf-8").strip()
-            )
-            outer_root = pathlib.Path(
-                (control / "outer-root").read_text(encoding="utf-8").strip()
-            )
+            inner_root = pathlib.Path((control / "inner-root").read_text(encoding="utf-8").strip())
+            outer_root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
             assert status == 1, status
             assert elapsed < 7.0, elapsed
             assert not root_entry_exists(outer_root), outer_root
@@ -2437,9 +2304,7 @@ def test_post_exit_direct_child_forces_top_level_closure() -> None:
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
                 after_owner_validation=retain_direct_child,
             )
-            outer_root = pathlib.Path(
-                (control / "outer-root").read_text(encoding="utf-8").strip()
-            )
+            outer_root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
             assert outcome.status == 0, outcome
             assert_identities_gone(control)
             assert not root_entry_exists(outer_root), outer_root
@@ -2462,9 +2327,7 @@ def test_owner_validation_failure_forces_top_level_closure() -> None:
         ) -> None:
             nonlocal outer_root
             wait_for_path(process, control / "ready")
-            outer_root = pathlib.Path(
-                (control / "outer-root").read_text(encoding="utf-8").strip()
-            )
+            outer_root = pathlib.Path((control / "outer-root").read_text(encoding="utf-8").strip())
             outer_processes.append(process)
             record_process_identity(control, "outer-supervisor", process)
             holders.append(spawn_direct_child_holder(control))
@@ -2506,9 +2369,7 @@ def test_hard_kill_after_child_root_creation_cleans_container() -> None:
                 environment={
                     AFTER_ROOT_CREATE_CONTROL_ENV: os.fspath(control),
                 },
-                after_owner_validation=milestone_path(
-                    control / "after-root-create-root"
-                ),
+                after_owner_validation=milestone_path(control / "after-root-create-root"),
                 outer_fault="after-root-create",
             )
         except AssertionError as error:
@@ -2537,9 +2398,7 @@ def assert_forced_case_timeout_cleans_root(test_name: str, pause_label: str) -> 
             after_owner_validation=arm_after(milestone_path(control / "ready"), armed),
         )
         assert armed, "the case never paused after allocating its root"
-        root = pathlib.Path(
-            (control / "allocated-root").read_text(encoding="utf-8").strip()
-        )
+        root = pathlib.Path((control / "allocated-root").read_text(encoding="utf-8").strip())
         assert status == 1, status
         assert not root_entry_exists(root), root
 
@@ -2574,12 +2433,8 @@ def test_same_name_root_replacement_is_not_deleted() -> None:
             )
         except AssertionError as error:
             failure = error
-        root = pathlib.Path(
-            (control / "inner-root").read_text(encoding="utf-8").strip()
-        )
-        moved = pathlib.Path(
-            (control / "inner-root-moved").read_text(encoding="utf-8").strip()
-        )
+        root = pathlib.Path((control / "inner-root").read_text(encoding="utf-8").strip())
+        moved = pathlib.Path((control / "inner-root-moved").read_text(encoding="utf-8").strip())
         assert failure is not None, "same-name replacement was accepted"
         assert "creation identity changed" in str(failure), failure
         assert (root / "replacement-sentinel").exists(), root
@@ -2591,9 +2446,7 @@ def test_parallel_runs_are_isolated() -> None:
     with fixture() as case:
         controls = [case.control(f"control-{index}") for index in range(4)]
         started = time.monotonic()
-        processes = [
-            supervisor_process(case, control, "parallel") for control in controls
-        ]
+        processes = [supervisor_process(case, control, "parallel") for control in controls]
         for process, control in zip(processes, controls, strict=True):
             wait_for_path(process, control / "ready")
         roots = [build_root(control) for control in controls]
@@ -2609,7 +2462,6 @@ TESTS: dict[str, t.Callable[[], None]] = {
     function.__name__: function
     for function in (
         test_status_37_and_streams,
-        test_wrapper_skips_python_without_pidfd,
         test_hup_int_term_statuses,
         test_second_signal_accelerates_without_replacing_status,
         test_late_first_signal_replaces_the_worker_status_at_cutover,
@@ -2677,9 +2529,7 @@ def runner_child_pids() -> set[int]:
 def enable_top_level_subreaper() -> RunnerModule:
     """Enable exact adoption in a single-threaded child-free case runner."""
     task_ids = [
-        entry
-        for entry in pathlib.Path("/proc/self/task").iterdir()
-        if entry.name.isdigit()
+        entry for entry in pathlib.Path("/proc/self/task").iterdir() if entry.name.isdigit()
     ]
     if len(task_ids) != 1:
         raise AssertionError("top-level containment requires a single thread")
@@ -3005,15 +2855,11 @@ def run_isolated_case(
             if closure_failure is not None:
                 if case_container is not None:
                     case_container.close()
-                raise AssertionError(
-                    "top-level process closure failed"
-                ) from closure_failure
+                raise AssertionError("top-level process closure failed") from closure_failure
             if case_container is not None:
                 cleanup_failure = cleanup_owned_root(case_container)
                 if cleanup_failure is not None:
-                    raise AssertionError(
-                        "retained descriptor-owned root: " + cleanup_failure
-                    )
+                    raise AssertionError("retained descriptor-owned root: " + cleanup_failure)
     finally:
         if owns_signal_guard:
             final_signal = guard.finalize(hold_mask=False)
@@ -3142,8 +2988,7 @@ def run_selected_cases(
             if outcome.timed_out or outcome.status != 0:
                 failures += 1
                 print(
-                    f"not ok {name}: status={outcome.status} "
-                    f"timed_out={outcome.timed_out}",
+                    f"not ok {name}: status={outcome.status} timed_out={outcome.timed_out}",
                     file=sys.stderr,
                 )
                 if outcome.stdout:

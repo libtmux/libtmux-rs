@@ -1,5 +1,8 @@
-#!/usr/bin/env python3
-
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Supervise and clean one Linux tmux compatibility worker lineage."""
 
 from __future__ import annotations
@@ -110,7 +113,7 @@ LIBC.renameat2.restype = ctypes.c_int
 
 # Exact fail-closed diagnostics are constructed at their checks, and procfs plus
 # descriptor-relative filesystem access intentionally use the lower-level os API.
-# ruff: noqa: BLE001, EM101, EM102, PERF203, PTH115, PTH116, PTH117, PTH118, PTH123, PTH208, SIM105, TRY003, TRY300, TRY301
+# ruff: noqa: BLE001, SIM105
 
 
 class SupervisorFailure(RuntimeError):
@@ -312,9 +315,7 @@ class BuildRoot:
                 os.set_inheritable(parent_fd, False)
                 parent = os.fstat(parent_fd)
                 if not stat.S_ISDIR(parent.st_mode):
-                    raise SupervisorFailure(
-                        "build-root parent descriptor is not a directory"
-                    )
+                    raise SupervisorFailure("build-root parent descriptor is not a directory")
                 parent_path = os.readlink(f"/proc/self/fd/{parent_fd}")
                 if not os.path.isabs(parent_path) or parent_path.endswith(" (deleted)"):
                     raise SupervisorFailure("build-root parent path is unavailable")
@@ -490,9 +491,7 @@ class BuildRoot:
                 try:
                     opened = os.fstat(child_fd)
                     if opened.st_dev != before.st_dev or opened.st_ino != before.st_ino:
-                        raise SupervisorFailure(
-                            "refusing changed directory in build root"
-                        )
+                        raise SupervisorFailure("refusing changed directory in build root")
                     if _mount_id(child_fd) != self.mount_id:
                         raise SupervisorFailure(
                             "refusing to cross a mount while deleting build root"
@@ -508,9 +507,7 @@ class BuildRoot:
                         or current.st_ino != opened.st_ino
                         or not stat.S_ISDIR(current.st_mode)
                     ):
-                        raise SupervisorFailure(
-                            "refusing changed directory in build root"
-                        )
+                        raise SupervisorFailure("refusing changed directory in build root")
                     os.rmdir(name, dir_fd=directory_fd)
                 finally:
                     os.close(child_fd)
@@ -554,9 +551,7 @@ class BuildRoot:
                         "refusing to cross a filesystem while deleting build root"
                     )
                 if _mount_id(entry_fd) != self.mount_id:
-                    raise SupervisorFailure(
-                        "refusing to cross a mount while deleting build root"
-                    )
+                    raise SupervisorFailure("refusing to cross a mount while deleting build root")
                 if stat.S_ISDIR(opened.st_mode):
                     child_fd = os.open(
                         name,
@@ -570,9 +565,7 @@ class BuildRoot:
                             or child.st_ino != opened.st_ino
                             or child.st_mode != opened.st_mode
                         ):
-                            raise SupervisorFailure(
-                                "refusing changed directory in build root"
-                            )
+                            raise SupervisorFailure("refusing changed directory in build root")
                         if _mount_id(child_fd) != self.mount_id:
                             raise SupervisorFailure(
                                 "refusing to cross a mount while deleting build root"
@@ -742,10 +735,7 @@ class Supervisor:
                     os.close(pidfd)
                     return None
                 raise
-            if (
-                require_parent_pid is not None
-                and snapshot.parent_pid != require_parent_pid
-            ):
+            if require_parent_pid is not None and snapshot.parent_pid != require_parent_pid:
                 raise SupervisorFailure(
                     f"kernel lineage changed before registration: pid={pid} "
                     f"parent={snapshot.parent_pid} expected={require_parent_pid}"
@@ -804,9 +794,7 @@ class Supervisor:
                 pass
             os._exit(125)
 
-    def spawn_stopped_worker(
-        self, inherited_mask: set[int | signal.Signals]
-    ) -> TrackedProcess:
+    def spawn_stopped_worker(self, inherited_mask: set[int | signal.Signals]) -> TrackedProcess:
         """Fork, pidfd-register, and verify one self-stopped Bash worker."""
         expected_executable = os.stat(self.command[0])
         gate_read_fd, gate_write_fd = os.pipe2(os.O_CLOEXEC)
@@ -844,22 +832,16 @@ class Supervisor:
                 continue
             if not os.WIFSTOPPED(wait_status):
                 self._record_terminal(worker, wait_status)
-                raise SupervisorFailure(
-                    "compatibility worker exited before startup stop"
-                )
+                raise SupervisorFailure("compatibility worker exited before startup stop")
             if os.WSTOPSIG(wait_status) != signal.SIGSTOP:
-                raise SupervisorFailure(
-                    "compatibility worker used an unexpected startup stop"
-                )
+                raise SupervisorFailure("compatibility worker used an unexpected startup stop")
             worker.stopped = True
             actual_executable = os.stat(f"/proc/{worker.pid}/exe")
             if (
                 actual_executable.st_dev != expected_executable.st_dev
                 or actual_executable.st_ino != expected_executable.st_ino
             ):
-                raise SupervisorFailure(
-                    "stopped compatibility worker is not the requested Bash"
-                )
+                raise SupervisorFailure("stopped compatibility worker is not the requested Bash")
             self._confirm_stopped(worker, deadline)
             return worker
         raise SupervisorFailure("compatibility worker did not enter startup stop")
@@ -885,9 +867,7 @@ class Supervisor:
                     return True
                 if error.errno == errno.EINTR:
                     continue
-                raise SupervisorFailure(
-                    f"waitpid failed: errno={error.errno}"
-                ) from error
+                raise SupervisorFailure(f"waitpid failed: errno={error.errno}") from error
             if pid == 0:
                 return False
             process = self.processes.get(pid)
@@ -944,9 +924,7 @@ class Supervisor:
             self._wait_activity(deadline)
         states = "unknown"
         try:
-            states = ",".join(
-                f"{tid}:{state}" for tid, state in self._task_states(process).items()
-            )
+            states = ",".join(f"{tid}:{state}" for tid, state in self._task_states(process).items())
         except OSError:
             pass
         raise SupervisorFailure(
@@ -1029,17 +1007,11 @@ class Supervisor:
         worker_children = self._children_of(worker)
         supervisor_children_after = self._supervisor_children()
         if supervisor_children_before != supervisor_children_after:
-            raise SupervisorFailure(
-                "supervisor children changed during cleanup preflight"
-            )
+            raise SupervisorFailure("supervisor children changed during cleanup preflight")
         if supervisor_children_after != {worker.pid}:
-            raise SupervisorFailure(
-                "cleanup preflight found an unexpected supervisor child set"
-            )
+            raise SupervisorFailure("cleanup preflight found an unexpected supervisor child set")
         if worker_children:
-            raise SupervisorFailure(
-                "cleanup preflight found unexpected stopped-worker children"
-            )
+            raise SupervisorFailure("cleanup preflight found unexpected stopped-worker children")
 
     def _freeze_fixed_point(self, deadline: float) -> None:
         if self.test_fault == "freeze":
@@ -1182,9 +1154,7 @@ class Supervisor:
             else:
                 if snapshot.start_time == process.start_time:
                     state = snapshot.state
-            result.append(
-                f"{process.identity} state={state} via={process.parent_identity}"
-            )
+            result.append(f"{process.identity} state={state} via={process.parent_identity}")
         known = set(self.processes)
         try:
             for pid in self._supervisor_children() - known:
@@ -1230,9 +1200,7 @@ def _decode_watched_mask(raw_mask: int | None) -> set[signal.Signals] | None:
     if raw_mask < 0 or raw_mask & ~allowed_mask:
         raise SupervisorFailure("invalid inherited watched-signal mask")
     return {
-        signal_number
-        for signal_number in WATCHED_SIGNALS
-        if raw_mask & (1 << int(signal_number))
+        signal_number for signal_number in WATCHED_SIGNALS if raw_mask & (1 << int(signal_number))
     }
 
 

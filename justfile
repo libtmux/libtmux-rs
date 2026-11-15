@@ -142,17 +142,6 @@ macros-ui-bless:
 swap-test *args:
     cargo test --locked --package mcp-swap --all-targets {{ args }}
 
-# Exercise the Linux-only pidfd supervisor without building five tmux releases
-[group: 'test']
-compat-supervisor-test *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "$(uname -s)" != Linux ]]; then
-        echo "compatibility supervisor tests require Linux; skipped"
-        exit 0
-    fi
-    python3 scripts/test-tmux-format-compat-supervisor.py {{ args }}
-
 # `LIBTMUX_COMPAT_LANES` names the lanes to build and test, such as "3.3a 3.8",
 # and may name a tmux tag, branch or commit the manifest does not hold. Unset,
 # every lane in .github/ci-matrix.txt runs.
@@ -160,12 +149,7 @@ compat-supervisor-test *args:
 # Build the pinned tmux releases and run the suite against each
 [group: 'test']
 compat:
-    bash scripts/test-tmux-format-compat.sh
-
-# Test how the compatibility script picks lanes and how CI plans them
-[group: 'test']
-ci-test:
-    python3 -m unittest scripts/test_compat_lanes.py scripts/test_ci_plan.py scripts/test_ci_config.py
+    uv run scripts/tmux-format-compat/tmux_format_compat.py
 
 # A type with well-documented methods and no example of its own still leaves
 # someone who arrived from a search with nothing to copy, and that gap is
@@ -436,7 +420,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest doctest-sandbox api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test doctest doctest-sandbox api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

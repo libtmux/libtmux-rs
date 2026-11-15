@@ -1,0 +1,254 @@
+"""The compatibility harness: what each lane runs, and one whole run against a stand-in tmux.
+
+The whole-run test replaces `cargo` and the tmux source with small stand-ins, so
+it checks the harness and the supervisor together without building tmux or the
+workspace.
+"""
+
+from __future__ import annotations
+
+import os
+import platform
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+import tmux_format_compat as harness
+from compat_lanes import load_lanes
+
+ENTRY = Path(harness.__file__).resolve()
+LINUX = sys.platform == "linux"
+BINARY = Path("/b/tmux-3.8-install/bin/tmux")
+CURRENT = Path("/b/tmux-3.3a-install/bin/tmux")
+NEWER = Path("/b/tmux-3.7b-install/bin/tmux")
+
+
+def test_every_contract_in_the_manifest_is_one_the_harness_runs() -> None:
+    allowed = {
+        "supported": {"workspace", "format-catalog"},
+        "witness": {"feature-boundary"},
+        "refused": {"reject-core", "reject-boundary", "reject-pre-probe"},
+        "development": {"development"},
+    }
+    handled = {*harness.GENERIC_CONTRACTS, *harness.REFUSAL_CONTRACTS}
+    for lane in load_lanes(harness.MANIFEST):
+        assert lane.contract in allowed[lane.kind], lane
+        assert lane.contract in handled, lane
+
+
+def test_a_refusal_lane_names_the_tmux_it_proves_the_crate_refuses() -> None:
+    steps = harness.refusal_steps("reject-core", BINARY, CURRENT, NEWER)
+    assert len(steps) == 4
+    for step in steps:
+        assert step.require
+        assert step.env["LIBTMUX_TEST_UNSUPPORTED_TMUX"] == str(BINARY)
+        assert step.env["LIBTMUX_REQUIRE_NATIVE"] == "LIBTMUX_TEST_UNSUPPORTED_TMUX"
+    assert [step.argv[4] for step in steps] == [
+        "libtmux",
+        "tmux-workspace",
+        "tmux-workspace",
+        "tmux-mcp",
+    ]
+    assert "--exact" in steps[1].argv
+
+
+def test_the_pre_probe_lane_runs_behind_the_minimum_client() -> None:
+    (step,) = harness.refusal_steps("reject-pre-probe", BINARY, CURRENT, NEWER)
+    assert step.env["LIBTMUX_TEST_PRE_PROBE_TMUX"] == str(BINARY)
+    assert step.env["LIBTMUX_TEST_TMUX"] == str(CURRENT)
+    assert "real_tmux_compat_pre_probe_" in step.argv
+
+
+def test_the_boundary_lane_requires_its_variable() -> None:
+    (step,) = harness.refusal_steps("reject-boundary", BINARY, CURRENT, NEWER)
+    assert step.env == {
+        "LIBTMUX_TEST_BOUNDARY_TMUX": str(BINARY),
+        "LIBTMUX_REQUIRE_NATIVE": "LIBTMUX_TEST_BOUNDARY_TMUX",
+    }
+
+
+def test_the_witness_lane_pins_the_broken_release_between_the_two_it_needs() -> None:
+    (step,) = harness.refusal_steps("feature-boundary", BINARY, CURRENT, NEWER)
+    assert step.env["LIBTMUX_TEST_BROKEN_BREAK_TMUX"] == str(BINARY)
+    assert step.env["LIBTMUX_TEST_MINIMUM_TMUX"] == str(CURRENT)
+    assert step.env["LIBTMUX_TEST_NEWER_TMUX"] == str(NEWER)
+    assert step.env["LIBTMUX_REQUIRE_NATIVE"].count(",") == 2
+
+
+def test_a_workspace_contract_has_no_refusal_steps() -> None:
+    with pytest.raises(ValueError, match="not a refusal contract"):
+        harness.refusal_steps("workspace", BINARY, CURRENT, NEWER)
+
+
+def test_only_the_minimum_and_the_safe_buffer_releases_provide_a_variable() -> None:
+    assert harness.feature_environment("3.3a", BINARY)["LIBTMUX_TEST_MINIMUM_TMUX"] == str(BINARY)
+    assert harness.feature_environment("3.4", BINARY)["LIBTMUX_TEST_SAFE_BUFFER_TMUX"] == str(
+        BINARY
+    )
+    assert harness.feature_environment("3.8", BINARY) == {}
+
+
+@pytest.mark.parametrize("family", harness.REQUIRED_FAMILIES)
+def test_a_missing_test_family_fails_the_lane(family: str) -> None:
+    listing = "\n".join(f"{other}x: test" for other in harness.REQUIRED_FAMILIES if other != family)
+    with pytest.raises(harness.CompatFailure, match=family):
+        harness.require_family(listing, family)
+
+
+def test_a_build_root_must_be_a_directory_the_supervisor_made(tmp_path: Path) -> None:
+    assert not harness.valid_build_root(str(tmp_path))
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path)
+    assert not harness.valid_build_root(str(link))
+
+
+def test_a_worker_refuses_a_root_it_did_not_get_from_the_supervisor() -> None:
+    with pytest.raises(harness.CompatFailure, match="invalid compatibility worker build root"):
+        harness.worker(["/etc"])
+    with pytest.raises(harness.CompatFailure, match="invalid compatibility worker invocation"):
+        harness.worker([])
+
+
+def test_arguments_are_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    assert harness.main(["--all"]) == 1
+    assert "accepts no arguments" in capsys.readouterr().err
+
+
+def test_another_platform_is_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    assert harness.main([]) == 1
+    assert "requires Linux" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(not LINUX, reason="pidfd")
+def test_a_python_without_pidfd_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(_pid: int) -> int:
+        raise OSError
+
+    monkeypatch.setattr(os, "pidfd_open", refuse)
+    if (
+        platform.system() == "Linux"
+        and subprocess.run(
+            ["locale", "charmap"],
+            env={**os.environ, "LC_ALL": "C.UTF-8"},
+            capture_output=True,
+            check=False,
+        ).stdout.strip()
+        != b"UTF-8"
+    ):
+        pytest.skip("no C.UTF-8 locale")
+    with pytest.raises(harness.CompatFailure, match="pidfd"):
+        harness.preflight()
+
+
+def test_mtimes_are_set_on_tracked_and_ignored_files(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, capture_output=True)
+    (tmp_path / ".gitignore").write_text("built\n")
+    (tmp_path / "tracked").write_text("x")
+    (tmp_path / "built").write_text("y")
+    (tmp_path / "link").symlink_to("tracked")
+    harness.normalize_bootstrap_mtimes(tmp_path, 1_000_000_000)
+    for name in ("tracked", "built", ".gitignore"):
+        assert (tmp_path / name).stat().st_mtime == 1_000_000_000, name
+    assert (tmp_path / "link").lstat().st_mtime == 1_000_000_000
+
+
+@pytest.mark.skipif(not LINUX, reason="the worker is stopped by the supervisor on Linux")
+def test_a_worker_stops_itself_before_it_does_any_work() -> None:
+    with tempfile.TemporaryDirectory(prefix="libtmux-tmux-format-compat.") as root:
+        child = subprocess.Popen([sys.executable, str(ENTRY), harness.WORKER_MODE, root])
+        try:
+            _, status = os.waitpid(child.pid, os.WUNTRACED)
+            assert os.WIFSTOPPED(status)
+            assert os.WSTOPSIG(status) == signal.SIGSTOP
+        finally:
+            child.kill()
+            child.wait()
+
+
+FAKE_CARGO = """#!/bin/sh
+{{
+    printf 'cargo'
+    for argument in "$@"; do printf ' %s' "$argument"; done
+    printf '\\n'
+    for name in LIBTMUX_TEST_TMUX LIBTMUX_REQUIRE_NATIVE LIBTMUX_TEST_MINIMUM_TMUX LC_ALL; do
+        eval "value=\\${{$name-unset}}"
+        printf '  %s=%s\\n' "$name" "$value"
+    done
+}} >> "{log}"
+case " $* " in *" --list "*)
+    for family in format aggregate projection error; do echo "real_tmux_compat_${{family}}_x: test"; done ;;
+esac
+echo "running 1 test"
+"""
+
+FAKE_AUTOGEN = """#!/bin/sh
+cat > configure <<'CONFIGURE'
+#!/bin/sh
+for argument in "$@"; do case $argument in --prefix=*) prefix=${argument#--prefix=} ;; esac; done
+printf 'all:\\n\\t@true\\ninstall:\\n\\tmkdir -p %s/bin\\n\\tprintf "#!/bin/sh\\\\necho tmux next-9.9\\\\n" > %s/bin/tmux\\n\\tchmod +x %s/bin/tmux\\n' "$prefix" "$prefix" "$prefix" > Makefile
+CONFIGURE
+chmod +x configure
+"""
+
+
+def locale_available() -> bool:
+    result = subprocess.run(
+        ["locale", "charmap"],
+        env={**os.environ, "LC_ALL": "C.UTF-8"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "UTF-8"
+
+
+@pytest.mark.skipif(not (LINUX and locale_available()), reason="needs Linux and C.UTF-8")
+def test_a_whole_run_builds_a_pinned_commit_and_tests_it_under_the_supervisor(
+    tmp_path: Path,
+) -> None:
+    upstream = tmp_path / "tmux"
+    upstream.mkdir()
+    (upstream / "autogen.sh").write_text(FAKE_AUTOGEN)
+    git = ["git", "-c", "user.name=f", "-c", "user.email=f@example.invalid", "-C", str(upstream)]
+    subprocess.run([*git, "init", "--quiet"], check=True)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "--quiet", "--message", "stand-in"], check=True)
+    commit = subprocess.run(
+        [*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    log = tmp_path / "cargo.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    cargo = fake_bin / "cargo"
+    cargo.write_text(FAKE_CARGO.format(log=log))
+    cargo.chmod(cargo.stat().st_mode | stat.S_IXUSR)
+
+    result = subprocess.run(
+        [sys.executable, str(ENTRY)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "LIBTMUX_COMPAT_LANES": commit,
+            "LIBTMUX_COMPAT_TMUX_REPOSITORY": f"file://{upstream}",
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "tmux next-9.9" in result.stdout
+    calls = [line for line in log.read_text().splitlines() if line.startswith("cargo")]
+    assert calls == [
+        "cargo test --locked --workspace --all-targets --all-features",
+        "cargo test --locked --package libtmux --lib --all-features real_tmux_compat_ -- --test-threads=1 --list",
+        "cargo test --locked --package libtmux --lib --all-features real_tmux_compat_ -- --test-threads=1",
+    ]
