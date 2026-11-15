@@ -427,7 +427,7 @@ package:
     CARGO_TARGET_DIR="$package_target" cargo package --locked --allow-dirty \
         --package libtmux --package libtmux-macros \
         --package tmux-mcp --package tmux-workspace --all-features
-    bash scripts/check-package-contents.sh
+    uv run scripts/check-package-contents/check_package_contents.py
 
 # Regenerate the tmux option schema from tmux's own source
 [group: 'release']
