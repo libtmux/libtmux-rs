@@ -1,17 +1,14 @@
 """Negative controls for the source-owned complete-program manifest."""
 
-import importlib.util
 import json
-from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from pathlib import Path
 
+import check_api_examples as CHECK
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("check_api_examples", ROOT / "scripts/check-api-examples.py")
-CHECK = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(CHECK)
+ROOT = Path(__file__).resolve().parents[3]
 
 
 class ApiExamples(unittest.TestCase):
@@ -20,9 +17,11 @@ class ApiExamples(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.manifest = json.loads((ROOT / CHECK.MANIFEST).read_text())
-        files = [CHECK.INVENTORY,
-                 *(item["sourceFile"] for item in self.manifest["setupFiles"]),
-                 *(item["sourceFile"] for item in self.manifest["examples"])]
+        files = [
+            CHECK.INVENTORY,
+            *(item["sourceFile"] for item in self.manifest["setupFiles"]),
+            *(item["sourceFile"] for item in self.manifest["examples"]),
+        ]
         for file in files:
             destination = self.root / file
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -33,8 +32,10 @@ class ApiExamples(unittest.TestCase):
         self.assertEqual(len(result["examples"]), 7)
         self.assertEqual(sum(len(item["targets"]) for item in result["examples"]), 31)
         for example in result["examples"]:
-            self.assertEqual([item["name"] for item in example["files"]],
-                             ["Cargo.toml", "rust-toolchain.toml", "src/main.rs"])
+            self.assertEqual(
+                [item["name"] for item in example["files"]],
+                ["Cargo.toml", "rust-toolchain.toml", "src/main.rs"],
+            )
             for item in example["files"]:
                 self.assertEqual(item["code"], (self.root / item["sourceFile"]).read_text())
 

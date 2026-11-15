@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Tests for `check-example-tables.py`.
+"""Tests for `check_example_tables.py`.
 
 The checker runs a cargo example, so what is tested here is everything either
 side of that: finding the marked blocks, splitting a row into columns, and
@@ -8,17 +7,9 @@ deciding which differences are drift and which are the clock.
 
 from __future__ import annotations
 
-import importlib.util
-import pathlib
 import unittest
 
-SPEC = importlib.util.spec_from_file_location(
-    "check_example_tables",
-    pathlib.Path(__file__).with_name("check-example-tables.py"),
-)
-assert SPEC is not None and SPEC.loader is not None
-checker = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(checker)
+import check_example_tables as checker
 
 HEADER = "mode                     dispatches      wall  attribution  query output"
 ROW = "async/folded             3                  9ms  merged       2 panes, 2 windows"

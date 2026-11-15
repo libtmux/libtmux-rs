@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Fail when a published crate has no changelog it ships and links.
 
 Four crates are published and tagged on their own, so a reader of one should
@@ -8,13 +12,13 @@ release rely on: it opens with the crate's own name, so one pasted over another
 crate's is noticed; it has an Unreleased section for the next release to land
 under; the crate's `include` list ships it; and the crate's README links it.
 
-`scripts/check-package-contents.sh` checks the same file in the packaged
+`scripts/check-package-contents` checks the same file in the packaged
 tarball. This check reads the tree, so a change that deletes a changelog fails
 without a `cargo package`.
 
-It needs Python 3.11 or newer for `tomllib`. Run from the repository root:
+Run from the repository root:
 
-    python3 scripts/check-changelogs.py
+    uv run scripts/check-changelogs/check_changelogs.py
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ import re
 import sys
 import tomllib
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 FENCE = re.compile(r"^ {0,3}(```|~~~)")
 
 
@@ -61,7 +65,9 @@ def check(root: pathlib.Path) -> list[str]:
         return ["crates/: no published crate found"]
     problems = []
     root_changelog = root / "CHANGELOG.md"
-    if not root_changelog.is_file() or "## Unreleased" not in outside_fences(root_changelog.read_text()):
+    if not root_changelog.is_file() or "## Unreleased" not in outside_fences(
+        root_changelog.read_text()
+    ):
         problems.append('CHANGELOG.md is missing or has no "## Unreleased" section')
     for name, directory in crates.items():
         label = directory.relative_to(root).as_posix()
@@ -71,12 +77,18 @@ def check(root: pathlib.Path) -> list[str]:
             continue
         lines = outside_fences(path.read_text())
         if not any(line.startswith(f"Notable changes to `{name}`.") for line in lines):
-            problems.append(f'{label}/CHANGELOG.md does not open with "Notable changes to `{name}`."')
+            problems.append(
+                f'{label}/CHANGELOG.md does not open with "Notable changes to `{name}`."'
+            )
         if "## Unreleased" not in lines:
             problems.append(f'{label}/CHANGELOG.md has no "## Unreleased" section')
-        include = tomllib.loads((directory / "Cargo.toml").read_text())["package"].get("include", [])
+        include = tomllib.loads((directory / "Cargo.toml").read_text())["package"].get(
+            "include", []
+        )
         if "/CHANGELOG.md" not in include:
-            problems.append(f"{label}/Cargo.toml does not include /CHANGELOG.md, so {name} does not ship it")
+            problems.append(
+                f"{label}/Cargo.toml does not include /CHANGELOG.md, so {name} does not ship it"
+            )
         readme = (directory / "README.md").read_text()
         if "](CHANGELOG.md)" not in readme and "]: CHANGELOG.md" not in readme:
             problems.append(f"{label}/README.md does not link CHANGELOG.md")

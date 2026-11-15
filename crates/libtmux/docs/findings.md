@@ -773,7 +773,7 @@ not reliably notice a method whose signature changed.
 
 `crates/libtmux/docs/public-api.txt` records every public item with its
 callable or data signature, plus each non-blanket trait implementation.
-`scripts/public-api.py` generates one record per line from rustdoc's JSON.
+`scripts/public-api/public_api.py` generates one record per line from rustdoc's JSON.
 `just api` regenerates it and `just api-check` fails when the tree and the
 record disagree, naming what moved.
 

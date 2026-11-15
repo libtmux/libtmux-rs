@@ -7,8 +7,7 @@ import sys
 import tempfile
 import unittest
 
-
-SCRIPT = pathlib.Path(__file__).with_name("public-api.py")
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "public_api.py"
 
 
 def fixture() -> dict:

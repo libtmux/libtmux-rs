@@ -33,3 +33,6 @@ __pycache__/
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
+
+# The scripts/ tooling environment.
+/.venv/

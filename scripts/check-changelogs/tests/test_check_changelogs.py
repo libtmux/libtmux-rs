@@ -7,17 +7,14 @@ fail is not checking anything.
 
 from __future__ import annotations
 
-import importlib.util
 import pathlib
 import shutil
 import tempfile
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("check_changelogs", ROOT / "scripts" / "check-changelogs.py")
-assert SPEC is not None and SPEC.loader is not None
-check_changelogs = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(check_changelogs)
+import check_changelogs
+
+ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 CRATES = ("libtmux", "libtmux-macros", "tmux-mcp", "tmux-workspace")
 
@@ -64,7 +61,9 @@ class CheckChangelogsTest(unittest.TestCase):
 
     def test_another_crates_changelog_is_flagged(self) -> None:
         """A changelog pasted over another crate's fails where it was pasted."""
-        shutil.copy(ROOT / "crates/libtmux/CHANGELOG.md", self.root / "crates/tmux-mcp/CHANGELOG.md")
+        shutil.copy(
+            ROOT / "crates/libtmux/CHANGELOG.md", self.root / "crates/tmux-mcp/CHANGELOG.md"
+        )
         self.assertEqual(
             self.problems(),
             ['crates/tmux-mcp/CHANGELOG.md does not open with "Notable changes to `tmux-mcp`."'],
@@ -80,7 +79,9 @@ class CheckChangelogsTest(unittest.TestCase):
 
     def test_an_unreleased_heading_in_a_fence_does_not_count(self) -> None:
         """Only a heading outside a code block is a section."""
-        self.edit("libtmux", "CHANGELOG.md", "\n## Unreleased\n", "\n```markdown\n## Unreleased\n```\n")
+        self.edit(
+            "libtmux", "CHANGELOG.md", "\n## Unreleased\n", "\n```markdown\n## Unreleased\n```\n"
+        )
         self.assertEqual(
             self.problems(),
             ['crates/libtmux/CHANGELOG.md has no "## Unreleased" section'],
@@ -91,7 +92,9 @@ class CheckChangelogsTest(unittest.TestCase):
         self.edit("tmux-workspace", "Cargo.toml", '    "/CHANGELOG.md",\n', "")
         self.assertEqual(
             self.problems(),
-            ["crates/tmux-workspace/Cargo.toml does not include /CHANGELOG.md, so tmux-workspace does not ship it"],
+            [
+                "crates/tmux-workspace/Cargo.toml does not include /CHANGELOG.md, so tmux-workspace does not ship it"
+            ],
         )
 
     def test_a_readme_that_does_not_link_its_changelog_is_flagged(self) -> None:
@@ -105,7 +108,9 @@ class CheckChangelogsTest(unittest.TestCase):
     def test_a_root_changelog_without_an_unreleased_section_is_flagged(self) -> None:
         """The root file keeps the placeholder the next release lands under."""
         self.assertEqual(self.problems(), [])
-        text = (self.root / "CHANGELOG.md").read_text().replace("\n## Unreleased\n", "\n## Next\n", 1)
+        text = (
+            (self.root / "CHANGELOG.md").read_text().replace("\n## Unreleased\n", "\n## Next\n", 1)
+        )
         (self.root / "CHANGELOG.md").write_text(text)
         self.assertEqual(
             self.problems(),

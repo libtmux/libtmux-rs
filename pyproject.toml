@@ -1,0 +1,62 @@
+# Tooling for the maintainer scripts under scripts/. The Rust crates have no
+# Python dependency and do not build or install this project.
+[project]
+name = "libtmux-rs-scripts"
+version = "0.0.0"
+description = "Format, lint, type and test configuration for scripts/"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = [
+  "pytest>=9.2",
+  "pytest-asyncio>=1.4",
+  "pyyaml>=6.0",
+  "ruff>=0.17",
+  "ty>=0.0.101",
+]
+
+[tool.uv]
+package = false
+# Lock only releases at least three days old. Project settings override a
+# contributor's own uv configuration, so `uv lock --check` gives the same
+# answer on every machine. A relative value needs uv 0.9.17 or newer.
+exclude-newer = "3 days"
+
+[tool.pytest.ini_options]
+# Each script is a plain module in its own directory, so its tests import it by
+# directory.
+pythonpath = [
+  "scripts/check-api-examples",
+  "scripts/check-changelogs",
+  "scripts/check-example-tables",
+  "scripts/public-api",
+]
+testpaths = ["scripts"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+  "--doctest-modules",
+  "--strict-config",
+  "--strict-markers",
+  "-p",
+  "no:cacheprovider",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["B", "C4", "I", "RUF", "SIM", "UP"]
+
+[tool.ty.environment]
+python-version = "3.12"
+extra-paths = [
+  "scripts/check-api-examples",
+  "scripts/check-changelogs",
+  "scripts/check-example-tables",
+  "scripts/public-api",
+]
+
+[tool.ty.src]
+include = ["scripts"]

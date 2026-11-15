@@ -1,10 +1,16 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Print the public API surface of a crate, one record per line.
 
 Built from rustdoc's JSON rather than a separate tool, so the only thing it
 needs is the nightly the fuzz targets already require. The output is sorted and
 stable enough to diff: item signatures and non-blanket trait implementations
 change when a caller-visible contract changes.
+
+    public_api.py target/doc/libtmux.json > crates/libtmux/docs/public-api.txt
 
 It is not a semver oracle. It says what moved, which is what
 `cargo-semver-checks` could not say through the alphas, when it skipped every
@@ -19,9 +25,20 @@ import sys
 # Item kinds that are part of the surface. Modules only contribute paths;
 # trait implementation headers are recorded separately.
 KINDS = {
-    "struct", "enum", "trait", "function", "type_alias", "constant",
-    "macro", "proc_macro", "struct_field", "variant", "assoc_const",
-    "assoc_type", "primitive", "union",
+    "struct",
+    "enum",
+    "trait",
+    "function",
+    "type_alias",
+    "constant",
+    "macro",
+    "proc_macro",
+    "struct_field",
+    "variant",
+    "assoc_const",
+    "assoc_type",
+    "primitive",
+    "union",
 }
 
 
@@ -100,9 +117,7 @@ def render_args(value, paths: dict, reachable: dict) -> str:
             render_type(item, paths, reachable) for item in inside.get("inputs") or []
         )
         output = inside.get("output")
-        suffix = (
-            f" -> {render_type(output, paths, reachable)}" if output is not None else ""
-        )
+        suffix = f" -> {render_type(output, paths, reachable)}" if output is not None else ""
         return f"({inputs}){suffix}"
     raise ValueError(f"unsupported rustdoc generic arguments: {value!r}")
 
@@ -115,9 +130,7 @@ def render_bound(value: dict, paths: dict, reachable: dict) -> str:
             "maybe": "?",
             "maybe_const": "~const ",
         }.get(bound.get("modifier"), f"{bound.get('modifier')} ")
-        generic = render_generic_params(
-            bound.get("generic_params") or [], paths, reachable
-        )
+        generic = render_generic_params(bound.get("generic_params") or [], paths, reachable)
         higher_ranked = f"for{generic} " if generic else ""
         return higher_ranked + prefix + render_path(bound["trait"], paths, reachable)
     if "outlives" in value:
@@ -149,10 +162,7 @@ def render_type(value: dict, paths: dict, reachable: dict) -> str:
         return f"[{render_type(value['slice'], paths, reachable)}]"
     if "array" in value:
         array = value["array"]
-        return (
-            f"[{render_type(array['type'], paths, reachable)}; "
-            f"{render_constant(array['len'])}]"
-        )
+        return f"[{render_type(array['type'], paths, reachable)}; {render_constant(array['len'])}]"
     if "borrowed_ref" in value:
         reference = value["borrowed_ref"]
         lifetime = f"{reference['lifetime']} " if reference.get("lifetime") else ""
@@ -169,9 +179,7 @@ def render_type(value: dict, paths: dict, reachable: dict) -> str:
         dynamic = value["dyn_trait"]
         bounds = []
         for trait in dynamic.get("traits") or []:
-            generic = render_generic_params(
-                trait.get("generic_params") or [], paths, reachable
-            )
+            generic = render_generic_params(trait.get("generic_params") or [], paths, reachable)
             higher_ranked = f"for{generic} " if generic else ""
             bounds.append(higher_ranked + render_path(trait["trait"], paths, reachable))
         if dynamic.get("lifetime"):
@@ -179,12 +187,14 @@ def render_type(value: dict, paths: dict, reachable: dict) -> str:
         return f"dyn {' + '.join(bounds)}"
     if "function_pointer" in value:
         pointer = value["function_pointer"]
-        generic = render_generic_params(
-            pointer.get("generic_params") or [], paths, reachable
-        )
+        generic = render_generic_params(pointer.get("generic_params") or [], paths, reachable)
         return render_function(
-            pointer["sig"], pointer["header"], {"params": [], "where_predicates": []},
-            paths, reachable, generic_override=generic,
+            pointer["sig"],
+            pointer["header"],
+            {"params": [], "where_predicates": []},
+            paths,
+            reachable,
+            generic_override=generic,
         )
     if "qualified_path" in value:
         qualified = value["qualified_path"]
@@ -192,8 +202,7 @@ def render_type(value: dict, paths: dict, reachable: dict) -> str:
         trait = qualified.get("trait")
         prefix = f"<{held} as {render_path(trait, paths, reachable)}>" if trait else held
         return (
-            f"{prefix}::{qualified['name']}"
-            f"{render_args(qualified.get('args'), paths, reachable)}"
+            f"{prefix}::{qualified['name']}{render_args(qualified.get('args'), paths, reachable)}"
         )
     if "pat" in value:
         return render_type(value["pat"]["type"], paths, reachable)
@@ -238,9 +247,7 @@ def render_generics(value: dict, paths: dict, reachable: dict) -> tuple[str, str
     for wrapped in value.get("where_predicates") or []:
         if "bound_predicate" in wrapped:
             predicate = wrapped["bound_predicate"]
-            generic = render_generic_params(
-                predicate.get("generic_params") or [], paths, reachable
-            )
+            generic = render_generic_params(predicate.get("generic_params") or [], paths, reachable)
             higher_ranked = f"for{generic} " if generic else ""
             bounds = render_bounds(predicate.get("bounds") or [], paths, reachable)
             predicates.append(
@@ -308,8 +315,7 @@ def render_function(
         qualifiers += "unsafe "
     qualifiers += render_abi(header.get("abi", "Rust"))
     inputs = [
-        render_input(name, value, paths, reachable)
-        for name, value in signature.get("inputs") or []
+        render_input(name, value, paths, reachable) for name, value in signature.get("inputs") or []
     ]
     if signature.get("is_c_variadic"):
         inputs.append("...")
@@ -383,10 +389,7 @@ def explicit_impls(index: dict, paths: dict, reachable: dict) -> set[str]:
         ):
             continue
         target = implementation.get("for") or {}
-        if not (
-            str(trait.get("id")) in reachable
-            or type_mentions_reachable(target, reachable)
-        ):
+        if not (str(trait.get("id")) in reachable or type_mentions_reachable(target, reachable)):
             continue
         parameters, where = render_generics(
             implementation.get("generics") or {"params": [], "where_predicates": []},

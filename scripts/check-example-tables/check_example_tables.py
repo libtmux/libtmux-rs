@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Fail when a documented example's output no longer matches the example.
 
 A block of program output pasted into prose is a copy, and a copy drifts
@@ -14,7 +18,7 @@ is the drift this exists to catch.
 
 Usage:
 
-    check-example-tables.py [README.md ...]
+    check_example_tables.py [README.md ...]
 """
 
 from __future__ import annotations
@@ -50,10 +54,7 @@ def blocks(text: str) -> list[tuple[int, str, str]]:
         rest = text[marker.end() :]
         fence = FENCE.match(rest.lstrip())
         if fence is None:
-            raise Drift(
-                f"the marker for `{marker.group('argv')}` is followed by no "
-                "```text block"
-            )
+            raise Drift(f"the marker for `{marker.group('argv')}` is followed by no ```text block")
         line = text.count("\n", 0, marker.start()) + 1
         found.append((line, marker.group("argv"), fence.group("body")))
     return found
@@ -69,9 +70,7 @@ def run(argv: str) -> str:
         check=False,
     )
     if result.returncode != 0:
-        raise Drift(
-            f"`{' '.join(command)}` exited {result.returncode}:\n{result.stderr}"
-        )
+        raise Drift(f"`{' '.join(command)}` exited {result.returncode}:\n{result.stderr}")
     return result.stdout
 
 
@@ -102,18 +101,16 @@ def compare(documented: str, produced: str, argv: str, line: int) -> list[str]:
     problems = []
     if len(shown) != len(actual):
         problems.append(
-            f"README:{line}: `{argv}` printed {len(actual)} lines, the block "
-            f"shows {len(shown)}"
+            f"README:{line}: `{argv}` printed {len(actual)} lines, the block shows {len(shown)}"
         )
 
-    for offset, (want, got) in enumerate(zip(shown, actual)):
+    for offset, (want, got) in enumerate(zip(shown, actual, strict=False)):
         if want == got:
             continue
 
         want_cells, got_cells = cells(want), cells(got)
         if len(want_cells) == len(got_cells) and all(
-            comparable(left, right)
-            for left, right in zip(want_cells, got_cells)
+            comparable(left, right) for left, right in zip(want_cells, got_cells, strict=True)
         ):
             continue
 

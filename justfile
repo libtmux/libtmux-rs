@@ -54,8 +54,7 @@ doctest-sandbox:
 #
 # Verify complete API programs and their native attachment targets
 api-examples:
-    python3 -m unittest scripts/test_check_api_examples.py
-    python3 scripts/check-api-examples.py
+    uv run scripts/check-api-examples/check_api_examples.py
 
 # Run every example and check it cleaned up
 [group: 'test']
@@ -209,7 +208,7 @@ list-profiles:
 api:
     cargo +nightly rustdoc -p libtmux --all-features \
         -- -Zunstable-options --output-format json
-    python3 scripts/public-api.py target/doc/libtmux.json \
+    uv run scripts/public-api/public_api.py target/doc/libtmux.json \
         > crates/libtmux/docs/public-api.txt
 
 # No automated semver gate runs yet, and a 0.1.N release may break the API, so
@@ -221,13 +220,12 @@ api:
 api-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    python3 -m unittest scripts/test_public_api.py
     cargo +nightly rustdoc -p libtmux --all-features \
         -- -Zunstable-options --output-format json > /dev/null
     # A fixed path in /tmp is one file shared between checkouts.
     current="$(mktemp -t libtmux-api-XXXXXX)"
     trap 'rm -f "$current"' EXIT
-    python3 scripts/public-api.py target/doc/libtmux.json > "$current"
+    uv run scripts/public-api/public_api.py target/doc/libtmux.json > "$current"
     if ! diff -u crates/libtmux/docs/public-api.txt "$current"; then
         printf '\npublic API changed. Run `just api` and commit the result.\n' >&2
         exit 1
@@ -333,8 +331,7 @@ docs:
 # link it
 [group: 'docs']
 changelogs:
-    python3 -m unittest scripts/test_check_changelogs.py
-    python3 scripts/check-changelogs.py
+    uv run scripts/check-changelogs/check_changelogs.py
 
 # The catalog is hand-maintained, so a format tmux gained -- or one nobody
 # ever added -- is invisible: nothing fails, callers just cannot ask for the
@@ -365,8 +362,7 @@ doc-blocks:
 # and compares every column but the clock.
 [group: 'docs']
 example-tables:
-    python3 -m unittest scripts/test_check_example_tables.py
-    python3 scripts/check-example-tables.py README.md
+    uv run scripts/check-example-tables/check_example_tables.py README.md
 
 # A Contents list is a copy of a document's headings, and a copy drifts: a
 # renamed section leaves the list rendering a link to an anchor that is gone.
