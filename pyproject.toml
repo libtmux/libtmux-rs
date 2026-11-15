@@ -45,6 +45,9 @@ pythonpath = [
   "scripts/fixture-root",
 ]
 testpaths = ["scripts"]
+markers = [
+  "slow: starts and kills real process trees, about 40 s for the supervisor cases",
+]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 addopts = [

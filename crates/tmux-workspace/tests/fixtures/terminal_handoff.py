@@ -1,4 +1,6 @@
 """Run one CLI handoff under an owned controlling terminal."""
+
+import contextlib
 import errno
 import fcntl
 import os
@@ -19,8 +21,7 @@ def terminal():
 hold = sys.argv[1:2] == ["--hold"]
 argv = sys.argv[2:] if hold else sys.argv[1:]
 master, slave = pty.openpty()
-child = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
-                         preexec_fn=terminal)
+child = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, preexec_fn=terminal)  # noqa: PLW1509
 os.close(slave)
 output = bytearray()
 try:
@@ -47,9 +48,7 @@ try:
     status = child.wait(timeout=2)
 finally:
     os.close(master)
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(child.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
 sys.stderr.buffer.write(output)
 raise SystemExit(status if status >= 0 else 128 - status)

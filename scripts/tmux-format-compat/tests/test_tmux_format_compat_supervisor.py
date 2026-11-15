@@ -13,7 +13,10 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="the supervisor needs Linux")
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(sys.platform != "linux", reason="the supervisor needs Linux"),
+]
 
 CASES = Path(__file__).resolve().with_name("supervisor_cases.py")
 

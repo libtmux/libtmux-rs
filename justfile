@@ -224,6 +224,19 @@ fmt-check:
 fmt:
     cargo fmt --all
 
+# The support scripts under scripts/ and the pseudo-terminal fixtures of the
+# tmux-workspace tests are typed Python. Format, lint and type-check them, then
+# run the script tests, which include the supervisor cases and the checks that
+# hold the CI workflows to the plan.
+#
+# Format, lint, type check and test the support scripts
+[group: 'lint']
+scripts:
+    uv run --locked ruff format --check
+    uv run --locked ruff check
+    uv run --locked ty check
+    uv run --locked pytest scripts
+
 # Run clippy over every target and feature
 [group: 'lint']
 clippy:
@@ -384,7 +397,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test doctest doctest-sandbox api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run format-coverage-check features deny msrv package
+check: fmt-check scripts clippy test swap-test doctest doctest-sandbox api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

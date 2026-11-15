@@ -2,16 +2,19 @@
 
 This repository is a Cargo workspace of four published crates and one private
 developer tool. The gates below are what a change has to pass. It was
-extracted from the Python libtmux repository; its `uv`, `pytest`, `ruff`, and
-`mypy` conventions do not apply here.
+extracted from the Python libtmux repository; its `mypy` convention does not
+apply here, and its `uv`, `pytest` and `ruff` conventions apply only to the
+support scripts under `scripts/`.
 
 For how the prose reads — README, changelog, release notes, commit messages,
 rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
 
 ## Getting set up
 
-You need tmux 3.3a or newer on `PATH` and a Unix target. Native Windows is
-unsupported because tmux is unavailable there; WSL works.
+You need tmux 3.3a or newer on `PATH`, [uv](https://docs.astral.sh/uv/) and a
+Unix target. `uv` runs the support scripts under `scripts/` and the Cargo
+runner. Native Windows is unsupported because tmux is unavailable there; WSL
+works.
 The CLI's captured-child support has a narrower binding boundary; see
 [Bootstrap scripts](../crates/tmux-workspace/docs/cli.md#bootstrap-scripts).
 
@@ -187,12 +190,16 @@ its caller is inside, and otherwise lands on the default socket under
 `TMUX_TMPDIR`. A suite started from a tmux pane could drive, or `kill-server`,
 the session it was started from.
 
-`.cargo/config.toml` therefore names a runner, `scripts/sandbox-runner.sh`,
-which Cargo puts in front of every test, example and bench binary it starts.
-Before the binary runs, the runner:
+`.cargo/config.toml` therefore names a runner,
+`scripts/sandbox/sandbox_runner.py`, which Cargo puts in front of every test,
+example and bench binary it starts. It is a typed Python script that `uv` runs,
+so `cargo test`, `cargo run` and `cargo bench` need `uv` on `PATH`. `uv` puts
+its own environment first in `PATH` and exports `VIRTUAL_ENV`, `UV` and
+`UV_RUN_RECURSION_DEPTH`, which the runner removes again so the binary sees the
+caller's environment. Before the binary runs, the runner:
 
 - unsets `TMUX`, `TMUX_PANE`, `LIBTMUX_SOCKET` and `LIBTMUX_SOCKET_PATH`;
-- makes a fresh owner-only directory with `mktemp -d` under `TMPDIR`, exits 78
+- makes a fresh owner-only directory under `TMPDIR`, exits 78
   when it cannot, or when `TMPDIR` is relative, missing or so long that the
   default socket path would pass 100 bytes once links are resolved (`sun_path`
   holds 104 on macOS and 108 on Linux), and sets `TMUX_TMPDIR` and
@@ -255,7 +262,7 @@ a doctest gets `[env]` and no sweep.
   `TMUX`, and the runner says `LIBTMUX_SANDBOX_TMUX is set: true` on stderr. The
   `TMUX` the runner received is never kept, so a shell that exports a server it
   is inside cannot pass it on by accident. `TMUX_PANE` stays unset.
-  `scripts/run-examples.sh` uses it for `inspect` and `find`, which read
+  `scripts/run-examples/run_examples.py` uses it for `inspect` and `find`, which read
   `$TMUX` as a process inside a pane does, and for no other example. It also
   runs `inspect` with every variable aimed at its fixture server and none
   handed over by name, and requires that the example finds no server on the
@@ -353,8 +360,8 @@ directions, so the rule is worth the extra minute: send what the code sends.
 $ just check
 ```
 
-That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `ci-test`, `doctest`, `doctest-sandbox`,
+That runs, in order: `fmt-check`, `scripts`, `clippy`, `test`, `swap-test`,
+`doctest`, `doctest-sandbox`,
 `api-examples`, `examples`, `example-tables`, `fixture-root`,
 `docs`, `doc-blocks`, `doc-contents`, `changelogs`, `doctests-run`,
 `format-coverage-check`, `features`, `deny`, `msrv`, `package`.
@@ -363,8 +370,29 @@ every cargo invocation passes `--locked`, so dependency changes need a
 consistent `Cargo.lock` before the gate can run. Committing it is not required
 to run the local gate.
 
-`compat-supervisor-test` exercises the Linux pidfd containment used by the
-slow compatibility lane. It skips on other Unix targets; CI runs it on Linux.
+`scripts` formats, lints, type-checks and tests the support scripts under
+`scripts/` and the two pseudo-terminal fixtures the `tmux-workspace` tests run,
+all typed Python run with `uv`; the policy for what may stay
+there is [`SCRIPTS.md`](SCRIPTS.md). Its tests include the supervisor cases of
+the slow compatibility lane, which exercise Linux pidfd containment and skip on
+other Unix targets, and the checks that hold the CI workflows to the plan. The
+recipe runs these four commands, and the CI `just check` job runs the recipe:
+
+```console
+$ uv run --locked ruff format --check
+```
+
+```console
+$ uv run --locked ruff check
+```
+
+```console
+$ uv run --locked ty check
+```
+
+```console
+$ uv run --locked pytest scripts
+```
 
 These gates are **not** in `just check` and run only in CI:
 

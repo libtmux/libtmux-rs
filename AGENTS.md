@@ -1,8 +1,11 @@
 # AGENTS.md
 
 Rules for this repository: `libtmux` for Rust, a port of the Python library of
-the same name. Nothing here is Python — a convention you recognise from that
-project (uv, ruff, mypy, pytest) does not apply unless a file here says so.
+the same name. Nothing here is Python except the support scripts under
+`scripts/` and the pseudo-terminal fixtures of the `tmux-workspace` tests, which
+use uv, ruff, ty and pytest as [`.github/SCRIPTS.md`](.github/SCRIPTS.md) says.
+Any other convention you recognise from that project (mypy, for one) does not
+apply unless a file here says so.
 
 Follow the conventions already in the tree, and keep a change scoped to what
 was asked for.
