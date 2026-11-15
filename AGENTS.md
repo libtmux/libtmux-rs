@@ -34,6 +34,8 @@ Cargo commands.
   commit messages, CLI and help text, error messages, rustdoc, or source
   comments — follow
   [`.github/WRITING.md`](.github/WRITING.md).
+- Support scripts: what may stay, their language, layout and checks:
+  [`.github/SCRIPTS.md`](.github/SCRIPTS.md).
 - For building, testing, the gates a change must pass, the language floor,
   dependencies, releases, or opening a pull request, follow
   [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md).
