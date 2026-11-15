@@ -1680,6 +1680,141 @@ async fn a_buffer_larger_than_an_argument_round_trips_through_files() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Sets the process umask and restores it when dropped. A umask belongs to the
+/// whole process, so a test that sets one holds [`UMASK_LOCK`] for as long.
+#[cfg(feature = "test-support")]
+struct Umask {
+    previous: rustix::fs::Mode,
+    _held: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(feature = "test-support")]
+static UMASK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(feature = "test-support")]
+impl Umask {
+    fn set(mode: u32) -> Self {
+        let held = UMASK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = rustix::process::umask(rustix::fs::Mode::from_bits_retain(mode));
+        Self {
+            previous,
+            _held: held,
+        }
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl Drop for Umask {
+    fn drop(&mut self) {
+        rustix::process::umask(self.previous);
+    }
+}
+
+#[cfg(feature = "test-support")]
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::MetadataExt as _;
+    fs::metadata(path).expect("the file exists").mode() & 0o777
+}
+
+/// tmux creates a missing file with the umask of the process that opens it, so
+/// under the usual `022` a saved buffer, which can hold a pane's text or a
+/// secret, was readable by every local user. The file is made 0600 first.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn save_buffer_creates_its_file_owner_only_under_the_usual_umask() {
+    let _umask = Umask::set(0o022);
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let path = scratch.path().join("out");
+
+    server
+        .set_buffer(Some("secret"), "made-up-text")
+        .await
+        .expect("the buffer is set");
+    server
+        .save_buffer(Some("secret"), &path)
+        .await
+        .expect("tmux writes the file");
+
+    assert_eq!(fs::read(&path).expect("the file reads"), b"made-up-text");
+    assert_eq!(mode_of(&path), 0o600, "the file is owner-only");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn save_buffer_keeps_the_mode_of_a_file_that_exists() {
+    let _umask = Umask::set(0o022);
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let path = scratch.path().join("out");
+
+    for mode in [0o640, 0o600, 0o666] {
+        fs::write(&path, b"old contents that are longer").expect("the file is written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("the mode is set");
+        server
+            .set_buffer(Some("kept"), "new")
+            .await
+            .expect("the buffer is set");
+        server
+            .save_buffer(Some("kept"), &path)
+            .await
+            .expect("tmux writes the file");
+
+        assert_eq!(fs::read(&path).expect("the file reads"), b"new");
+        assert_eq!(mode_of(&path), mode, "the caller's mode is kept");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_failed_save_buffer_removes_the_file_it_made_and_keeps_one_that_existed() {
+    let _umask = Umask::set(0o022);
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let made = scratch.path().join("made");
+    let existing = scratch.path().join("existing");
+    fs::write(&existing, b"kept").expect("the file is written");
+
+    assert!(
+        server.save_buffer(Some("missing"), &made).await.is_err(),
+        "no buffer has that name",
+    );
+    assert!(!made.exists(), "the file the call made is removed");
+
+    assert!(
+        server
+            .save_buffer(Some("missing"), &existing)
+            .await
+            .is_err(),
+        "no buffer has that name",
+    );
+    assert_eq!(
+        fs::read(&existing).expect("the file reads"),
+        b"kept",
+        "a file that was already there is left alone",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[cfg(feature = "test-support")]
 fn os_string_from_bytes(bytes: &[u8]) -> OsString {
     use std::os::unix::ffi::OsStringExt as _;

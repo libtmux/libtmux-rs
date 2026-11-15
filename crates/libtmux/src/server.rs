@@ -1209,6 +1209,21 @@ impl Server {
     /// can hold still round-trips. tmux writes as the user running the
     /// server.
     ///
+    /// A buffer can hold a pane's text, a command line or a secret, and tmux
+    /// creates a missing file with the mode its own umask leaves, `0644` under
+    /// the usual `022`. So a missing file is created first, by this process,
+    /// with mode `0600`, and tmux then writes into a file only this user can
+    /// read. A file that already exists keeps its mode, and tmux truncates it
+    /// as before. When tmux refuses the write, a file this call created is
+    /// removed. After a timeout or a lost connection it is left, because tmux
+    /// may still write it.
+    ///
+    /// This process makes the file, so a path it cannot create, such as one in
+    /// a directory only the server's user can write, is left for tmux to
+    /// create with tmux's mode, or to refuse. The same holds for a server on
+    /// another host. `-` is tmux's name for standard output, and makes no
+    /// file.
+    ///
     /// # Errors
     ///
     /// Returns an error when the buffer is missing or tmux cannot write the
@@ -1218,19 +1233,29 @@ impl Server {
         name: Option<&str>,
         path: impl AsRef<Path>,
     ) -> Result<(), Error> {
+        let path = path.as_ref();
+        let created = create_private_file(path);
         let mut command = Command::new("save-buffer");
         if let Some(name) = name {
             command = command.arg("-b").arg(OsString::from(name));
         }
 
-        listing::mutate(
+        let outcome = listing::mutate(
             &self.core,
             "save-buffer",
-            command
-                .arg("--")
-                .arg(path.as_ref().as_os_str().to_os_string()),
+            command.arg("--").arg(path.as_os_str().to_os_string()),
         )
-        .await
+        .await;
+        if created {
+            if let Err(error) = &outcome {
+                if tmux_refused_before_writing(error) {
+                    // Best effort: the file is empty and ours, and the error
+                    // that matters is tmux's.
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        outcome
     }
 
     /// Read a paste buffer's exact bytes.
@@ -1973,6 +1998,43 @@ impl fmt::Debug for Server {
             .field("identity", self.identity())
             .finish_non_exhaustive()
     }
+}
+
+/// Create `path` with mode `0600` unless something is already there, and say
+/// whether this call made it.
+///
+/// `O_EXCL` means a file, link or directory that exists is never followed or
+/// opened, so a path an attacker prepared is left to tmux as before. Any other
+/// failure, such as a missing directory, is tmux's to report.
+fn create_private_file(path: &Path) -> bool {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // tmux's name for standard output, not a file.
+    if path.as_os_str() == "-" {
+        return false;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .is_ok()
+}
+
+/// Whether an error says tmux did not write, so a file made for it is safe to
+/// remove. A timeout or a lost connection says nothing about what tmux did.
+fn tmux_refused_before_writing(error: &Error) -> bool {
+    use crate::ErrorKind;
+
+    matches!(
+        error.kind(),
+        ErrorKind::Refused
+            | ErrorKind::ObjectGone
+            | ErrorKind::ServerGone
+            | ErrorKind::Unreachable
+            | ErrorKind::UnsupportedVersion
+            | ErrorKind::InvalidInput
+    )
 }
 
 #[cfg(test)]
