@@ -350,10 +350,10 @@ jobs:
       - name: Qualify extension version checks and the minimum builder
         run: |
           export TMUX_WORKSPACE_PYTHON="$LIBTMUX_TEST_QUALIFIED_PYTHON"
-          bash scripts/require-tests.sh \
+          uv run scripts/require-tests/require_tests.py \
             cargo test --locked --package tmux-workspace --all-features \
             --bin tmux-workspace cli::bridge::tests -- --include-ignored --test-threads=1
-          bash scripts/require-tests.sh \
+          uv run scripts/require-tests/require_tests.py \
             cargo test --locked --package tmux-workspace --all-features \
             --test cli python_ -- --include-ignored --test-threads=1
 
