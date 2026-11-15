@@ -59,54 +59,18 @@ api-examples:
 # Run every example and check it cleaned up
 [group: 'test']
 examples:
-    bash scripts/run-examples.sh
+    uv run scripts/run-examples/run_examples.py
 
-# Ownership, not tidiness, is what this decides. A directory belonging to a run
-# in progress is not a leak even though it is new, and one belonging to a run
-# that is gone is a leak even though it is old -- so it asks who owns a thing
-# rather than what it is called or how old it is.
-#
-# The `owner` file holds the PID that made the fixture, and a living owner
-# means skip. Reaping by name, by age, or by "is a server answering here"
-# inverts that: aliveness is the reason to leave a fixture alone, and using it
-# as the reason to remove one destroys the fixtures of whatever is running now.
-# That failure does not look like a leak. It looks like someone else's test
-# failing somewhere unrelated, with a message pointing at their code -- which
-# is what happened on 2026-08-24, when a second agent reaped four servers here
-# and two `tmux-mcp` waiting tests failed reporting a closed pane.
+# tmux never unlinks its socket when the server exits, so whatever named one
+# owns removing it. `TestServer` does; a test that hand-rolls a socket path
+# does not, and the file it leaves is invisible until the root fills up. Pure
+# filesystem, no toolchain, so it is part of `just check`. It decides by who
+# owns a fixture, not by its name or age, as scripts/fixture-root explains.
 #
 # Report anything the suite left in the fixture root
 [group: 'test']
 fixture-root:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root=/tmp/libtmux-rs-test
-    if [ ! -d "$root" ]; then
-        echo "fixture root absent"
-        exit 0
-    fi
-    left=()
-    for entry in "$root"/* "$root"/.[!.]*; do
-        [ -e "$entry" ] || continue
-        owner="$entry/owner"
-        if [ -f "$owner" ] && kill -0 "$(cat "$owner")" 2>/dev/null; then
-            continue
-        fi
-        if [ -S "$entry" ] && tmux -S "$entry" list-sessions >/dev/null 2>&1; then
-            continue
-        fi
-        left+=("${entry#"$root"/}")
-    done
-    if [ ${#left[@]} -eq 0 ]; then
-        echo "fixture root clean"
-        exit 0
-    fi
-    printf 'the fixture root still holds:\n' >&2
-    printf '  %s\n' "${left[@]}" >&2
-    printf '\ntmux does not unlink its socket when the server exits, so a test that\n' >&2
-    printf 'names its own socket path has to remove it. libtmux::test::TestServer\n' >&2
-    printf 'owns that lifecycle; prefer it over Server::builder().socket_path().\n' >&2
-    exit 1
+    uv run scripts/fixture-root/fixture_root.py
 
 # Run the suite on each crate's minimum supported Rust version
 #
