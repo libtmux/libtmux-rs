@@ -21,14 +21,6 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ## Unreleased
 
-### Added
-
-- `crates/tmux-workspace/tests/fixtures/tmuxp/expected/` holds the structure
-  tmuxp 1.74.0's own loader makes of each of its 23 examples, a schema for it,
-  `generate.py` to rewrite it, and a list of the tmuxp syntax the examples use.
-  Each port copies it beside its own catalog and compares its loaded model.
-  The directory ships in the `tmux-workspace` package. (#144)
-
 ### Changed
 
 - CI installs the toolchain `rust-toolchain.toml` pins and caches builds with
@@ -36,6 +28,39 @@ changelog marks each break. Pin an exact version to avoid one.
   let the pin override it inside the checkout. Clippy and rustfmt failures now
   show on the pull request diff. The 1.85.0 and 1.88.0 floors and `nightly`
   install alongside the pin. (#140)
+- **Behaviour change.** The Cargo runner in `.cargo/config.toml` is now
+  `scripts/sandbox/sandbox_runner.py`, a typed Python script that `uv` runs, so
+  `cargo test`, `cargo run` and `cargo bench` in a checkout need `uv` on `PATH`.
+  It sets the same environment, exits with the same statuses and prints the same
+  messages as the shell runner it replaces, and removes the `PATH` entry and
+  variables `uv` adds. Measured on one loaded Linux host, it starts a binary in
+  106 ms at the median, where the shell runner took 59 ms. (#160)
+- The support scripts are typed Python under `scripts/<name>/`, each with a
+  README and pytest tests, and `just scripts` formats, lints, type-checks and
+  tests them with ruff, ty and pytest, which `just check` runs. They replace the
+  shell scripts `check-doctest-sandbox.sh`, `check-package-contents.sh`,
+  `compat-lanes.sh`, `require-tests.sh`, `run-examples.sh`, `sandbox-outside.sh`,
+  `sandbox-runner.sh` and `test-tmux-format-compat.sh`. The `ci-test` and
+  `compat-supervisor-test` recipes are gone, and the planner, the supervisor and
+  the other Python scripts moved into their own directories. (#160)
+- CI installs tmux and its build dependencies with the shared `apt-get` action
+  of `libtmux/.github`, pinned by commit, and the repository no longer carries
+  `scripts/apt-get.sh`. The compatibility lanes keep their own tmux build,
+  because the shared `build-tmux` action pins a release by the checksum of its
+  archive where `.github/ci-matrix.txt` pins the commit each tag must name.
+  (#160)
+
+### Removed
+
+- The tmuxp parity run and the CLI benchmark against tmuxp (`just parity`,
+  `just bench-cli` and the weekly `parity` CI job), the structure tmuxp 1.74.0
+  builds for each of its examples under
+  `crates/tmux-workspace/tests/fixtures/tmuxp/expected/`, and the Python parity
+  ledger `crates/libtmux/docs/parity.md` with its checker, `just parity-claims`.
+  The tmuxp example workspaces stay as test inputs, and the checked format
+  catalog table the ledger held is now `crates/libtmux/docs/format-catalog.md`.
+  The Speed against tmuxp section of the workspace CLI guide went with the
+  benchmark. (#160)
 
 ## 0.1.2 - 2026-11-01
 
