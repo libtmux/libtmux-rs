@@ -202,9 +202,10 @@ jobs:
           override: false
           build-warnings: ""
           cache-bin: false
+      # cargo-fuzz runs the target through the Cargo runner, which `uv` runs.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz,uv
       # The corpus is what this job grows. Cache entries are immutable, so each
       # run saves under its own key and the next restores the newest by prefix.
       # An entry unused for seven days is evicted: a late run restarts from seeds.
