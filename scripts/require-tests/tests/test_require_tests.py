@@ -40,21 +40,3 @@ def test_standard_error_counts_as_output(capsys: pytest.CaptureFixture[str]) -> 
     script = "import sys; print('running 1 test', file=sys.stderr)"
     assert require_tests.main([PYTHON, "-c", script]) == 0
     assert "running 1 test" in capsys.readouterr().out
-
-
-def test_the_uv_environment_is_removed() -> None:
-    environ = {
-        "PATH": "/venv/bin:/usr/bin",
-        "VIRTUAL_ENV": "/venv",
-        "UV": "/bin/uv",
-        "UV_RUN_RECURSION_DEPTH": "1",
-        "KEEP": "1",
-    }
-    require_tests.restore_environment(environ)
-    assert environ == {"PATH": "/usr/bin", "KEEP": "1"}
-
-
-def test_a_callers_own_virtual_environment_is_left_alone() -> None:
-    environ = {"PATH": "/venv/bin:/usr/bin", "VIRTUAL_ENV": "/venv"}
-    require_tests.restore_environment(environ)
-    assert environ == {"PATH": "/venv/bin:/usr/bin", "VIRTUAL_ENV": "/venv"}

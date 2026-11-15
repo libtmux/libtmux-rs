@@ -37,7 +37,7 @@ doctest:
 # Check that a doctest runs inside the tmux sandbox
 [group: 'test']
 doctest-sandbox:
-    scripts/check-doctest-sandbox.sh
+    uv run scripts/sandbox/check_doctest_sandbox.py
 
 # tmux never unlinks its socket when the server exits, so whatever named one
 # owns removing it. `TestServer` does; a test that hand-rolls a socket path

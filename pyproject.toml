@@ -38,6 +38,11 @@ pythonpath = [
   "scripts/require-tests",
   "scripts/sandbox",
   "scripts/ci-plan",
+  "scripts/check-package-contents",
+  "scripts/run-examples",
+  "scripts/tmux-format-compat",
+  "scripts/tmux-format-compat/tests",
+  "scripts/fixture-root",
 ]
 testpaths = ["scripts"]
 asyncio_mode = "strict"
@@ -53,6 +58,10 @@ addopts = [
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# The support scripts and the pseudo-terminal fixtures the tmux-workspace tests
+# run. The Python bridge under crates/tmux-workspace/src/cli is product code and
+# imports libtmux and tmuxp by design, so it is not checked here.
+include = ["scripts/**/*.py", "crates/tmux-workspace/tests/fixtures/*.py"]
 
 [tool.ruff.lint]
 extend-select = ["B", "C4", "I", "RUF", "SIM", "UP"]
@@ -72,7 +81,12 @@ extra-paths = [
   "scripts/require-tests",
   "scripts/sandbox",
   "scripts/ci-plan",
+  "scripts/check-package-contents",
+  "scripts/run-examples",
+  "scripts/tmux-format-compat",
+  "scripts/tmux-format-compat/tests",
+  "scripts/fixture-root",
 ]
 
 [tool.ty.src]
-include = ["scripts"]
+include = ["scripts", "crates/tmux-workspace/tests/fixtures"]

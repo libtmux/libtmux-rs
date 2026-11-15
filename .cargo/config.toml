@@ -2,7 +2,7 @@
 # socket directory (CONTRIBUTING.md, "Nothing selects a server"). `[env]` can
 # only empty a variable, and covers what the runner does not wrap.
 [target.'cfg(unix)']
-runner = ["scripts/sandbox-runner.sh"]
+runner = ["scripts/sandbox/sandbox_runner.py"]
 
 [env]
 TMUX = { value = "", force = true }

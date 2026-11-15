@@ -504,7 +504,7 @@ pub struct MigrationGuide;
 /// Checks that a doctest runs inside the tmux sandbox.
 ///
 /// Each doctest is its own process, so the sandbox reaches it only through
-/// the environment. `scripts/check-doctest-sandbox.sh` runs this and breaks the
+/// the environment. `scripts/sandbox/check_doctest_sandbox.py` runs this and breaks the
 /// sandbox to show it fails. Only the checkout has the included file.
 #[cfg(doctest)]
 #[doc = include_str!("../tests/sandbox_doctest.md")]

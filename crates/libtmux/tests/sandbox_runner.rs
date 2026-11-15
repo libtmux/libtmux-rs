@@ -1,4 +1,4 @@
-//! `scripts/sandbox-runner.sh`, the Cargo runner `.cargo/config.toml` names,
+//! `scripts/sandbox/sandbox_runner.py`, the Cargo runner `.cargo/config.toml` names,
 //! run directly around small commands. It ships nowhere: a packaged crate has
 //! no runner to run.
 
@@ -22,7 +22,7 @@ const LEFT_A_SERVER: i32 = 70;
 const SENTINEL: &str = "SENTINEL-must-not-be-printed";
 
 fn runner() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/sandbox-runner.sh")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/sandbox/sandbox_runner.py")
 }
 
 fn tmux_is_available() -> bool {
@@ -31,6 +31,21 @@ fn tmux_is_available() -> bool {
         .arg("-V")
         .output()
         .is_ok_and(|output| output.status.success())
+}
+
+/// The interpreter `uv` runs the runner with. On a `PATH` that holds no
+/// interpreter, `uv` would otherwise fetch one, so the tests that narrow `PATH`
+/// name it.
+fn uv_python() -> String {
+    let output = Command::new("uv")
+        .args(["python", "find", ">=3.12"])
+        .output()
+        .expect("uv runs");
+    assert!(output.status.success(), "uv found no Python 3.12 or newer");
+    String::from_utf8(output.stdout)
+        .expect("UTF-8 path")
+        .trim()
+        .to_owned()
 }
 
 /// What one run of the runner did.
@@ -101,10 +116,7 @@ impl Fixture {
         let bin = self.file("bin");
         std::fs::create_dir(&bin).expect("a tool directory");
         let path = std::env::var_os("PATH").unwrap_or_default();
-        for tool in [
-            "id", "mktemp", "chmod", "wc", "sed", "tr", "find", "head", "rm", "ln", "sh",
-            "dirname", "touch", "sleep",
-        ] {
+        for tool in ["env", "uv", "sh", "ln"] {
             let found = std::env::split_paths(&path)
                 .map(|directory| directory.join(tool))
                 .find(|candidate| candidate.is_file())
@@ -630,18 +642,27 @@ fn it_keeps_the_directory_when_it_cannot_search_it() {
     if !tmux_is_available() {
         return;
     }
+    // Root searches what it likes.
+    if rustix::process::getuid().is_root() {
+        return;
+    }
     let fixture = Fixture::new();
-    fixture.script(
-        "find",
-        "case \" $* \" in *\" -type s \"*) echo \"find: $TMUX_TMPDIR: Permission denied\" >&2; exit 1 ;; esac\n\
-         exec /usr/bin/find \"$@\"",
+
+    let run = fixture.run(
+        &[],
+        "mkdir \"$TMUX_TMPDIR/locked\" && chmod 000 \"$TMUX_TMPDIR/locked\"",
     );
-    let path = format!(
-        "{}:{}",
-        fixture.parent.path().display(),
-        std::env::var("PATH").unwrap_or_default(),
-    );
-    let run = fixture.run(&[("PATH", &path)], "exit 0");
+    // Let the fixture's own cleanup remove what the runner could not.
+    for entry in std::fs::read_dir(fixture.parent.path()).expect("the parent lists") {
+        let entry = entry.expect("an entry");
+        if entry.file_name().to_string_lossy().starts_with("ltrs.") {
+            std::fs::set_permissions(
+                entry.path().join("locked"),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .expect("the directory opens up");
+        }
+    }
 
     assert_eq!(run.code, Some(LEFT_A_SERVER), "{}", run.stderr);
     assert!(run.stderr.contains("could not search"), "{}", run.stderr);
@@ -713,9 +734,11 @@ fn without_tmux_a_socket_in_the_sandbox_keeps_the_directory() {
     let outer = fixture.file("outer.sock");
     let _listener = UnixListener::bind(&outer).expect("a socket binds");
     let path = fixture.path_without_tmux();
+    let python = uv_python();
     let run = fixture.run(
         &[
             ("PATH", &path),
+            ("UV_PYTHON", &python),
             ("LIBTMUX_TEST_TMUX", "/nonexistent/tmux"),
             ("OUTER", outer.to_str().expect("UTF-8 path")),
         ],
@@ -736,9 +759,14 @@ fn without_tmux_a_socket_in_the_sandbox_keeps_the_directory() {
 fn without_tmux_a_directory_with_no_socket_is_removed() {
     let fixture = Fixture::new();
     let path = fixture.path_without_tmux();
+    let python = uv_python();
 
     let run = fixture.run(
-        &[("PATH", &path), ("LIBTMUX_TEST_TMUX", "/nonexistent/tmux")],
+        &[
+            ("PATH", &path),
+            ("UV_PYTHON", &python),
+            ("LIBTMUX_TEST_TMUX", "/nonexistent/tmux"),
+        ],
         "exit 0",
     );
 
@@ -958,69 +986,6 @@ fn the_checkouts_own_fallback_directory_is_not_watched() {
         "{}",
         run.stderr
     );
-}
-
-/// The helper `scripts/sandbox-outside.sh`, called the way the runner does.
-fn outside(script: &str, arguments: &[&Path]) -> (Option<i32>, String) {
-    let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/sandbox-outside.sh");
-    let output = Command::new("sh")
-        .args(["-c", &format!(". \"$1\"; shift; {script}"), "sh"])
-        .arg(helper)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .output()
-        .expect("sh runs");
-    (
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-    )
-}
-
-#[test]
-fn the_outside_check_fails_closed_without_a_reference() {
-    let fixture = Fixture::new();
-    let (root, _) = stand_in_root(&fixture, "caller");
-    let missing = fixture.file("no-reference");
-
-    let (code, printed) = outside("outside_started \"$@\"", &[&missing, &root]);
-
-    assert_eq!(code, Some(2));
-    assert_eq!(printed, "", "something was named without a reference");
-}
-
-#[test]
-fn the_outside_check_names_only_a_socket_made_after_the_reference() {
-    let fixture = Fixture::new();
-    let (root, socket) = stand_in_root(&fixture, "caller");
-    let (other, other_socket) = stand_in_root(&fixture, "other");
-    let reference = fixture.file("reference");
-    let before = UnixListener::bind(&other_socket).expect("a socket binds");
-    assert_eq!(
-        outside("outside_reference \"$1\"", &[&reference]).0,
-        Some(0)
-    );
-    let _after = UnixListener::bind(&socket).expect("a socket binds");
-
-    let (code, printed) = outside("outside_started \"$@\"", &[&reference, &root, &other]);
-
-    assert_eq!(code, Some(0));
-    assert_eq!(printed.trim(), root.to_str().expect("UTF-8 path"));
-    drop(before);
-}
-
-#[test]
-fn the_reference_is_older_than_whatever_is_made_next() {
-    let fixture = Fixture::new();
-    let reference = fixture.file("reference");
-    let next = fixture.file("next");
-    for round in 0..50 {
-        let (code, printed) = outside(
-            "outside_reference \"$1\" && touch \"$2\" && find \"$2\" -newer \"$1\"",
-            &[&reference, &next],
-        );
-        assert_eq!(code, Some(0), "round {round}");
-        assert!(!printed.is_empty(), "round {round}: made in the same tick");
-    }
 }
 
 #[test]

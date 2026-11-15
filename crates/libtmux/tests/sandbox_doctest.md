@@ -5,7 +5,7 @@ reaches it only through the environment it inherits: the runner on the pinned
 toolchain, `[env]` in `.cargo/config.toml` on an older one. This block asserts
 what it inherited and then starts a bare tmux client to see where the server
 lands. It names a variable when one is wrong and never prints a value.
-`scripts/check-doctest-sandbox.sh` says through `LIBTMUX_DOCTEST_EXPECTS`
+`scripts/sandbox/check_doctest_sandbox.py` says through `LIBTMUX_DOCTEST_EXPECTS`
 which way in it should have come, and runs it again with the sandbox broken
 in turn, where it must fail each time.
 

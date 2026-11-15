@@ -16,11 +16,10 @@ status is returned when it is not zero, and 1 when it passes without a test.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
-from collections.abc import MutableMapping, Sequence
+from collections.abc import Sequence
 
 RAN_A_TEST = re.compile(r"^running [1-9][0-9]* tests?$", re.MULTILINE)
 
@@ -38,31 +37,11 @@ def ran_a_test(log: str) -> bool:
     return RAN_A_TEST.search(log) is not None
 
 
-def restore_environment(environ: MutableMapping[str, str]) -> None:
-    """Remove what `uv run` adds, so the command sees the caller's environment.
-
-    uv puts the script's own environment first in `PATH` and exports
-    `VIRTUAL_ENV`, `UV` and `UV_RUN_RECURSION_DEPTH`. A test that inspects its
-    environment should not see them.
-    """
-    if "UV_RUN_RECURSION_DEPTH" not in environ:
-        return
-    virtual_env = environ.pop("VIRTUAL_ENV", None)
-    environ.pop("UV", None)
-    environ.pop("UV_RUN_RECURSION_DEPTH", None)
-    if virtual_env is None:
-        return
-    entries = environ.get("PATH", "").split(os.pathsep)
-    if entries and entries[0] == os.path.join(virtual_env, "bin"):
-        environ["PATH"] = os.pathsep.join(entries[1:])
-
-
-def run(command: Sequence[str], environ: MutableMapping[str, str]) -> int:
+def run(command: Sequence[str]) -> int:
     """Run `command`, echo its output, and judge whether a test ran."""
     log: list[str] = []
     with subprocess.Popen(
         command,
-        env=dict(environ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -85,10 +64,8 @@ def main(argv: Sequence[str]) -> int:
     if not argv:
         print("usage: require_tests.py COMMAND [ARGUMENT ...]", file=sys.stderr)
         return 2
-    environ = dict(os.environ)
-    restore_environment(environ)
     try:
-        return run(argv, environ)
+        return run(argv)
     except FileNotFoundError as error:
         print(f"require_tests.py: {error}", file=sys.stderr)
         return 127
