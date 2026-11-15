@@ -16,6 +16,16 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Changed
+
+- **Behaviour change.** `Server::save_buffer` creates a missing file with mode
+  `0600`, where tmux created it with the mode its own umask left, `0644` under
+  the usual `022`, so a buffer holding a pane's text or a secret was readable by
+  every local user. A file that already exists keeps its mode, and a file the
+  call created is removed when tmux refuses the write. A path this process
+  cannot create, such as one in a directory only the server's user can write, is
+  still left to tmux, with tmux's mode. (#164)
+
 ## 0.1.2 - 2026-11-01
 
 No entries for `libtmux`.
