@@ -1,9 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Plan the tmux compatibility lanes of the CI workflow.
 
-    ci-plan.py          read .github/ci-matrix.txt, the event and the dispatch
+    ci_plan.py          read .github/ci-matrix.txt, the event and the dispatch
                         inputs, and write the plan to $GITHUB_OUTPUT
-    ci-plan.py verify   read NEEDS_JSON and ALLOW_SKIPPED, and fail unless every
+    ci_plan.py verify   read NEEDS_JSON and ALLOW_SKIPPED, and fail unless every
                         job the plan put in scope passed
 
 A push or pull request runs the first and last supported release. The whole
@@ -34,9 +38,7 @@ RUNNERS = ("ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04")
 TMATE_MODES = ("off", "before-tests", "on-failure")
 SCOPES = ("edges", "full", "custom")
 PERIODIC_JOBS = ("fuzz", "bench")
-DEFAULT_MANIFEST = (
-    pathlib.Path(__file__).resolve().parent.parent / ".github" / "ci-matrix.txt"
-)
+DEFAULT_MANIFEST = pathlib.Path(__file__).resolve().parents[2] / ".github" / "ci-matrix.txt"
 
 
 class PlanError(Exception):
@@ -90,8 +92,7 @@ def parse_manifest(text: str) -> list[Lane]:
         for needed in lane.requires:
             if needed not in known:
                 raise PlanError(
-                    f"lane {lane.tag} requires {needed}, "
-                    "which the manifest does not list"
+                    f"lane {lane.tag} requires {needed}, which the manifest does not list"
                 )
     return lanes
 
@@ -170,11 +171,7 @@ def plan(lanes: list[Lane], inputs: Inputs) -> Plan:
 
     supported = [lane.tag for lane in lanes if lane.kind == "supported"]
     if scope == "edges":
-        refs = (
-            [supported[0]]
-            if supported[0] == supported[-1]
-            else [supported[0], supported[-1]]
-        )
+        refs = [supported[0]] if supported[0] == supported[-1] else [supported[0], supported[-1]]
     elif scope == "full":
         refs = [lane.tag for lane in lanes]
     else:
@@ -182,8 +179,7 @@ def plan(lanes: list[Lane], inputs: Inputs) -> Plan:
         for ref in refs:
             if not valid_ref(ref):
                 raise PlanError(
-                    f"tmux-ref has an invalid item (want {REF.pattern}, "
-                    f"no leading dash): {ref}"
+                    f"tmux-ref has an invalid item (want {REF.pattern}, no leading dash): {ref}"
                 )
 
     legs: list[dict[str, str]] = []

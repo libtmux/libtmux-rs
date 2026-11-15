@@ -1,12 +1,10 @@
-#!/usr/bin/env python3
-"""Tests for `ci-plan.py`, which says which tmux lanes a CI run builds.
+"""Tests for `ci_plan.py`, which says which tmux lanes a CI run builds.
 
 Each rule of the plan has a test, and each test fails when its rule is removed.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import pathlib
@@ -17,15 +15,11 @@ import tempfile
 import unittest
 from typing import Any
 
-SCRIPTS = pathlib.Path(__file__).resolve().parent
+import ci_plan
+
+SCRIPTS = pathlib.Path(__file__).resolve().parents[2]
 ROOT = SCRIPTS.parent
 MANIFEST = ROOT / ".github" / "ci-matrix.txt"
-
-SPEC = importlib.util.spec_from_file_location("ci_plan", SCRIPTS / "ci-plan.py")
-assert SPEC is not None and SPEC.loader is not None
-ci_plan = importlib.util.module_from_spec(SPEC)
-sys.modules["ci_plan"] = ci_plan
-SPEC.loader.exec_module(ci_plan)
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 OTHER = "fedcba9876543210fedcba9876543210fedcba98"
@@ -155,9 +149,7 @@ class CustomScopeTests(unittest.TestCase):
             scope="custom",
             tmux_ref=f" 3.7 , master,feature/x,{COMMIT},3.7,3.2a,3.9",
         )
-        self.assertEqual(
-            tags(result), ["3.7", "master", "feature/x", COMMIT, "3.2a", "3.9"]
-        )
+        self.assertEqual(tags(result), ["3.7", "master", "feature/x", COMMIT, "3.2a", "3.9"])
         names = {leg["lane"]: leg["name"] for leg in result.legs}
         self.assertEqual(names[COMMIT], COMMIT[:12])
         self.assertEqual(names["feature/x"], "feature/x")
@@ -221,9 +213,7 @@ class RefusalTests(unittest.TestCase):
 
 class TmateTests(unittest.TestCase):
     def test_it_goes_to_the_one_lane_that_runs(self) -> None:
-        result = run(
-            "workflow_dispatch", scope="custom", tmux_ref="3.8", tmate="on-failure"
-        )
+        result = run("workflow_dispatch", scope="custom", tmux_ref="3.8", tmate="on-failure")
         self.assertEqual([leg["tmate"] for leg in result.legs], ["on-failure"])
 
     def test_it_is_refused_for_more_than_one_lane(self) -> None:
@@ -346,7 +336,7 @@ class CommandTests(unittest.TestCase):
             env = {"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output)}
             env.update(environment)
             result = subprocess.run(
-                [sys.executable, str(SCRIPTS / "ci-plan.py"), *argv],
+                [sys.executable, str(SCRIPTS / "ci-plan" / "ci_plan.py"), *argv],
                 capture_output=True,
                 text=True,
                 env=env,
@@ -362,9 +352,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(fields["periodic"], "false")
         self.assertEqual(fields["skip"], "fuzz bench")
         self.assertEqual(fields["jobs"], "2")
-        self.assertEqual(
-            [leg["lane"] for leg in json.loads(fields["lanes"])], ["3.3a", "3.8"]
-        )
+        self.assertEqual([leg["lane"] for leg in json.loads(fields["lanes"])], ["3.3a", "3.8"])
 
     def test_it_reads_its_inputs_from_the_environment_and_refuses_a_bad_one(
         self,
@@ -381,14 +369,10 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(output, "")
 
     def test_verify_fails_on_a_failed_job(self) -> None:
-        code, _, stderr = self.invoke(
-            {"NEEDS_JSON": '{"check": {"result": "failure"}}'}, "verify"
-        )
+        code, _, stderr = self.invoke({"NEEDS_JSON": '{"check": {"result": "failure"}}'}, "verify")
         self.assertEqual(code, 1)
         self.assertIn("check: failure", stderr)
-        code, _, _ = self.invoke(
-            {"NEEDS_JSON": '{"check": {"result": "success"}}'}, "verify"
-        )
+        code, _, _ = self.invoke({"NEEDS_JSON": '{"check": {"result": "success"}}'}, "verify")
         self.assertEqual(code, 0)
 
 
@@ -410,9 +394,7 @@ class RealManifestTests(unittest.TestCase):
         supported = [lane.tag for lane in self.lanes if lane.kind == "supported"]
         self.assertEqual(supported, sorted(supported, key=release_key))
         result = ci_plan.plan(self.lanes, ci_plan.Inputs(event="pull_request"))
-        self.assertEqual(
-            [leg["lane"] for leg in result.legs], [supported[0], supported[-1]]
-        )
+        self.assertEqual([leg["lane"] for leg in result.legs], [supported[0], supported[-1]])
 
     def test_the_bash_loader_and_the_plan_read_the_same_lanes(self) -> None:
         script = (
@@ -421,9 +403,7 @@ class RealManifestTests(unittest.TestCase):
             'echo "${lane_kind[$tag]} $tag ${lane_commit[$tag]} ${lane_version[$tag]} '
             '${lane_contract[$tag]} ${lane_requires[$tag]}"; done'
         )
-        result = subprocess.run(
-            ["bash", "-c", script], capture_output=True, text=True, check=True
-        )
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
         from_bash = [tuple(line.split()) for line in result.stdout.splitlines()]
         from_plan = [
             (

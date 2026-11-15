@@ -1,41 +1,33 @@
-#!/usr/bin/env python3
 """Tests that hold the CI workflow and the documents about it to the manifest.
 
 The workflow takes its tmux lanes from the plan, which reads
 `.github/ci-matrix.txt`, so nothing here compares a list in one file with a
 list in another. What is checked is that no second list has grown back, that
 every job is behind the one required check, that no step calls `apt-get`
-without `scripts/apt-get.sh`, and that the documents state the range the
+without the shared apt-get action, that the shared actions are pinned to a
+full commit, and that the documents state the range the
 manifest tests.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import pathlib
 import re
-import sys
 import unittest
 
+import ci_plan
 import yaml
 
-SCRIPTS = pathlib.Path(__file__).resolve().parent
-ROOT = SCRIPTS.parent
+ROOT = pathlib.Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
 ACTIONS = ROOT / ".github" / "actions"
-
-SPEC = importlib.util.spec_from_file_location("ci_plan", SCRIPTS / "ci-plan.py")
-assert SPEC is not None and SPEC.loader is not None
-ci_plan = importlib.util.module_from_spec(SPEC)
-sys.modules["ci_plan"] = ci_plan
-SPEC.loader.exec_module(ci_plan)
 
 CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 JOB = re.compile(r"^  ([a-z][a-z-]*):\s*$", re.MULTILINE)
 RELEASE = re.compile(r"\b\d+\.\d+[a-z]?\b")
 TMATE = "mxschmitt/action-tmate@"
 # `apt` or `apt-get` in command position, past `sudo` and `VAR=value` prefixes.
-# `./scripts/apt-get.sh` never matches: the name follows a `/` and a `.`.
+# An `apt-get` action in a `uses:` line is not a `run` line, so it never matches.
 RAW_APT = re.compile(
     r"(?:^|[;&|(`]|\b(?:then|do|else)\b)\s*"
     r"(?:\w+=\S*\s+)*(?:sudo\s+(?:-\S+\s+)*)?(?:\w+=\S*\s+)*apt(?:-get)?(?=\s|$)"
@@ -52,9 +44,7 @@ def job_section(text: str, name: str) -> str:
     headings = list(JOB.finditer(jobs))
     for index, heading in enumerate(headings):
         if heading.group(1) == name:
-            end = (
-                headings[index + 1].start() if index + 1 < len(headings) else len(jobs)
-            )
+            end = headings[index + 1].start() if index + 1 < len(headings) else len(jobs)
             return jobs[heading.start() : end]
     raise AssertionError(f"ci.yml has no {name} job")
 
@@ -84,7 +74,7 @@ def raw_apt_calls(doc: object, path: str) -> list[str]:
             if not line.lstrip().startswith("#") and RAW_APT.search(line):
                 found.append(
                     f"{where} runs `{line.strip()}` directly; "
-                    "run it through scripts/apt-get.sh"
+                    "use the shared libtmux/.github apt-get action"
                 )
     return found
 
@@ -202,27 +192,44 @@ jobs:
         run: |
           # sudo apt-get update is only mentioned here
           sudo apt-get update
-          ./scripts/apt-get.sh install -y tmux
+          echo done
 """
         )
         self.assertEqual(
             raw_apt_calls(doc, "ci.yml"),
             [
-                "ci.yml: job build, step Install tmux runs `sudo apt-get update` "
-                "directly; run it through scripts/apt-get.sh"
+                (
+                    "ci.yml: job build, step Install tmux runs `sudo apt-get update` "
+                    "directly; use the shared libtmux/.github apt-get action"
+                )
             ],
         )
 
-    def test_the_wrapper_passes(self) -> None:
+    def test_the_shared_action_passes(self) -> None:
         doc = yaml.safe_load(
             """
 jobs:
   build:
     steps:
-      - run: ./scripts/apt-get.sh update
+      - uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          update: "true"
+          args: install --yes tmux
 """
         )
         self.assertEqual(raw_apt_calls(doc, "ci.yml"), [])
+
+    def test_the_shared_actions_are_pinned_to_a_full_commit(self) -> None:
+        pattern = re.compile(r"uses:\s*(libtmux/\.github/\S+)@(\S+)")
+        found = [
+            (path.name, action, ref)
+            for path in sorted(WORKFLOWS.glob("*.yml"))
+            for action, ref in pattern.findall(path.read_text(encoding="utf-8"))
+        ]
+        self.assertTrue(found, "no workflow uses a shared action")
+        for name, action, ref in found:
+            with self.subTest(f"{name}: {action}"):
+                self.assertRegex(ref, r"^[0-9a-f]{40}$")
 
     def test_every_spelling_of_a_raw_call_is_caught(self) -> None:
         for call in (
@@ -236,16 +243,16 @@ jobs:
                 self.assertEqual(
                     raw_apt_calls(action, "action.yml"),
                     [
-                        f"action.yml: step #1 runs `{call}` directly; "
-                        "run it through scripts/apt-get.sh"
+                        (
+                            f"action.yml: step #1 runs `{call}` directly; "
+                            "use the shared libtmux/.github apt-get action"
+                        )
                     ],
                 )
 
 
 class DocumentTests(unittest.TestCase):
-    lanes = ci_plan.parse_manifest(
-        (ROOT / ".github" / "ci-matrix.txt").read_text(encoding="utf-8")
-    )
+    lanes = ci_plan.parse_manifest((ROOT / ".github" / "ci-matrix.txt").read_text(encoding="utf-8"))
 
     def tags(self, *kinds: str) -> set[str]:
         return {lane.tag for lane in self.lanes if lane.kind in kinds}
@@ -265,9 +272,7 @@ class DocumentTests(unittest.TestCase):
         end = text.find("\n## ", start + 1)
         section = text[start:] if end == -1 else text[start:end]
         bold = " ".join(re.findall(r"\*\*([^*]+)\*\*", section))
-        self.assertEqual(
-            set(RELEASE.findall(bold)), self.tags("supported", "witness", "refused")
-        )
+        self.assertEqual(set(RELEASE.findall(bold)), self.tags("supported", "witness", "refused"))
 
 
 if __name__ == "__main__":

@@ -36,6 +36,8 @@ pythonpath = [
   "scripts/example-coverage",
   "scripts/public-api",
   "scripts/require-tests",
+  "scripts/sandbox",
+  "scripts/ci-plan",
 ]
 testpaths = ["scripts"]
 asyncio_mode = "strict"
@@ -68,6 +70,8 @@ extra-paths = [
   "scripts/example-coverage",
   "scripts/public-api",
   "scripts/require-tests",
+  "scripts/sandbox",
+  "scripts/ci-plan",
 ]
 
 [tool.ty.src]

@@ -64,6 +64,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: uv
+
       # Inputs reach the script through the environment, never inline.
       - name: Plan the tmux lanes
         id: plan
@@ -73,7 +77,7 @@ jobs:
           INPUT_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
           INPUT_OS: ${{ inputs.os }}
           INPUT_TMATE: ${{ inputs.tmate }}
-        run: python3 scripts/ci-plan.py
+        run: uv run scripts/ci-plan/ci_plan.py
 
   # One check to require. A job the plan left out of scope may be skipped; every
   # other job has to have passed. The matrix shrinks through the plan, not
@@ -89,11 +93,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: uv
+
       - name: Require every planned job to have passed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
           ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}
-        run: python3 scripts/ci-plan.py verify
+        run: uv run scripts/ci-plan/ci_plan.py verify
 
   # Everything `just check` runs: formatting, Clippy, tests, doctests, docs,
   # the feature powerset, cargo-deny, both MSRV floors, and packaging.
@@ -105,10 +113,12 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install tmux
-        run: |
-          ./scripts/apt-get.sh update
-          ./scripts/apt-get.sh install -y --no-install-recommends tmux
-          tmux -V
+        uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          update: "true"
+          args: install --yes --no-install-recommends tmux
+
+      - run: tmux -V
 
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
@@ -247,10 +257,12 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install tmux
-        run: |
-          ./scripts/apt-get.sh update
-          ./scripts/apt-get.sh install -y --no-install-recommends tmux
-          tmux -V
+        uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          update: "true"
+          args: install --yes --no-install-recommends tmux
+
+      - run: tmux -V
 
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
@@ -305,10 +317,12 @@ jobs:
           path: .bridge-python
 
       - name: Install tmux build dependencies
-        run: |
-          ./scripts/apt-get.sh update
-          ./scripts/apt-get.sh install -y --no-install-recommends \
-            autoconf automake bison build-essential git libevent-dev \
+        uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          update: "true"
+          args: >-
+            install --yes --no-install-recommends
+            autoconf automake bison build-essential git libevent-dev
             libncurses-dev pkg-config tmux
 
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
@@ -377,14 +391,12 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install tmux build dependencies
-        run: |
-          ./scripts/apt-get.sh update
-          ./scripts/apt-get.sh install -y --no-install-recommends \
-            bison \
-            build-essential \
-            libevent-dev \
-            libncurses-dev \
-            pkg-config
+        uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          update: "true"
+          args: >-
+            install --yes --no-install-recommends
+            bison build-essential libevent-dev libncurses-dev pkg-config
 
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
