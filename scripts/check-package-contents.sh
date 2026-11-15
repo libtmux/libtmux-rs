@@ -55,7 +55,7 @@ core_files=(
     "$core_root"/README.md
     "$core_root"/docs/design.md
     "$core_root"/docs/findings.md
-    "$core_root"/docs/parity.md
+    "$core_root"/docs/format-catalog.md
     "$core_root"/examples/*.rs
     "$core_root"/examples/api/README.md
     "$core_root"/examples/api/manifest.json

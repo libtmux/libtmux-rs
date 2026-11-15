@@ -357,7 +357,7 @@ That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
 `compat-supervisor-test`, `ci-test`, `doctest`, `doctest-sandbox`,
 `api-examples`, `examples`, `example-tables`, `fixture-root`,
 `docs`, `doc-blocks`, `doc-contents`, `changelogs`, `doctests-run`,
-`parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`, `package`.
+`format-coverage-check`, `features`, `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so dependency changes need a
 consistent `Cargo.lock` before the gate can run. Committing it is not required
@@ -379,12 +379,6 @@ These gates are **not** in `just check` and run only in CI:
 CI does not run macOS tests. macOS is supported on a best-effort basis; the
 release workflow builds the macOS binaries. On a pull request, `fuzz parsers`
 and `benchmarks` report as skipping. That is the design, not a failure.
-
-`just parity-claims` fails when a row of `parity.md` marked `implemented` or
-`verified` names no caller-reachable Rust path, or puts an associated item on
-the wrong owner. Paths are checked against `public-api.txt`; private details do
-not satisfy the gate. `just api-check` proves the index still matches rustdoc
-JSON in CI.
 
 `just examples` runs every shipped example against a server it owns and
 fails when one exits nonzero or leaves a socket in `/tmp/libtmux-rs-dev/`.
@@ -446,9 +440,9 @@ comment opens mid-sentence or sits below a non-doc attribute — the shape a
 split leaves when it lands on a sentence boundary. See
 [`WRITING.md`](WRITING.md) for the rule this enforces.
 
-**A Contents list matches its document.** `design.md`, `findings.md` and
-`parity.md` open with one, and `just doc-contents` fails when it and the `##` sections
-disagree in title, order or anchor. A section that indexes its `###`
+**A Contents list matches its document.** `design.md` and `findings.md` open
+with one, and `just doc-contents` fails when it and the `##` sections disagree
+in title, order or anchor. A section that indexes its `###`
 subsections under its entry, as `design.md`'s longer ones do, is held to them
 the same way.
 

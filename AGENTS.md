@@ -64,8 +64,6 @@ twice, the file named above governs.
   mode, and test architecture
 - [findings.md](crates/libtmux/docs/findings.md) — every tmux defect and
   platform surprise worked around, and what each gate turned up
-- [parity.md](crates/libtmux/docs/parity.md) — the capability ledger against
-  Python libtmux, and the definition of done
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) — the
   documentation baseline `.github/WRITING.md` builds on
 - [Python libtmux](https://libtmux.git-pull.com/) — the library this ports

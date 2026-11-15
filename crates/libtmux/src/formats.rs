@@ -148,14 +148,14 @@ pub(crate) enum InfoPlacement {
 /// catalogue-only one.
 #[allow(
     dead_code,
-    reason = "catalog-only metadata is verified by the checked parity fixture"
+    reason = "catalog-only metadata is verified by the checked catalog table"
 )]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProfileSet(u8);
 
 #[allow(
     dead_code,
-    reason = "catalog-only metadata is verified by the checked parity fixture"
+    reason = "catalog-only metadata is verified by the checked catalog table"
 )]
 impl ProfileSet {
     const SESSIONS: u8 = 1;
@@ -598,7 +598,7 @@ macro_rules! define_format_catalog {
         #[allow(dead_code, reason = "modelled and tested; only a projection of it is hydrated today")]
         pub(crate) static CLIENT_INFO_SUPPLEMENTS: &[&FormatDescriptor] = &[$(&$client_s_static),*];
 
-        #[allow(dead_code, reason = "catalog-only metadata is verified by the checked parity fixture")]
+        #[allow(dead_code, reason = "catalog-only metadata is verified by the checked catalog table")]
         static GROUPED_CATALOG: &[&FormatDescriptor] = &[
             &$session_static, $(&$session_s_static),*,
             &$window_static, $(&$window_s_static),*,

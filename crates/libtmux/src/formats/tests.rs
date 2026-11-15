@@ -1055,7 +1055,7 @@ struct CheckedCatalogRow<'fixture> {
 }
 
 fn checked_catalog_rows() -> Vec<CheckedCatalogRow<'static>> {
-    const DOCUMENT: &str = include_str!("../../docs/parity.md");
+    const DOCUMENT: &str = include_str!("../../docs/format-catalog.md");
     const BEGIN: &str = "<!-- BEGIN CHECKED FORMAT CATALOG -->";
     const END: &str = "<!-- END CHECKED FORMAT CATALOG -->";
     const HEADER: &str =
@@ -1262,7 +1262,7 @@ fn catalog() -> Vec<&'static FormatDescriptor> {
 }
 
 #[test]
-fn format_catalog_checked_parity_is_an_exact_sorted_bijection() {
+fn format_catalog_checked_table_is_an_exact_sorted_bijection() {
     let rows = checked_catalog_rows();
     let catalog = catalog();
     assert_eq!(catalog.len(), 179);
@@ -1297,9 +1297,9 @@ fn format_catalog_checked_parity_is_an_exact_sorted_bijection() {
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "the exhaustive parity partition is one checked contract"
+    reason = "the exhaustive table partition is one checked contract"
 )]
-fn format_catalog_checked_parity_partitions_are_exact() {
+fn format_catalog_checked_table_partitions_are_exact() {
     let rows = checked_catalog_rows();
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.minimum)),

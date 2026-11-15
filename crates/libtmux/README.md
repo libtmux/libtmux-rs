@@ -912,7 +912,6 @@ $ claude mcp add tmux \
 | [API reference][libtmux-api] | The same surface on libtmux.org, with guides and concepts beside it |
 | [`docs/design.md`][design] | Why the crate is shaped the way it is: the transport, the snapshot and format boundary, the query grammar, the test guard, and the compatibility lanes |
 | [`docs/findings.md`][findings] | Every tmux defect and platform surprise the crate works around, each with the tmux releases it holds for and what the crate does |
-| [`docs/parity.md`][parity] | The capability ledger against Python libtmux, naming each Rust symbol and the test that exercises it |
 | [`docs/contracts.md`][contracts] | What the crate promises: the version check, deadlines, errors, and the test guard |
 | [`docs/migration.md`](docs/migration.md) | Moving from an earlier alpha |
 | [`CHANGELOG.md`](CHANGELOG.md) | What each release of this crate changed; the [main changelog](https://github.com/libtmux/libtmux-rs/blob/master/CHANGELOG.md) holds what spans crates |
@@ -925,7 +924,6 @@ or [MIT license](LICENSE-MIT) at your option.
 
 [design]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/design.md
 [findings]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/findings.md
-[parity]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/parity.md
 [contracts]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/contracts.md
 [contract-version]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/contracts.md#the-tmux-version-check
 [contract-narrow]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/contracts.md#operations-with-narrower-requirements

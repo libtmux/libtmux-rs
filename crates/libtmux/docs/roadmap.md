@@ -9,9 +9,6 @@ that has been overtaken is worse than no plan, because it is read as current.
 
 What replaced it:
 
-- [parity.md](parity.md) is the ledger and the definition of done. Each row is
-  a Python capability with a Rust answer and a status of `implemented`,
-  `excluded`, or `planned`. Counting the rows is the progress report.
 - [design.md](design.md) carries the reasoning: transport, the snapshot and
   format boundary, the query grammar, control mode, test architecture, the
   compatibility lanes, and every tmux defect worked around.
@@ -24,10 +21,10 @@ Keep this file short. If it needs a status, it will be wrong within a week.
 
 ## Baseline
 
-Parity is measured against Python libtmux at commit
+The crate follows Python libtmux at commit
 [`c4a980b`](https://github.com/tmux-python/libtmux/tree/c4a980b). Behavioral
 equivalence is the target, not syntactic imitation: where Python's shape is an
-artifact of Python, the ledger records an intentional divergence and why.
+artifact of Python, [design.md](design.md) records the divergence and why.
 
 ## Contracts that outlive any slice
 
@@ -51,8 +48,7 @@ decision rather than an implementation detail:
 - no executor claims per-command attribution without protocol evidence;
 - tests use unique explicit socket paths under the fixture root and bounded
   observable polling;
-- no public API is added without documentation, a runnable example, and a
-  parity-ledger row.
+- no public API is added without documentation and a runnable example.
 
 ## The gate
 

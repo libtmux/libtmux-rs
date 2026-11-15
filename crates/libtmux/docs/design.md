@@ -186,13 +186,12 @@ for an absent daemon. The test fixture's private PID bootstrap and an absent
 
 The compatibility baseline for the first Rust release is the Python package at
 commit
-[`c4a980b`](https://github.com/tmux-python/libtmux/tree/c4a980b). The parity
-ledger treats every module in its API reference as public, including
-`Client`. Internal Python implementation types are ported only when their
+[`c4a980b`](https://github.com/tmux-python/libtmux/tree/c4a980b). Every module
+in its API reference counts as public, including `Client`. Internal Python implementation types are ported only when their
 behavior is visible through public APIs.
 
 That baseline does not move during implementation. Later Python changes enter
-the Rust scope only through an explicit baseline update and parity-ledger diff.
+the Rust scope only through an explicit baseline update.
 
 Behavioral parity means equivalent tmux effects, return information,
 cardinality, ordering, version gating, and documented failure behavior. Rust
@@ -709,8 +708,8 @@ same duplicate-aware parse before constructing an object because
 Regular-expression lookups use Rust `regex` syntax deliberately. Python's
 `re` syntax includes constructs such as look-around and backreferences that
 Rust's linear-time engine rejects. The operator and search semantics remain,
-while unsupported pattern syntax is a validated, documented parity-ledger
-delta rather than silently changing meaning.
+while unsupported pattern syntax is a documented difference rather than
+silently changing meaning.
 
 ### What an expression can name
 
@@ -1006,7 +1005,6 @@ not a current public module or export until its owning roadmap slice closes.
 | Options         | Typed option scopes, parsing, get/set/unset            | `src/options.rs`                        | `src/libtmux/options.py`                  |
 | Hooks           | Hook values and get/set/unset/run operations           | `src/hooks.rs`                          | `src/libtmux/hooks.py`                    |
 | Test support    | Isolated sockets, names, retries, temporary objects    | `src/test.rs`, `tests/support/`         | `pytest_plugin.py`, `src/libtmux/test/`   |
-| Parity ledger   | Public surface mapping and intentional deltas          | `docs/parity.md`                        | API reference and tests                   |
 | Tooling         | Cargo metadata, just recipes, format/lint/CI gates     | crate configuration                     | `pyproject.toml`, workflows               |
 
 The public file names stay close to Python. Runtime-only implementation files
@@ -1102,11 +1100,6 @@ compatibility matrix will add maintained
 tmux releases on Linux and the latest stable release on macOS. Tests for newer
 flags assert both supported behavior and the version-gated error or warning
 path when their owning slices land.
-
-A parity ledger maps every pinned-baseline Python public method and property to
-its Rust method, intentional syntax delta, tmux version gate, and evidence.
-The crate is not feature-complete while any baseline capability remains
-`planned` or `in progress`; reviewed omissions are recorded as `excluded`.
 
 ## Lint and dependency gates
 
@@ -1374,7 +1367,7 @@ The work is split into independently reviewable subprojects:
 4. Full mutation and interaction parity across the object hierarchy.
 5. Options, hooks, keys, buffers, menus, prompts, popups, and control-related
    command families.
-6. Documentation, examples, compatibility matrix, parity closure, fuzzing,
+6. Documentation, examples, compatibility matrix, fuzzing,
    semver checks, and final adversarial review.
 
 Each subproject begins from failing behavior tests, ends with the complete
@@ -1386,8 +1379,6 @@ contracts.
 
 The crate is complete only when:
 
-- the parity ledger accounts for every pinned-baseline Python public
-  capability;
 - all intentional differences are documented as Rust syntax or verified bug
   corrections rather than missing behavior;
 - the full Rust format, Clippy, test, doctest, docs, feature, and MSRV gates

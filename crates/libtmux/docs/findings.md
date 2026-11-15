@@ -341,7 +341,7 @@ failure in six runs before, twelve clean runs after.
 The format catalog gives `client_session` and `client_last_session` the
 semantic owner `ClientAttachment` rather than `Client`, and leaves them
 catalog-only, so the client snapshot has no session field. The classification
-was recorded before its reason, and the parity ledger stalled on whether an
+was recorded before its reason, and review stalled on whether an
 attachment is part of a client's identity. That question has no useful answer:
 identity here is `(ServerIdentity, client_name)`, and every other field in the
 snapshot is mutable state too.

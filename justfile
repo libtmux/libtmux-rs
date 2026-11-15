@@ -326,20 +326,6 @@ docs:
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux --no-default-features --no-deps
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --package tmux-workspace --no-default-features --no-deps
 
-# The catalog is hand-maintained, so a format tmux gained -- or one nobody
-# ever added -- is invisible: nothing fails, callers just cannot ask for the
-# field. Checking needs no tmux source, so it is part of `just check`.
-#
-# parity.md is what this project calls its definition of done, so a row marked
-# done that names a type nobody wrote is worse than one merely out of date: a
-# reader cannot tell a delivered capability from a described one.
-#
-# Fail when a done parity row has no caller-reachable Rust path
-[group: 'docs']
-parity-claims:
-    python3 -m unittest scripts/test_public_api.py scripts/test_check_parity_claims.py
-    python3 scripts/check-parity-claims.py crates/libtmux/docs/parity.md crates
-
 # Each published crate ships a changelog of its own, so a reader of one crate
 # does not have to read the history of the other three.
 #
@@ -350,6 +336,10 @@ changelogs:
     python3 -m unittest scripts/test_check_changelogs.py
     python3 scripts/check-changelogs.py
 
+# The catalog is hand-maintained, so a format tmux gained -- or one nobody
+# ever added -- is invisible: nothing fails, callers just cannot ask for the
+# field. Checking needs no tmux source, so it is part of `just check`.
+#
 # Report formats tmux publishes that the catalog does not carry
 [group: 'docs']
 format-coverage-check:
@@ -385,7 +375,7 @@ example-tables:
 [group: 'docs']
 doc-contents:
     python3 scripts/check-contents.py crates/libtmux/docs/design.md \
-        crates/libtmux/docs/findings.md crates/libtmux/docs/parity.md
+        crates/libtmux/docs/findings.md
 
 # rustdoc supplies a doctest's `fn main`, so a block whose body is only a
 # hidden function definition compiles it and then runs an empty main. Every
@@ -450,7 +440,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest doctest-sandbox api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test ci-test doctest doctest-sandbox api-examples examples example-tables fixture-root docs doc-blocks doc-contents changelogs doctests-run format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:
