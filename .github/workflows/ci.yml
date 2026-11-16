@@ -270,10 +270,11 @@ jobs:
           key: bench-criterion-${{ github.run_id }}
           restore-keys: bench-criterion-
 
-      - name: Benchmark
-        run: |
-          cargo bench --locked --features test-support --bench hierarchy
-          cargo bench --locked --features test-support,control-mode --bench waits
+      - name: Benchmark the hierarchy
+        run: cargo bench --locked --features test-support --bench hierarchy
+
+      - name: Benchmark the waits
+        run: cargo bench --locked --features test-support,control-mode --bench waits
 
       - name: Compare with the previous run
         run: uv run scripts/bench-regressions/bench_regressions.py target/criterion
@@ -401,17 +402,14 @@ jobs:
         with:
           limit-access-to-actor: true
 
-      # An empty toolchain keeps what rust-toolchain.toml pins, which the
-      # compile-fail cases need; a named one overrides it.
+      # rustup reads an empty RUSTUP_TOOLCHAIN as unset, so an empty toolchain
+      # keeps what rust-toolchain.toml pins, which the compile-fail cases need,
+      # and a named one overrides it.
       - name: Build and test the lane
         env:
           LIBTMUX_COMPAT_LANES: ${{ matrix.lane }}
-          LANE_TOOLCHAIN: ${{ matrix.rust-toolchain }}
-        run: |
-          if [ -n "$LANE_TOOLCHAIN" ]; then
-            export RUSTUP_TOOLCHAIN="$LANE_TOOLCHAIN"
-          fi
-          just compat
+          RUSTUP_TOOLCHAIN: ${{ matrix.rust-toolchain }}
+        run: just compat
 
       - name: Open a tmate session after a failure
         if: ${{ failure() && matrix.tmate == 'on-failure' }}
