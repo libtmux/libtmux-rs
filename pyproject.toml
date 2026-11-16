@@ -44,6 +44,7 @@ pythonpath = [
   "scripts/tmux-format-compat/tests",
   "scripts/fixture-root",
   "scripts/package-binary",
+  "scripts/release-crate",
 ]
 testpaths = ["scripts"]
 markers = [
@@ -91,6 +92,7 @@ extra-paths = [
   "scripts/tmux-format-compat/tests",
   "scripts/fixture-root",
   "scripts/package-binary",
+  "scripts/release-crate",
 ]
 
 [tool.ty.src]

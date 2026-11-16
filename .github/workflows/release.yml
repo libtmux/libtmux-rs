@@ -97,6 +97,12 @@ jobs:
         with:
           build-warnings: ""
 
+      # Pinned to a commit, because this job can mint the publish token and
+      # the tag of an action can move.
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: uv
+
       # The tag is an assertion about the tree, and an assertion is worth
       # checking: a tag naming a version the manifest does not carry would
       # otherwise publish whatever the manifest happens to say.
@@ -104,34 +110,7 @@ jobs:
         id: target
         env:
           TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          case "$TAG" in
-            *@v*) ;;
-            *) printf 'tag %s is not <crate>@v<version>\n' "$TAG" >&2; exit 1 ;;
-          esac
-          package="${TAG%@v*}"
-          version="${TAG##*@v}"
-
-          manifest="$(
-            cargo metadata --format-version 1 --no-deps \
-              | jq -r --arg p "$package" '.packages[] | select(.name == $p) | .version'
-          )"
-          if [ -z "$manifest" ]; then
-            printf 'no workspace member is called %s\n' "$package" >&2
-            exit 1
-          fi
-          if [ "$manifest" != "$version" ]; then
-            printf '%s is %s in the manifest, but the tag says %s\n' \
-              "$package" "$manifest" "$version" >&2
-            exit 1
-          fi
-
-          {
-            printf 'package=%s\n' "$package"
-            printf 'version=%s\n' "$version"
-            printf 'crate_file=target/package/%s-%s.crate\n' "$package" "$version"
-          } >> "$GITHUB_OUTPUT"
+        run: uv run scripts/release-crate/release_crate.py target "$TAG"
 
       # Package first, so the artifact that gets attested is built once and is
       # the one a reader can check.
@@ -170,28 +149,9 @@ jobs:
         # Idempotent, because `workflow_dispatch` exists to retry a publish
         # that failed partway, and a release created by the first attempt would
         # otherwise stop the second before it uploaded anything.
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$TAG" "$CRATE_FILE" \
-              --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            # A version with a `-` suffix is a semver prerelease; a final
-            # version gets an ordinary release.
-            notes="\`$PACKAGE\` $VERSION. See crates/$PACKAGE/CHANGELOG.md for what changed."
-            flags=()
-            if [[ "$VERSION" == *-* ]]; then
-              notes="$notes This is a prerelease."
-              flags+=(--prerelease)
-            fi
-            gh release create "$TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$PACKAGE $VERSION" \
-              --notes "$notes" \
-              "${flags[@]}" \
-              --verify-tag \
-              "$CRATE_FILE"
-          fi
+        run: >-
+          uv run scripts/release-crate/release_crate.py attach
+          "$TAG" "$PACKAGE" "$VERSION" "$CRATE_FILE"
 
   # The two crates with a command also ship it prebuilt, for anyone without a
   # Rust toolchain and for `cargo binstall`. After publishing, so a release
