@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,8 +47,15 @@ def test_a_run_that_prints_the_decoy_is_a_failure() -> None:
         )
 
 
-def test_the_tmux_that_lands_elsewhere_names_its_own_socket(tmp_path: Path) -> None:
+def test_the_tmux_that_lands_elsewhere_names_its_own_socket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_path = tmp_path / "bin"
+    on_path.mkdir()
+    recorder = on_path / "tmux"
+    recorder.write_text(f"#!{sys.executable}\nimport sys\nprint(*sys.argv[1:], sep=chr(10))\n")
+    recorder.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{on_path}{os.pathsep}{os.environ['PATH']}")
     wrapper = check.write_tmux_elsewhere(tmp_path)
-    text = wrapper.read_text(encoding="utf-8")
-    assert f'-S "{tmp_path}/server.sock"' in text
-    assert wrapper.stat().st_mode & 0o111
+    result = subprocess.run([wrapper, "list-sessions"], capture_output=True, text=True, check=True)
+    assert result.stdout.split() == ["-S", f"{tmp_path}/server.sock", "list-sessions"]

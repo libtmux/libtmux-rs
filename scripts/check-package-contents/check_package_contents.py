@@ -5,7 +5,7 @@
 # ///
 """Verify what the published crates contain.
 
-    check_package_contents.py
+    check_package_contents.py [--build]
 
 Lists each published crate's tarball with `cargo package --list` and checks it:
 
@@ -17,18 +17,25 @@ Lists each published crate's tarball with `cargo package --list` and checks it:
   `libtmux`, and `libtmux` without its default features has no optional
   dependency.
 
-`just package` runs it after `cargo package`. Run from anywhere: the script
-changes to the repository root.
+`--build` first packages the four crates with `cargo package --locked
+--all-features` into a fresh target directory, which `just package` runs.
+Cargo treats staged registry versions as immutable, so a fresh target keeps a
+same-version edit from reusing source an earlier run extracted. The package is
+built with `--allow-dirty` so the check stays runnable mid-change; `cargo
+publish` makes its own clean-tree check. Run from anywhere: the script changes
+to the repository root.
 """
 
 from __future__ import annotations
 
+import argparse
 import glob
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -294,8 +301,26 @@ def check_edges() -> list[str]:
     return problems
 
 
-def main() -> int:
+def build_packages() -> int:
+    """Package every published crate into a fresh target directory."""
+    packages = [argument for crate in CRATES for argument in ("--package", crate)]
+    with tempfile.TemporaryDirectory(prefix="libtmux-package.") as target:
+        return subprocess.run(
+            ["cargo", "package", "--locked", "--allow-dirty", *packages, "--all-features"],
+            env={**os.environ, "CARGO_TARGET_DIR": target},
+            check=False,
+        ).returncode
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Verify what the published crates contain.")
+    parser.add_argument(
+        "--build", action="store_true", help="package the crates into a fresh target first"
+    )
+    arguments = parser.parse_args(argv)
     os.chdir(ROOT)
+    if arguments.build and (status := build_packages()) != 0:
+        return status
     listings = {crate: package_listing(crate) for crate in CRATES}
     versions = crate_versions()
     problems: list[str] = []

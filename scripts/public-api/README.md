@@ -6,8 +6,9 @@ implementations appear in it, so a change a caller can see changes the file.
 It is not a semver check: it says what moved.
 
 `just api` writes `crates/libtmux/docs/public-api.txt` with it, and `just
-api-check`, in the `public API surface` CI job, fails when the committed file
-differs. Both need a nightly toolchain for rustdoc's JSON output.
+api-check`, in the `public API surface` CI job, runs it with `--check` and fails
+with a diff when the committed file differs. Both need a nightly toolchain for
+rustdoc's JSON output.
 
 ```console
 $ cargo +nightly rustdoc \

@@ -82,8 +82,11 @@ def write_tmux_elsewhere(elsewhere: Path) -> Path:
     """A tmux whose servers listen on a socket of its own, so a bare client does
     not land on the default socket."""
     wrapper = elsewhere / "tmux"
+    socket = elsewhere / "server.sock"
     wrapper.write_text(
-        f'#!/bin/sh\nexec tmux -S "{elsewhere}/server.sock" "$@"\n', encoding="utf-8"
+        f"#!{sys.executable}\nimport os\nimport sys\n"
+        f'os.execvp("tmux", ["tmux", "-S", {str(socket)!r}, *sys.argv[1:]])\n',
+        encoding="utf-8",
     )
     wrapper.chmod(0o755)
     return wrapper

@@ -16,7 +16,6 @@ import importlib.util
 import os
 import pathlib
 import select
-import shutil
 import signal
 import stat
 import subprocess
@@ -180,84 +179,82 @@ class RunnerModule(CleanupModule, t.Protocol):
         """Enable subreaper ownership in the current runner process."""
 
 
-WORKER_SOURCE = r"""#!/usr/bin/env bash
-set -euo pipefail
+WORKER_SOURCE = r"""#!/usr/bin/env python3
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import time
 
-root="$1"
-printf '%s\n' "$root" > "$TFC_CONTROL/root"
-if [[ -n ${LIBTMUX_TFC_TEST_FINAL_CUTOVER_STOP_FD+x} ]]; then
-    : > "$TFC_CONTROL/final-cutover-hook-leaked"
-fi
-kill -STOP -- "$BASHPID"
-printf 'worker stdout\n'
-printf 'worker stderr\n' >&2
+root = sys.argv[1]
+control = pathlib.Path(os.environ["TFC_CONTROL"])
+scenario = os.environ["TFC_SCENARIO"]
 
-wait_forever() {
-    while :; do
-        read -r -t 1 _ || :
-    done
-}
 
-case "$TFC_SCENARIO" in
-    status37)
-        : > "$TFC_CONTROL/ready"
-        exit 37
-        ;;
-    signal)
-        : > "$TFC_CONTROL/ready"
-        wait_forever
-        ;;
-    second-signal)
-        trap '' HUP INT TERM
-        : > "$TFC_CONTROL/ready"
-        wait_forever
-        ;;
-    hostile-tree | term-fork | kill-frontier)
-        "$TFC_PYTHON" "$TFC_HELPER" "$TFC_SCENARIO" "$TFC_CONTROL" &
-        : > "$TFC_CONTROL/worker-ready"
-        wait_forever
-        ;;
-    replace-root)
-        : > "$root/original-sentinel"
-        mv -- "$root" "$root.moved"
-        mkdir -- "$TFC_CONTROL/replacement-target"
-        : > "$TFC_CONTROL/replacement-target/replacement-sentinel"
-        ln -s -- "$TFC_CONTROL/replacement-target" "$root"
-        : > "$TFC_CONTROL/ready"
-        ;;
-    replace-root-directory)
-        : > "$root/original-sentinel"
-        mv -- "$root" "$root.moved"
-        mkdir -- "$root"
-        : > "$root/replacement-sentinel"
-        : > "$TFC_CONTROL/ready"
-        ;;
-    dangling-root)
-        : > "$root/original-sentinel"
-        mv -- "$root" "$root.moved"
-        ln -s -- "$TFC_CONTROL/missing-target" "$root"
-        : > "$TFC_CONTROL/ready"
-        ;;
-    retain-root)
-        : > "$root/retained-sentinel"
-        : > "$TFC_CONTROL/ready"
-        ;;
-    preflight)
-        : > "$TFC_CONTROL/continued"
-        : > "$TFC_CONTROL/ready"
-        wait_forever
-        ;;
-    parallel)
-        : > "$TFC_CONTROL/ready"
-        while [[ ! -e "$TFC_CONTROL/release" ]]; do
-            read -r -t 0.05 _ || :
-        done
-        ;;
-    *)
-        printf 'unknown test scenario\n' >&2
-        exit 64
-        ;;
-esac
+def wait_forever() -> None:
+    while True:
+        signal.pause()
+
+
+def ready() -> None:
+    (control / "ready").touch()
+
+
+(control / "root").write_text(root + "\n")
+if "LIBTMUX_TFC_TEST_FINAL_CUTOVER_STOP_FD" in os.environ:
+    (control / "final-cutover-hook-leaked").touch()
+os.kill(os.getpid(), signal.SIGSTOP)
+print("worker stdout", flush=True)
+print("worker stderr", file=sys.stderr, flush=True)
+
+if scenario == "status37":
+    ready()
+    sys.exit(37)
+elif scenario == "signal":
+    ready()
+    wait_forever()
+elif scenario == "second-signal":
+    for number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(number, signal.SIG_IGN)
+    ready()
+    wait_forever()
+elif scenario in ("hostile-tree", "term-fork", "kill-frontier"):
+    subprocess.Popen(
+        [sys.executable, os.environ["TFC_HELPER"], scenario, str(control)],
+        stdin=subprocess.DEVNULL,
+        close_fds=False,
+    )
+    (control / "worker-ready").touch()
+    wait_forever()
+elif scenario in ("replace-root", "replace-root-directory", "dangling-root"):
+    (pathlib.Path(root) / "original-sentinel").touch()
+    os.rename(root, root + ".moved")
+    if scenario == "replace-root":
+        target = control / "replacement-target"
+        target.mkdir()
+        (target / "replacement-sentinel").touch()
+        os.symlink(target, root)
+    elif scenario == "replace-root-directory":
+        os.mkdir(root)
+        (pathlib.Path(root) / "replacement-sentinel").touch()
+    else:
+        os.symlink(control / "missing-target", root)
+    ready()
+elif scenario == "retain-root":
+    (pathlib.Path(root) / "retained-sentinel").touch()
+    ready()
+elif scenario == "preflight":
+    (control / "continued").touch()
+    ready()
+    wait_forever()
+elif scenario == "parallel":
+    ready()
+    while not (control / "release").exists():
+        time.sleep(0.05)
+else:
+    print("unknown test scenario", file=sys.stderr)
+    sys.exit(64)
 """
 
 
@@ -490,7 +487,7 @@ class Fixture:
     directory: pathlib.Path
     worker: pathlib.Path
     helper: pathlib.Path
-    bash: str
+    python: str
 
     def control(self, name: str = "control") -> pathlib.Path:
         """Create and return an out-of-tree control directory."""
@@ -643,19 +640,16 @@ def raw_clone_without_exit_signal() -> tuple[int, int]:
 
 @contextlib.contextmanager
 def fixture() -> t.Generator[Fixture]:
-    """Create real Bash and Python descendants for one test."""
+    """Create the worker and helper descendants for one test."""
     with tempfile.TemporaryDirectory(prefix="libtmux-supervisor-test-") as raw:
         directory = pathlib.Path(raw)
-        worker = directory / "worker.sh"
+        worker = directory / "worker.py"
         helper = directory / "helper.py"
         worker.write_text(WORKER_SOURCE, encoding="utf-8")
         helper.write_text(HELPER_SOURCE, encoding="utf-8")
         worker.chmod(0o700)
         helper.chmod(0o700)
-        bash = shutil.which("bash")
-        if bash is None:
-            raise AssertionError("bash is unavailable")
-        yield Fixture(directory, worker, helper, os.path.realpath(bash))
+        yield Fixture(directory, worker, helper, os.path.realpath(sys.executable))
 
 
 def supervisor_process(
@@ -667,7 +661,7 @@ def supervisor_process(
     extra_pass_fds: tuple[int, ...] = (),
     fault: str | None = None,
 ) -> subprocess.Popen[str]:
-    """Start the real supervisor with the synthetic Bash worker."""
+    """Start the real supervisor with the synthetic worker."""
     environment = os.environ.copy()
     environment.update(
         {
@@ -692,7 +686,7 @@ def supervisor_process(
         parent_fd = os.dup(inherited_parent_fd)
         command.append(f"--root-parent-fd={parent_fd}")
         pass_fds.append(parent_fd)
-    command.extend(["--", case.bash, os.fspath(case.worker)])
+    command.extend(["--", case.python, os.fspath(case.worker)])
     try:
         return subprocess.Popen(
             command,

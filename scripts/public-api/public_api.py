@@ -12,6 +12,11 @@ change when a caller-visible contract changes.
 
     public_api.py target/doc/libtmux.json > crates/libtmux/docs/public-api.txt
 
+`--check FILE` compares the surface with a committed copy instead, prints the
+difference and exits 1 when they differ:
+
+    public_api.py --check crates/libtmux/docs/public-api.txt target/doc/libtmux.json
+
 It is not a semver oracle. It says what moved, which is what
 `cargo-semver-checks` could not say through the alphas, when it skipped every
 lint, and what a `0.1.N` release is still allowed to change.
@@ -19,6 +24,8 @@ lint, and what a `0.1.N` release is still allowed to change.
 
 from __future__ import annotations
 
+import argparse
+import difflib
 import json
 import sys
 
@@ -548,7 +555,8 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
     return owner, implemented
 
 
-def main(path: str) -> int:
+def surface(path: str) -> list[str]:
+    """The sorted records of the public surface in a rustdoc JSON file."""
     with open(path, encoding="utf-8") as handle:
         doc = json.load(handle)
 
@@ -592,14 +600,35 @@ def main(path: str) -> int:
         lines.add(f"{kind} {name}{item_suffix(kind, inner[kind], paths, reachable)}")
 
     lines.update(explicit_impls(index, paths, reachable))
+    return sorted(lines)
 
-    for line in sorted(lines):
-        print(line)
-    return 0
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Print the public API surface of a crate.")
+    parser.add_argument("rustdoc_json", help="the rustdoc JSON of the crate")
+    parser.add_argument(
+        "--check",
+        metavar="FILE",
+        help="compare the surface with FILE and exit 1 when they differ",
+    )
+    arguments = parser.parse_args(argv)
+    lines = surface(arguments.rustdoc_json)
+    if arguments.check is None:
+        for line in lines:
+            print(line)
+        return 0
+    with open(arguments.check, encoding="utf-8") as handle:
+        committed = handle.read().splitlines()
+    difference = list(
+        difflib.unified_diff(committed, lines, arguments.check, "current", lineterm="")
+    )
+    if not difference:
+        print("public API unchanged")
+        return 0
+    print("\n".join(difference))
+    print("\npublic API changed. Run `just api` and commit the result.", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: public-api.py <rustdoc.json>", file=sys.stderr)
-        raise SystemExit(2)
-    raise SystemExit(main(sys.argv[1]))
+    raise SystemExit(main())

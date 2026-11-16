@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import check_package_contents as check
+import pytest
 
 VERSIONS = {
     "libtmux": "0.1.2",
@@ -99,3 +101,24 @@ def test_the_required_lists_name_files_this_tree_has() -> None:
         present, absent = check.required_files(check.ROOT / directory, check.REQUIRED[crate])
         assert present, crate
         assert absent == [], crate
+
+
+def test_building_packages_every_crate_into_a_target_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(
+        argv: list[str], env: dict[str, str], check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((argv, env))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(check.subprocess, "run", fake_run)
+    assert check.build_packages() == 0
+    assert check.build_packages() == 0
+    (argv, env), (_, other_env) = calls
+    assert argv[:2] == ["cargo", "package"]
+    named = [argv[index + 1] for index, word in enumerate(argv) if word == "--package"]
+    assert named == list(check.CRATES)
+    assert env["CARGO_TARGET_DIR"] != other_env["CARGO_TARGET_DIR"]

@@ -691,7 +691,7 @@ def _wait_status(status: int) -> int:
 
 
 class Supervisor:
-    """Own one Bash worker and its complete kernel descendant lineage."""
+    """Own one worker and its complete kernel descendant lineage."""
 
     def __init__(
         self,
@@ -795,7 +795,7 @@ class Supervisor:
             os._exit(125)
 
     def spawn_stopped_worker(self, inherited_mask: set[int | signal.Signals]) -> TrackedProcess:
-        """Fork, pidfd-register, and verify one self-stopped Bash worker."""
+        """Fork, pidfd-register, and verify one self-stopped worker."""
         expected_executable = os.stat(self.command[0])
         gate_read_fd, gate_write_fd = os.pipe2(os.O_CLOEXEC)
         try:
@@ -841,7 +841,9 @@ class Supervisor:
                 actual_executable.st_dev != expected_executable.st_dev
                 or actual_executable.st_ino != expected_executable.st_ino
             ):
-                raise SupervisorFailure("stopped compatibility worker is not the requested Bash")
+                raise SupervisorFailure(
+                    "stopped compatibility worker is not the requested executable"
+                )
             self._confirm_stopped(worker, deadline)
             return worker
         raise SupervisorFailure("compatibility worker did not enter startup stop")

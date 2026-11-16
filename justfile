@@ -166,19 +166,11 @@ api:
 # Report any change to the public API surface
 [group: 'release']
 api-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
     cargo +nightly rustdoc -p libtmux --all-features \
         -- -Zunstable-options --output-format json > /dev/null
-    # A fixed path in /tmp is one file shared between checkouts.
-    current="$(mktemp -t libtmux-api-XXXXXX)"
-    trap 'rm -f "$current"' EXIT
-    uv run scripts/public-api/public_api.py target/doc/libtmux.json > "$current"
-    if ! diff -u crates/libtmux/docs/public-api.txt "$current"; then
-        printf '\npublic API changed. Run `just api` and commit the result.\n' >&2
-        exit 1
-    fi
-    printf 'public API unchanged\n'
+    uv run scripts/public-api/public_api.py \
+        --check crates/libtmux/docs/public-api.txt \
+        target/doc/libtmux.json
 
 # Nightly and a sanitizer, so `fuzz/` is not a workspace member and this is not
 # part of `just check`. The seeds matter: random bytes rarely produce a line
@@ -381,14 +373,7 @@ bench-compare *args:
 [doc('Build the crates that get published, and verify what they contain')]
 [group: 'release']
 package:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    package_target="$(mktemp -d "${TMPDIR:-/tmp}/libtmux-package.XXXXXX")"
-    trap 'rm -rf -- "$package_target"' EXIT
-    CARGO_TARGET_DIR="$package_target" cargo package --locked --allow-dirty \
-        --package libtmux --package libtmux-macros \
-        --package tmux-mcp --package tmux-workspace --all-features
-    uv run scripts/check-package-contents/check_package_contents.py
+    uv run scripts/check-package-contents/check_package_contents.py --build
 
 # Regenerate the tmux option schema from tmux's own source
 [group: 'release']

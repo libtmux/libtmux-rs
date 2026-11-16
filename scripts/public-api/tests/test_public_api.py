@@ -4,8 +4,6 @@ import json
 import pathlib
 import subprocess
 import sys
-import tempfile
-import unittest
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "public_api.py"
 
@@ -146,29 +144,49 @@ def fixture() -> dict:
     }
 
 
-class PublicApiTest(unittest.TestCase):
-    def test_records_signatures_and_explicit_trait_impls(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            source = pathlib.Path(directory) / "rustdoc.json"
-            source.write_text(json.dumps(fixture()), encoding="utf-8")
-            result = subprocess.run(
-                [sys.executable, str(SCRIPT), str(source)],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(
-            result.stdout.splitlines(),
-            [
-                "function libtmux::Widget::get: fn(&self) -> u64",
-                "impl From<&str> for libtmux::Widget",
-                "struct libtmux::Widget",
-                "struct_field libtmux::Widget::value: u64",
-            ],
-        )
+def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
-if __name__ == "__main__":
-    unittest.main()
+EXPECTED = [
+    "function libtmux::Widget::get: fn(&self) -> u64",
+    "impl From<&str> for libtmux::Widget",
+    "struct libtmux::Widget",
+    "struct_field libtmux::Widget::value: u64",
+]
+
+
+def test_records_signatures_and_explicit_trait_impls(tmp_path: pathlib.Path) -> None:
+    source = tmp_path / "rustdoc.json"
+    source.write_text(json.dumps(fixture()), encoding="utf-8")
+    result = run(str(source))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == EXPECTED
+
+
+def test_check_passes_on_the_committed_surface(tmp_path: pathlib.Path) -> None:
+    source = tmp_path / "rustdoc.json"
+    source.write_text(json.dumps(fixture()), encoding="utf-8")
+    committed = tmp_path / "public-api.txt"
+    committed.write_text("\n".join(EXPECTED) + "\n", encoding="utf-8")
+    result = run("--check", str(committed), str(source))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "public API unchanged\n"
+
+
+def test_check_fails_and_shows_the_difference_when_the_surface_moved(
+    tmp_path: pathlib.Path,
+) -> None:
+    source = tmp_path / "rustdoc.json"
+    source.write_text(json.dumps(fixture()), encoding="utf-8")
+    committed = tmp_path / "public-api.txt"
+    committed.write_text("\n".join(EXPECTED[:-1]) + "\n", encoding="utf-8")
+    result = run("--check", str(committed), str(source))
+    assert result.returncode == 1
+    assert "+struct_field libtmux::Widget::value: u64" in result.stdout
+    assert "Run `just api`" in result.stderr

@@ -172,30 +172,35 @@ def test_a_worker_stops_itself_before_it_does_any_work() -> None:
             child.wait()
 
 
-FAKE_CARGO = """#!/bin/sh
-{{
-    printf 'cargo'
-    for argument in "$@"; do printf ' %s' "$argument"; done
-    printf '\\n'
-    for name in LIBTMUX_TEST_TMUX LIBTMUX_REQUIRE_NATIVE LIBTMUX_TEST_MINIMUM_TMUX LC_ALL; do
-        eval "value=\\${{$name-unset}}"
-        printf '  %s=%s\\n' "$name" "$value"
-    done
-}} >> "{log}"
-case " $* " in *" --list "*)
-    for family in format aggregate projection error; do echo "real_tmux_compat_${{family}}_x: test"; done ;;
-esac
-echo "running 1 test"
+FAKE_CARGO = """#!/usr/bin/env python3
+import os
+import sys
+
+with open(@LOG@, "a", encoding="utf-8") as log:
+    log.write(" ".join(["cargo", *sys.argv[1:]]) + "\\n")
+    for name in ("LIBTMUX_TEST_TMUX", "LIBTMUX_REQUIRE_NATIVE", "LIBTMUX_TEST_MINIMUM_TMUX", "LC_ALL"):
+        log.write(f"  {name}={os.environ.get(name, 'unset')}\\n")
+if "--list" in sys.argv:
+    for family in ("format", "aggregate", "projection", "error"):
+        print(f"real_tmux_compat_{family}_x: test")
+print("running 1 test")
 """
 
-FAKE_AUTOGEN = """#!/bin/sh
-cat > configure <<'CONFIGURE'
-#!/bin/sh
-for argument in "$@"; do case $argument in --prefix=*) prefix=${argument#--prefix=} ;; esac; done
-printf 'all:\\n\\t@true\\ninstall:\\n\\tmkdir -p %s/bin\\n\\tprintf "#!/bin/sh\\\\necho tmux next-9.9\\\\n" > %s/bin/tmux\\n\\tchmod +x %s/bin/tmux\\n' "$prefix" "$prefix" "$prefix" > Makefile
-CONFIGURE
-chmod +x configure
-"""
+# The tmux source the stand-in run builds: no autogen step to run, a configure
+# that writes a Makefile, and an installed tmux that reports a development version.
+STAND_IN_SOURCE = {
+    "autogen.sh": "#!/usr/bin/env python3\n",
+    "configure": """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+prefix = next(a.removeprefix("--prefix=") for a in sys.argv[1:] if a.startswith("--prefix="))
+Path("Makefile").write_text(
+    f"all:\\n\\t@true\\ninstall:\\n\\tmkdir -p {prefix}/bin\\n\\tcp tmux {prefix}/bin/tmux\\n"
+)
+""",
+    "tmux": "#!/usr/bin/env python3\nprint('tmux next-9.9')\n",
+}
 
 
 def locale_available() -> bool:
@@ -215,7 +220,9 @@ def test_a_whole_run_builds_a_pinned_commit_and_tests_it_under_the_supervisor(
 ) -> None:
     upstream = tmp_path / "tmux"
     upstream.mkdir()
-    (upstream / "autogen.sh").write_text(FAKE_AUTOGEN)
+    for name, source in STAND_IN_SOURCE.items():
+        (upstream / name).write_text(source)
+        (upstream / name).chmod(0o755)
     git = ["git", "-c", "user.name=f", "-c", "user.email=f@example.invalid", "-C", str(upstream)]
     subprocess.run([*git, "init", "--quiet"], check=True)
     subprocess.run([*git, "add", "."], check=True)
@@ -228,7 +235,7 @@ def test_a_whole_run_builds_a_pinned_commit_and_tests_it_under_the_supervisor(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     cargo = fake_bin / "cargo"
-    cargo.write_text(FAKE_CARGO.format(log=log))
+    cargo.write_text(FAKE_CARGO.replace("@LOG@", repr(str(log))))
     cargo.chmod(cargo.stat().st_mode | stat.S_IXUSR)
 
     result = subprocess.run(
