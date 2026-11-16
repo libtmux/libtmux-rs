@@ -180,3 +180,27 @@ def test_a_signal_ignored_at_start_stays_ignored() -> None:
             assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
     finally:
         signal.signal(signal.SIGHUP, previous)
+
+
+@pytest.fixture
+def wedged_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A `tmux` that never answers, with the runner's deadline cut to a tenth of a second."""
+    program = tmp_path / "tmux"
+    program.write_text(f"#!{PYTHON}\nimport time\ntime.sleep(30)\n")
+    program.chmod(0o700)
+    monkeypatch.setattr(sandbox_runner, "TMUX_SECONDS", 0.1)
+    monkeypatch.setattr(sandbox_runner, "STOP_TRIES", 2)
+    monkeypatch.setattr(sandbox_runner, "STOP_PAUSE", 0.0)
+    return str(program)
+
+
+def test_a_server_that_never_answers_still_counts_as_listening(
+    tmp_path: Path, wedged_tmux: str
+) -> None:
+    assert sandbox_runner.answers(wedged_tmux, tmp_path / "s", {})
+
+
+def test_stopping_a_wedged_server_gives_up_instead_of_hanging(
+    tmp_path: Path, wedged_tmux: str
+) -> None:
+    assert not sandbox_runner.stop(wedged_tmux, tmp_path / "s", {})

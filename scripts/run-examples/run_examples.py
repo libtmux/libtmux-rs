@@ -219,7 +219,7 @@ class Fixture:
 
     def tmux(self, *arguments: str) -> str:
         return subprocess.run(
-            ["tmux", "-S", str(self.socket), *arguments],
+            ["tmux", "-f", "/dev/null", "-S", str(self.socket), *arguments],
             capture_output=True,
             stdin=subprocess.DEVNULL,
             text=True,
@@ -246,7 +246,7 @@ class Fixture:
 
     def stop(self) -> None:
         subprocess.run(
-            ["tmux", "-S", str(self.socket), "kill-server"],
+            ["tmux", "-f", "/dev/null", "-S", str(self.socket), "kill-server"],
             capture_output=True,
             stdin=subprocess.DEVNULL,
             check=False,

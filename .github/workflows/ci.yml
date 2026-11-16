@@ -218,17 +218,7 @@ jobs:
       - name: Fuzz ${{ matrix.target }}
         env:
           TARGET: ${{ matrix.target }}
-        run: |
-          # cargo-fuzz builds for the triple it was itself compiled for, and
-          # the installer above ships a musl binary. musl links libc
-          # statically, which a sanitizer cannot instrument, so the target
-          # has to be named here rather than left to how cargo-fuzz arrived.
-          host=$(rustc +nightly -vV | sed -n 's/^host: //p')
-          # libFuzzer writes new inputs to the first directory only.
-          mkdir -p "fuzz/corpus/$TARGET"
-          cargo +nightly fuzz run --target "$host" "$TARGET" \
-            "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" \
-            -- -max_total_time=300 -rss_limit_mb=4096
+        run: uv run scripts/fuzz-run/fuzz_run.py "$TARGET"
       - name: Save the ${{ matrix.target }} corpus
         if: always()
         uses: actions/cache/save@v6
@@ -280,10 +270,11 @@ jobs:
           key: bench-criterion-${{ github.run_id }}
           restore-keys: bench-criterion-
 
-      - name: Benchmark
-        run: |
-          cargo bench --locked --features test-support --bench hierarchy
-          cargo bench --locked --features test-support,control-mode --bench waits
+      - name: Benchmark the hierarchy
+        run: cargo bench --locked --features test-support --bench hierarchy
+
+      - name: Benchmark the waits
+        run: cargo bench --locked --features test-support,control-mode --bench waits
 
       - name: Compare with the previous run
         run: uv run scripts/bench-regressions/bench_regressions.py target/criterion
@@ -317,14 +308,11 @@ jobs:
           ref: 93eab7341f7dac39c7706f88cc3512c855dfcab2
           path: .bridge-python
 
-      - name: Install tmux build dependencies
+      - name: Install tmux
         uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
         with:
           update: "true"
-          args: >-
-            install --yes --no-install-recommends
-            autoconf automake bison build-essential git libevent-dev
-            libncurses-dev pkg-config tmux
+          args: install --yes --no-install-recommends tmux
 
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
@@ -334,43 +322,43 @@ jobs:
         with:
           tool: uv
 
+      # The commit is tmux 3.3a, the oldest release the workspace supports. The
+      # action builds it, checks it and caches the build.
       - name: Build the minimum daemon
-        run: |
-          git clone --branch 3.3a --depth 1 https://github.com/tmux/tmux.git "$RUNNER_TEMP/tmux-min-source"
-          test "$(git -C "$RUNNER_TEMP/tmux-min-source" rev-parse HEAD)" = 0b355ae8114511e1ff6359272b164f1cdf718e80
-          cd "$RUNNER_TEMP/tmux-min-source"
-          sh autogen.sh
-          ./configure --prefix="$RUNNER_TEMP/tmux-min"
-          make -j2
-          make install
-          echo "LIBTMUX_TEST_MINIMUM_TMUX=$RUNNER_TEMP/tmux-min/bin/tmux" >> "$GITHUB_ENV"
+        id: minimum
+        uses: libtmux/.github/actions/build-tmux@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          ref: 0b355ae8114511e1ff6359272b164f1cdf718e80
 
-      - name: Prepare obsolete and qualified Python backends
-        run: |
-          uv venv "$RUNNER_TEMP/bridge-venv"
-          uv pip install --python "$RUNNER_TEMP/bridge-venv/bin/python" 'tmuxp==1.74.0'
-          python3 - <<'PY'
-          import os, pathlib, shlex
-          root = pathlib.Path(os.environ['RUNNER_TEMP'])
-          python = root / 'bridge-venv/bin/python'
-          source = pathlib.Path.cwd() / '.bridge-python/src'
-          wrapper = root / 'bridge-python'
-          wrapper.write_text('#!/bin/sh\nPYTHONPATH=' + shlex.quote(str(source)) + ' exec ' + shlex.quote(str(python)) + ' "$@"\n')
-          wrapper.chmod(0o700)
-          with open(os.environ['GITHUB_ENV'], 'a') as env:
-              env.write(f'LIBTMUX_TEST_OBSOLETE_PYTHON={python}\n')
-              env.write(f'LIBTMUX_TEST_QUALIFIED_PYTHON={wrapper}\n')
-          PY
+      - name: Select the minimum daemon
+        env:
+          MINIMUM_TMUX: ${{ steps.minimum.outputs.binary }}
+        run: printf 'LIBTMUX_TEST_MINIMUM_TMUX=%s\n' "$MINIMUM_TMUX" >> "$GITHUB_ENV"
 
-      - name: Qualify extension version checks and the minimum builder
-        run: |
-          export TMUX_WORKSPACE_PYTHON="$LIBTMUX_TEST_QUALIFIED_PYTHON"
-          uv run scripts/require-tests/require_tests.py \
-            cargo test --locked --package tmux-workspace --all-features \
-            --bin tmux-workspace cli::bridge::tests -- --include-ignored --test-threads=1
-          uv run scripts/require-tests/require_tests.py \
-            cargo test --locked --package tmux-workspace --all-features \
-            --test cli python_ -- --include-ignored --test-threads=1
+      - name: Make the venv for the obsolete Python backend
+        run: uv venv "$RUNNER_TEMP/bridge-venv"
+
+      - name: Install the obsolete tmuxp
+        run: uv pip install --python "$RUNNER_TEMP/bridge-venv/bin/python" 'tmuxp==1.74.0'
+
+      - name: Name the obsolete and qualified Python backends
+        run: uv run scripts/bridge-python/bridge_python.py
+
+      - name: Qualify the extension version checks
+        env:
+          TMUX_WORKSPACE_PYTHON: ${{ env.LIBTMUX_TEST_QUALIFIED_PYTHON }}
+        run: >-
+          uv run scripts/require-tests/require_tests.py
+          cargo test --locked --package tmux-workspace --all-features
+          --bin tmux-workspace cli::bridge::tests -- --include-ignored --test-threads=1
+
+      - name: Qualify the Python version check of the workspace CLI
+        env:
+          TMUX_WORKSPACE_PYTHON: ${{ env.LIBTMUX_TEST_QUALIFIED_PYTHON }}
+        run: >-
+          uv run scripts/require-tests/require_tests.py
+          cargo test --locked --package tmux-workspace --all-features
+          --test cli python_ -- --include-ignored --test-threads=1
 
   # The slow lane. tmux's output and error wording change between releases, so
   # each lane builds its release from source and runs the whole workspace, or
@@ -414,17 +402,14 @@ jobs:
         with:
           limit-access-to-actor: true
 
-      # An empty toolchain keeps what rust-toolchain.toml pins, which the
-      # compile-fail cases need; a named one overrides it.
+      # rustup reads an empty RUSTUP_TOOLCHAIN as unset, so an empty toolchain
+      # keeps what rust-toolchain.toml pins, which the compile-fail cases need,
+      # and a named one overrides it.
       - name: Build and test the lane
         env:
           LIBTMUX_COMPAT_LANES: ${{ matrix.lane }}
-          LANE_TOOLCHAIN: ${{ matrix.rust-toolchain }}
-        run: |
-          if [ -n "$LANE_TOOLCHAIN" ]; then
-            export RUSTUP_TOOLCHAIN="$LANE_TOOLCHAIN"
-          fi
-          just compat
+          RUSTUP_TOOLCHAIN: ${{ matrix.rust-toolchain }}
+        run: just compat
 
       - name: Open a tmate session after a failure
         if: ${{ failure() && matrix.tmate == 'on-failure' }}

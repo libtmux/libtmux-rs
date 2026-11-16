@@ -18,6 +18,7 @@ and the binary passed. Messages name variables and sockets, never values.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import secrets
@@ -48,6 +49,9 @@ SUFFIX_LENGTH = 6
 # many tries, 0.1 s apart, to stop answering.
 STOP_TRIES = 30
 STOP_PAUSE = 0.1
+# A tmux client that has not answered by then is talking to a server that is
+# wedged; waiting longer would hang the run that wraps every test binary.
+TMUX_SECONDS = 10
 CARGO_FALLBACK = "/.cargo/tmux-sandbox"
 SERVER_VARIABLES = ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH")
 HELD = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -184,7 +188,10 @@ def answers(tmux: str, socket: Path, environ: Mapping[str, str]) -> bool:
             text=True,
             errors="replace",
             check=False,
+            timeout=TMUX_SECONDS,
         )
+    except subprocess.TimeoutExpired:
+        return True
     except OSError:
         return False
     return result.returncode == 0 or "protocol version mismatch" in result.stdout + result.stderr
@@ -192,13 +199,15 @@ def answers(tmux: str, socket: Path, environ: Mapping[str, str]) -> bool:
 
 def stop(tmux: str, socket: Path, environ: Mapping[str, str]) -> bool:
     """Ask the server on `socket` to stop and wait for it; whether it did."""
-    subprocess.run(
-        [tmux, "-S", str(socket), "kill-server"],
-        env=dict(environ),
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-        check=False,
-    )
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        subprocess.run(
+            [tmux, "-S", str(socket), "kill-server"],
+            env=dict(environ),
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            check=False,
+            timeout=TMUX_SECONDS,
+        )
     for _ in range(STOP_TRIES):
         if not answers(tmux, socket, environ):
             return True
@@ -261,6 +270,7 @@ def join(names: Sequence[str]) -> str:
 
 
 def main(argv: Sequence[str], environ: MutableMapping[str, str] | None = None) -> int:
+    """Run `argv` in the sandbox and return its status, or REFUSED when the sandbox says no."""
     environ = dict(os.environ) if environ is None else environ
     try:
         return run(argv, environ)
@@ -270,6 +280,10 @@ def main(argv: Sequence[str], environ: MutableMapping[str, str] | None = None) -
 
 
 def run(argv: Sequence[str], environ: MutableMapping[str, str]) -> int:
+    """Run `argv` with no inherited tmux server and a private tmux directory, then sweep it.
+
+    Returns the binary's status, or LEFT_A_SERVER when it passed but left a server behind.
+    """
     if not argv:
         raise Refused("no binary to run")
     restore_environment(environ)

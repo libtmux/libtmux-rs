@@ -42,3 +42,11 @@ inline (PEP 723) and run scripts with `uv run`.
 
 - GitHub Actions `run:` lines that call one command.
 - Test data that is not a comparison, such as workspace files a loader reads.
+- `tools/mcp-swap`, which is Rust. It is a workspace member, so `fmt-check`,
+  `clippy` with `-D warnings` and `test` cover it, and `swap-test` and `msrv`
+  run its suite, which adds no second build system. It keeps a transaction and
+  recovery contract, with a lock and an exact revert from the first backup,
+  that its own suite covers. A Python copy would be a second implementation of
+  that contract. A tool with its own JSONC and TOML editors is a crate, not a
+  script. Its README documents the maintainer task that runs it, and
+  CONTRIBUTING names it.
