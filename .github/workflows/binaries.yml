@@ -82,6 +82,10 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: cargo build --release --locked --package "$PACKAGE" --target "$TARGET"
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: uv
+
       # The archive is named for what binstall asks for:
       # <name>-<version>-<target>.tar.gz, holding <name>-<version>-<target>/<bin>.
       - name: Package
@@ -90,29 +94,23 @@ jobs:
           PACKAGE: ${{ matrix.package }}
           TARGET: ${{ matrix.target }}
           VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          if [ -z "$VERSION" ]; then
-            VERSION="$(cargo metadata --format-version 1 --no-deps \
-              | jq -r --arg p "$PACKAGE" '.packages[] | select(.name == $p) | .version')"
-          fi
-          name="$PACKAGE-$VERSION-$TARGET"
-          mkdir "$name"
-          cp "target/$TARGET/release/$PACKAGE" "$name/"
-          cp -L "crates/$PACKAGE/README.md" "crates/$PACKAGE/LICENSE-APACHE" \
-            "crates/$PACKAGE/LICENSE-MIT" "$name/"
-          tar -czf "$name.tar.gz" "$name"
-          printf 'name=%s\n' "$name" >> "$GITHUB_OUTPUT"
+        run: uv run scripts/package-binary/package_binary.py "$PACKAGE" "$TARGET" "$VERSION"
 
-      - name: Run it
+      - name: Print the version
         if: matrix.native
         env:
           NAME: ${{ steps.archive.outputs.name }}
           PACKAGE: ${{ matrix.package }}
-        run: |
-          set -euo pipefail
+        run: >-
           "$NAME/$PACKAGE" --version
-          if [ "$PACKAGE" = tmux-workspace ]; then "$NAME/$PACKAGE" load --help > /dev/null; fi
+
+      - name: Print the help of the load command
+        if: matrix.native && matrix.package == 'tmux-workspace'
+        env:
+          NAME: ${{ steps.archive.outputs.name }}
+          PACKAGE: ${{ matrix.package }}
+        run: >-
+          "$NAME/$PACKAGE" load --help > /dev/null
 
       - uses: actions/upload-artifact@v7
         with:
