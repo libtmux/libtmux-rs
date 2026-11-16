@@ -1,5 +1,5 @@
-# What CI runs. scripts/ci-plan.py turns this into the compatibility matrix of
-# the CI workflow, scripts/test-tmux-format-compat.sh builds and tests the
+# What CI runs. scripts/ci-plan/ci_plan.py turns this into the compatibility
+# matrix of the CI workflow, scripts/tmux-format-compat builds and tests the
 # lanes it names, and the documentation tests check the tested range against it.
 #
 # One lane per line, in six fields:

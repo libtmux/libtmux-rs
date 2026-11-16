@@ -2,8 +2,8 @@ name: CI
 
 # A push or pull request builds the oldest and the newest supported tmux. The
 # weekly schedule and a dispatch with scope=full build every lane in
-# .github/ci-matrix.txt. scripts/ci-plan.py decides, and the compatibility job
-# takes its matrix from that plan.
+# .github/ci-matrix.txt. scripts/ci-plan/ci_plan.py decides, and the
+# compatibility job takes its matrix from that plan.
 on:
   push:
     branches: [master]
