@@ -9,7 +9,7 @@ use crate::{
     Branch, BranchPane, BranchWindow, Capture, CapturePaneArgs, Environment, EnvironmentEntry,
     EnvironmentState, Hook, Hooks, Marks, MatchView, Matches, OptionArgs, OptionValue, Panes,
     SearchPanesArgs, Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs,
-    TmuxTools, Tree, Windows,
+    TmuxCapabilities, TmuxTools, Tree, Windows,
 };
 
 use super::error::{ToolError, bad_input, tmux_error};
@@ -106,6 +106,33 @@ impl SearchBudget {
 
 #[tool_router(router = inspect_router, vis = "pub(super)")]
 impl TmuxTools {
+    /// Report version-gated features of the existing daemon.
+    #[tool(
+        name = "get_tmux_capabilities",
+        description = "Discover the connected tmux daemon's version, named feature availability, \
+                       fallbacks and exact-release workarounds without starting a daemon. \
+                       Null daemon_version means no daemon exists; query failures remain errors. \
+                       Check this report before choosing a version-dependent operation. Later \
+                       calls still enforce admission. tmux://capabilities separately describes \
+                       the startup-frozen tool selection and policy.",
+        title = "Discover tmux Features",
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
+    )]
+    pub async fn daemon_capabilities(
+        &self,
+        cancelled: tokio_util::sync::CancellationToken,
+    ) -> Result<Json<TmuxCapabilities>, ToolError> {
+        let report = tokio::select! {
+            biased;
+            () = cancelled.cancelled() => return Err(rmcp::model::ErrorData::internal_error(
+                "tmux capability discovery cancelled",
+                Some(serde_json::json!({"kind": "cancelled", "retryable": true, "stale": false})),
+            ).into()),
+            report = self.server.daemon_capabilities() => report.map_err(|error| tmux_error(&error))?,
+        };
+        Ok(Json(report.into()))
+    }
+
     /// List every session on the server.
     #[tool(
         description = "List every tmux session on the server.",

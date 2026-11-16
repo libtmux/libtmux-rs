@@ -476,7 +476,7 @@ fn explicit_existing_socket_defaults_without_teardown() {
         &json!({"name": "list_sessions", "arguments": {}}),
     );
 
-    assert_eq!(names.len(), 40);
+    assert_eq!(names.len(), 41);
     assert!(!names.iter().any(|name| name == "kill_session"));
     assert_eq!(
         listed["result"]["structuredContent"]["sessions"][0]["name"],
@@ -503,8 +503,8 @@ fn explicit_toolsets_reach_the_running_process() {
     let all_names = all.tool_names();
     all.finish();
 
-    assert_eq!(inspect_names.len(), 18);
-    assert_eq!(all_names.len(), 45);
+    assert_eq!(inspect_names.len(), 19);
+    assert_eq!(all_names.len(), 46);
     assert!(!inspect_names.contains(&"kill_session".to_owned()));
     assert!(all_names.contains(&"kill_session".to_owned()));
     runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
@@ -639,7 +639,7 @@ fn default_startup_passes_tmux_no_socket_and_starts_no_daemon() {
     assert_eq!(report["boundary"]["perCallSocketSelection"], false);
     assert_eq!(report["boundary"]["hostCommandExecution"], false);
     assert_eq!(report["boundary"]["dynamicResources"], false);
-    assert_eq!(report["toolCount"], 40, "teardown is not in the default");
+    assert_eq!(report["toolCount"], 41, "teardown is not in the default");
 
     process.finish();
     // tmux makes the socket directory for any client, so only a socket in it

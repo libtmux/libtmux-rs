@@ -15,6 +15,7 @@ const INSPECT: &[&str] = &[
     "list_windows",
     "list_panes",
     "get_server_info",
+    "get_tmux_capabilities",
     "get_session_info",
     "get_window_info",
     "get_pane_info",
@@ -617,7 +618,7 @@ fn aggregate_only_selection_keeps_native_pruned_operation_schemas() -> TestResul
         .iter()
         .map(|name| name.as_str().expect("nested name"))
         .collect();
-    assert_eq!(authority.len(), 15);
+    assert_eq!(authority.len(), 16);
     assert!(!authority.contains("capture_pane"));
 
     let schema = serde_json::Value::Object((*batch.input_schema).clone());

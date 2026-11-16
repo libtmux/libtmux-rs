@@ -71,6 +71,7 @@ async fn client_sees_the_exact_cross_port_inventory() {
         "list_windows",
         "list_panes",
         "get_server_info",
+        "get_tmux_capabilities",
         "get_session_info",
         "get_window_info",
         "get_pane_info",
@@ -324,7 +325,7 @@ async fn withheld_tools_are_neither_listed_nor_callable() {
         .map(|tool| tool.name.into_owned())
         .collect();
 
-    assert_eq!(names.len(), 18);
+    assert_eq!(names.len(), 19);
     assert!(!names.contains("kill_session"));
     wire.client
         .call_tool(
@@ -509,7 +510,7 @@ async fn capability_report_uses_the_common_socket_and_boundary_shape() {
     assert_eq!(report["boundary"]["perCallSocketSelection"], false);
     assert_eq!(report["boundary"]["hostCommandExecution"], false);
     assert_eq!(report["boundary"]["dynamicResources"], false);
-    assert_eq!(report["toolCount"], 18);
+    assert_eq!(report["toolCount"], 19);
     assert_eq!(report["toolsets"], json!(["inspect"]));
     assert_eq!(report["socket"]["selector"], "name:libtmux-mcp");
     assert_eq!(report["socket"]["selectionProvenance"], "default-dedicated");
@@ -627,4 +628,133 @@ fn the_instructions_match_their_reviewed_snapshot() {
         instructions, expected,
         "rerun with TMUX_MCP_BLESS=1 after a deliberate change"
     );
+}
+
+#[tokio::test]
+async fn daemon_capability_tool_reports_a_cold_endpoint_without_starting_a_daemon() {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory =
+        tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("an owned fixture directory");
+    let socket = directory.path().join("s");
+    let cold = libtmux::Server::builder()
+        .socket_path(&socket)
+        .build()
+        .expect("a cold endpoint");
+    let wire = Wire::connect(
+        TmuxTools::builder(cold.clone())
+            .selection(selection("inspect"))
+            .build(),
+    )
+    .await;
+    let response = wire.call("get_tmux_capabilities", json!({})).await;
+    let structured = response.structured_content.expect("the cold report");
+    assert!(structured["daemon_version"].is_null());
+    assert_eq!(structured["capabilities"], json!([]));
+    assert_eq!(structured["workarounds"], json!([]));
+    assert!(!socket.exists(), "the MCP read cannot start a daemon");
+    wire.shutdown().await;
+    cold.shutdown().await.expect("the cold client closes");
+}
+
+#[tokio::test]
+async fn daemon_capability_tool_projects_core_decisions_in_text_and_structured_content() {
+    let mut builder = TestServer::builder();
+    if let Some(binary) = std::env::var_os("LIBTMUX_TEST_MINIMUM_TMUX") {
+        builder = builder.tmux_executable(binary);
+    }
+    let guard = builder.start().await.expect("an owned daemon");
+    let server = libtmux::Server::builder()
+        .socket_path(guard.socket_path())
+        .build()
+        .expect("the configured client");
+    let expected = server
+        .daemon_capabilities()
+        .await
+        .expect("core discovery")
+        .expect("a daemon");
+    let tools = TmuxTools::builder(server.clone())
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let frozen_before = wire
+        .client
+        .read_resource(ReadResourceRequestParams::new("tmux://capabilities"))
+        .await
+        .expect("the initial frozen tool report");
+    let ResourceContents::TextResourceContents { text, .. } = &frozen_before.contents[0] else {
+        panic!("the policy report must be text");
+    };
+    let frozen_before: Value = serde_json::from_str(text).expect("policy JSON");
+    let response = wire.call("get_tmux_capabilities", json!({})).await;
+    assert_ne!(response.is_error, Some(true), "{response:?}");
+    let text = response
+        .content
+        .first()
+        .and_then(|content| content.as_text())
+        .expect("JSON text");
+    let text: Value = serde_json::from_str(&text.text).expect("a JSON report");
+    let structured = response.structured_content.expect("structured content");
+    assert_eq!(text, structured);
+    assert_eq!(structured["daemon_version"], expected.tmux_version().raw());
+    for feature in expected.features() {
+        let actual = structured["capabilities"]
+            .as_array()
+            .expect("feature rows")
+            .iter()
+            .find(|row| row["id"] == feature.definition.id)
+            .expect("every core feature");
+        assert_eq!(
+            actual["support"],
+            feature.support.as_str(),
+            "{}",
+            feature.definition.id
+        );
+        assert_eq!(actual["since"], feature.definition.since.to_string());
+        assert_eq!(actual["handling"], feature.definition.handling.as_str());
+    }
+    for workaround in expected.workarounds() {
+        let actual = structured["workarounds"]
+            .as_array()
+            .expect("workaround rows")
+            .iter()
+            .find(|row| row["id"] == workaround.definition.id)
+            .expect("every core workaround");
+        assert_eq!(
+            actual["active"], workaround.active,
+            "{}",
+            workaround.definition.id
+        );
+    }
+    let batch = wire
+        .call(
+            "call_read_tools_batch",
+            json!({
+                "operations": [{"tool": "get_tmux_capabilities", "arguments": {}}],
+                "on_error": "stop"
+            }),
+        )
+        .await;
+    let batch = batch
+        .structured_content
+        .expect("the batched discovery report");
+    assert_eq!(batch["results"][0]["success"], true);
+    assert_eq!(
+        batch["results"][0]["result"]["structuredContent"],
+        structured
+    );
+    let frozen = wire
+        .client
+        .read_resource(ReadResourceRequestParams::new("tmux://capabilities"))
+        .await
+        .expect("the frozen tool report");
+    let ResourceContents::TextResourceContents { text, .. } = &frozen.contents[0] else {
+        panic!("the policy report must be text");
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(text).expect("policy JSON"),
+        frozen_before
+    );
+    wire.shutdown().await;
+    server.shutdown().await.expect("configured client closes");
+    guard.shutdown().await.expect("the fixture closes");
 }

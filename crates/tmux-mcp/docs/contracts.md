@@ -125,6 +125,14 @@ reported as `validated-variable-name`.
 
 ## The capabilities resource
 
+`get_tmux_capabilities` is a read-only Inspect tool for fresh daemon release
+decisions. Its structured and JSON text results project the core registry's
+available, fallback and unavailable features and exact workaround intervals.
+An absent daemon has null `daemon_version` and empty decision lists. Query,
+parse, unsupported-version and closed-route failures remain tool errors.
+Cancellation stops the native read through the core transport. The result
+grants no authority to a later operation and does not change tool selection.
+
 `tmux://capabilities` is the server's one resource. It reports the
 startup-frozen effective surface, the selected socket, socket provenance,
 direct process reach, tmux effects, output classes, schema-keyed input

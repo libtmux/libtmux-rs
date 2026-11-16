@@ -33,7 +33,7 @@ include = [
 
 [dependencies]
 getrandom = "0.4"
-libtmux = { workspace = true, features = ["control-mode", "query", "serde"] }
+libtmux = { workspace = true, features = ["control-mode", "query", "schema", "serde"] }
 regex = "1.13"
 rmcp = { version = "3.9", features = ["server", "macros", "transport-io"] }
 schemars.workspace = true
@@ -45,6 +45,7 @@ tokio-util = "0.7"
 [dev-dependencies]
 jsonschema.workspace = true
 libtmux = { workspace = true, features = ["control-mode", "query", "serde", "test-support"] }
+tempfile.workspace = true
 rmcp = { version = "3.9", features = ["server", "client", "macros", "transport-io"] }
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
 

@@ -3,7 +3,7 @@
 What this crate needed to be usable by an agent rather than merely to exercise
 `libtmux`. Each decision below was settled by running the alternatives against
 real tmux, not by reasoning about them. Names and surface decisions reflect the
-current 45-tool capability contract; rejected prototypes remain where their
+current capability contract; rejected prototypes remain where their
 measurements are useful.
 
 ## Completion signalling
@@ -366,7 +366,7 @@ a requested edge or direction without accepting a raw tmux format.
 exit status and bounded output in the same call. Background job handles,
 `job_status`, and `forget_job` were prototyped, but they created authority that
 outlived the call and a second retained-output lifecycle. They are not part of
-the 45-tool surface.
+the tool surface.
 
 MCP can still run unrelated calls concurrently while a command waits. A caller
 that reaches its deadline gets an honest incomplete outcome rather than an

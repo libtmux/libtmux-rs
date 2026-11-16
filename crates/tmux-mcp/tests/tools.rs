@@ -12,6 +12,30 @@ mod support;
 use support::{args, bare_tools, json, prompt_ready};
 
 #[tokio::test]
+async fn pre_cancelled_capability_discovery_reports_cancellation_before_native_work() {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory =
+        tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("an owned fixture directory");
+    let server = libtmux::Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(directory.path().join("absent-tmux"))
+        .build()
+        .expect("a configured client");
+    let tools = bare_tools(&server);
+    let cancelled = tokio_util::sync::CancellationToken::new();
+    cancelled.cancel();
+    let error = tools
+        .daemon_capabilities(cancelled)
+        .await
+        .map(|_| ())
+        .expect_err("the cancelled read")
+        .into_error_data();
+    assert_eq!(error.data.expect("classification")["kind"], "cancelled");
+    assert!(!directory.path().join("s").exists());
+    server.shutdown().await.expect("the unused client closes");
+}
+
+#[tokio::test]
 async fn listings_report_the_live_hierarchy() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = bare_tools(guard.server());
