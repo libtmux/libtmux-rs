@@ -23,6 +23,12 @@ which a published crate cannot link by a relative path.
   definitions support lookup and iteration; reports preserve native mutation
   admission and distinguish unavailable features from library fallbacks. (#158)
 
+### Fixed
+
+- `Server::daemon_capabilities` uses a native `list-commands` query, so
+  configured `run-shell` and `if-shell` aliases cannot intercept discovery.
+  The daemon must leave `list-commands` unaliased.
+
 ### Changed
 
 - **Behaviour change.** `Server::save_buffer` creates a missing file with mode
