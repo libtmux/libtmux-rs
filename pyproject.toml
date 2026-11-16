@@ -43,6 +43,7 @@ pythonpath = [
   "scripts/tmux-format-compat",
   "scripts/tmux-format-compat/tests",
   "scripts/fixture-root",
+  "scripts/fuzz-run",
   "scripts/package-binary",
   "scripts/release-crate",
 ]
@@ -91,6 +92,7 @@ extra-paths = [
   "scripts/tmux-format-compat",
   "scripts/tmux-format-compat/tests",
   "scripts/fixture-root",
+  "scripts/fuzz-run",
   "scripts/package-binary",
   "scripts/release-crate",
 ]
