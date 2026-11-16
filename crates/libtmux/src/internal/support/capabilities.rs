@@ -20,55 +20,14 @@
 )]
 
 use crate::since;
+use crate::{
+    CapabilityDefinition as Capability, CapabilityHandling as Handling,
+    WorkaroundDefinition as Workaround,
+};
 use crate::{ReleaseSuffix, ReleaseVersion};
-
-/// What libtmux does where a capability is missing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Handling {
-    /// Return a typed error before anything runs.
-    Refuse,
-    /// Take another path that gives a close answer.
-    Fallback,
-}
-
-impl Handling {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Refuse => "refuse",
-            Self::Fallback => "fallback",
-        }
-    }
-}
 
 /// A tmux command and the flags of it a capability depends on.
 pub(crate) type Command = (&'static str, &'static [&'static str]);
-
-/// A feature that exists from one release on.
-pub(crate) struct Capability {
-    /// Stable kebab-case id shared across the libtmux ports.
-    pub(crate) id: &'static str,
-    pub(crate) name: &'static str,
-    pub(crate) summary: &'static str,
-    pub(crate) since: ReleaseVersion,
-    pub(crate) handling: Handling,
-    /// The public error a refusal returns.
-    pub(crate) error: &'static str,
-    /// Public API names, written as the generated API reference spells them.
-    pub(crate) apis: &'static [&'static str],
-    pub(crate) commands: &'static [Command],
-}
-
-/// A defect in exact releases that libtmux refuses.
-pub(crate) struct Workaround {
-    pub(crate) id: &'static str,
-    pub(crate) name: &'static str,
-    pub(crate) summary: &'static str,
-    /// First affected release up to, not including, the first fixed one.
-    pub(crate) broken_in: ReleaseVersion,
-    pub(crate) fixed_in: ReleaseVersion,
-    pub(crate) apis: &'static [&'static str],
-    pub(crate) commands: &'static [Command],
-}
 
 /// Exactly tmux 3.7 gets `break-pane` and the characters in names wrong; 3.7a
 /// fixes both.

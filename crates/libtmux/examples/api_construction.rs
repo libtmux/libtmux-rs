@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::time::Duration;
 
-use libtmux::{NewSessionOptions, Server};
+use libtmux::{CapabilitySupport, NewSessionOptions, Server};
 
 type ExampleError = Box<dyn Error>;
 
@@ -18,6 +18,10 @@ fn check(condition: bool, message: &str) -> Result<(), ExampleError> {
 async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
     check(!server.is_alive().await, "construction started a daemon")?;
     check(
+        server.daemon_capabilities().await?.is_none(),
+        "discovery reported an absent daemon as available",
+    )?;
+    check(
         server.config_file() == Some(std::path::Path::new("/dev/null")),
         "wrong config path",
     )?;
@@ -29,6 +33,28 @@ async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
         "new_session did not start a daemon",
     )?;
     check(session.name().as_bytes() == b"work", "wrong session name")?;
+    let report = server
+        .daemon_capabilities()
+        .await?
+        .ok_or("the owned daemon disappeared")?;
+    let deletion = report
+        .feature("buffer-delete-named")
+        .ok_or("the feature is not in the registry")?;
+    server
+        .set_buffer(Some("capability-example"), "payload")
+        .await?;
+    if deletion.support == CapabilitySupport::Available {
+        server.delete_buffer("capability-example").await?;
+        check(
+            server.buffer("capability-example").await?.is_none(),
+            "named buffer deletion had no effect",
+        )?;
+    } else {
+        check(
+            server.buffer("capability-example").await? == Some(b"payload".to_vec()),
+            "the unavailable operation changed the buffer",
+        )?;
+    }
     println!("construction: private daemon started by new_session");
     Ok(())
 }

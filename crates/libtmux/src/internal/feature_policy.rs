@@ -146,10 +146,7 @@ pub(crate) fn refuse_interval(
     broken_in: ReleaseVersion,
     fixed_in: ReleaseVersion,
 ) -> Result<(), Error> {
-    if version
-        .behavior_release()
-        .is_some_and(|release| release >= broken_in && release < fixed_in)
-    {
+    if in_interval(version, broken_in, fixed_in) {
         return Err(Error::CapabilityDefective {
             capability,
             found: version.clone(),
@@ -158,6 +155,16 @@ pub(crate) fn refuse_interval(
         });
     }
     Ok(())
+}
+
+pub(crate) fn in_interval(
+    version: &TmuxVersion,
+    broken_in: ReleaseVersion,
+    fixed_in: ReleaseVersion,
+) -> bool {
+    version
+        .behavior_release()
+        .is_some_and(|release| release >= broken_in && release < fixed_in)
 }
 
 fn native(name: &[u8], full: &[u8], alias: &[u8], shortest: usize) -> bool {

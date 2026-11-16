@@ -34,7 +34,7 @@ def manifest():
 def test_records_whole_files_and_native_targets(root, manifest):
     result = CHECK.validate(root, manifest)
     assert len(result["examples"]) == 7
-    assert sum(len(item["targets"]) for item in result["examples"]) == 31
+    assert sum(len(item["targets"]) for item in result["examples"]) == 35
     for example in result["examples"]:
         assert [item["name"] for item in example["files"]] == [
             "Cargo.toml",

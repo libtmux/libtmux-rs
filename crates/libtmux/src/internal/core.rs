@@ -642,6 +642,18 @@ impl Core {
         .await
     }
 
+    pub(crate) async fn daemon_capabilities(
+        &self,
+    ) -> Result<Option<crate::DaemonCapabilities>, Error> {
+        crate::internal::support::versions::discover_daemon_version(
+            &self.executor,
+            &self.configuration,
+            self.next_request_id(),
+        )
+        .await
+        .map(|version| version.map(crate::DaemonCapabilities::from_tmux_version))
+    }
+
     pub(crate) async fn endpoint_version(&self) -> Result<TmuxVersion, Error> {
         #[cfg(test)]
         if !self.check_versions {

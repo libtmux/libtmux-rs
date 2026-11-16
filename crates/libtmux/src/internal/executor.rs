@@ -158,4 +158,9 @@ pub(crate) trait Executor: Send + Sync + 'static {
     fn renders_control_line(&self) -> bool {
         false
     }
+
+    #[cfg(feature = "control-mode")]
+    fn connected_version(&self) -> Option<&crate::TmuxVersion> {
+        None
+    }
 }

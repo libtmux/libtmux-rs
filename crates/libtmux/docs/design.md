@@ -165,6 +165,13 @@ binary, and ordinary format catalogs follow the checked daemon. The catalog
 keeps 3.2a as its recorded baseline, so introduction floors at or below the
 supported minimum are history rather than live gates.
 
+`Server::daemon_capabilities` freshly describes an existing daemon. A cold
+endpoint returns `None` without an executable fallback or a startup. Discovery
+never updates the version cache, so it cannot grant a stale handle mutation
+authority after replacement. A control route first checks liveness with a
+hook-free `if-shell -F 0` round trip, then reads its sender's immutable
+acquisition version. It never reconnects through the configured socket.
+
 Undated `master` reports remain available diagnostically and cannot pass the
 version check. Creating executable reports may use `tmux` or its exact
 captured basename; controlled daemon metadata requires the literal `tmux`
@@ -859,13 +866,13 @@ loud.
 
 ### Capabilities and future engines
 
-The first `EngineCapabilities` is an immutable wrapper around the exact
-detected tmux version. That is the only capability state consumed by the
-one-shot Foundation and the private version-gated format rendering. Transport
-bytes remain a `CommandResult` contract; original callback-byte recovery is a
-separate version-sensitive format concern. The version is reported by the
-configured executable and does not assert the build of a daemon already
-listening at the selected endpoint.
+`EngineCapabilities` describes the configured executable. `DaemonCapabilities`
+binds named feature and workaround decisions to an observed daemon version.
+Public definitions, discovery and native admission share the registry's floors,
+fallback handling and exact release intervals. Discovery is advisory; a later
+operation retains its own version fence. Transport bytes remain a
+`CommandResult` contract; original callback-byte recovery is a separate
+version-sensitive format concern.
 
 The `plan` feature exposes `Plan` and `Planner` for recording and dispatching
 work. Statement, Program, registry, approval, and retry policy APIs remain

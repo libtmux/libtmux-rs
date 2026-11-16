@@ -246,6 +246,8 @@ constant libtmux::since::NAMED_BUFFER_IDENTITY: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
 enum libtmux::AccessMode
 enum libtmux::Availability<T>
+enum libtmux::CapabilityHandling
+enum libtmux::CapabilitySupport
 enum libtmux::ChannelWait
 enum libtmux::Chooser
 enum libtmux::ControlModeErrorKind
@@ -305,6 +307,11 @@ function libtmux::AccessRule::principal: const fn(&self) -> libtmux::Principal
 function libtmux::Availability::as_ref: const fn(&self) -> libtmux::Availability<&T>
 function libtmux::Availability::available: fn(self) -> Option<T>
 function libtmux::Availability::is_available: const fn(&self) -> bool
+function libtmux::CapabilityDefinition::all: const fn() -> &'static [&'static Self]
+function libtmux::CapabilityDefinition::find: fn(id: &str) -> Option<&'static Self>
+function libtmux::CapabilityDefinition::support: fn(&self, version: &libtmux::TmuxVersion) -> libtmux::CapabilitySupport
+function libtmux::CapabilityHandling::as_str: const fn(self) -> &'static str
+function libtmux::CapabilitySupport::as_str: const fn(self) -> &'static str
 function libtmux::CaptureOptions::end: const fn(self, line: i32) -> Self
 function libtmux::CaptureOptions::escape_sequences: const fn(self) -> Self
 function libtmux::CaptureOptions::history: const fn() -> Self
@@ -367,6 +374,11 @@ function libtmux::ControlLimits::block_bytes: const fn(self) -> usize
 function libtmux::ControlLimits::line_bytes: const fn(self) -> usize
 function libtmux::ControlLimits::max_block_bytes: const fn(self, bytes: usize) -> Self
 function libtmux::ControlLimits::max_line_bytes: const fn(self, bytes: usize) -> Self
+function libtmux::DaemonCapabilities::feature: fn(&self, id: &str) -> Option<libtmux::CapabilityStatus>
+function libtmux::DaemonCapabilities::features: fn(&self) -> impl ExactSizeIterator<Item = libtmux::CapabilityStatus> + '_
+function libtmux::DaemonCapabilities::tmux_version: const fn(&self) -> &libtmux::TmuxVersion
+function libtmux::DaemonCapabilities::workaround: fn(&self, id: &str) -> Option<libtmux::WorkaroundStatus>
+function libtmux::DaemonCapabilities::workarounds: fn(&self) -> impl ExactSizeIterator<Item = libtmux::WorkaroundStatus> + '_
 function libtmux::DispatchLimits::acquire_timeout: const fn(self, timeout: Option<Duration>) -> Self
 function libtmux::DispatchLimits::in_flight: const fn(self) -> usize
 function libtmux::DispatchLimits::max_in_flight: const fn(self, permits: usize) -> Self
@@ -525,6 +537,7 @@ function libtmux::Server::cmd: async fn(&self, command: libtmux::Command) -> Res
 function libtmux::Server::colors: fn(&self) -> Option<u16>
 function libtmux::Server::command_prompt: async fn(&self, client: Option<&libtmux::Client>, prompt: Option<&str>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::config_file: fn(&self) -> Option<&Path>
+function libtmux::Server::daemon_capabilities: async fn(&self) -> Result<Option<libtmux::DaemonCapabilities>, libtmux::Error>
 function libtmux::Server::daemon_version: async fn(&self) -> Result<libtmux::TmuxVersion, libtmux::Error>
 function libtmux::Server::default_timeout: fn(&self) -> Duration
 function libtmux::Server::delete_buffer: async fn(&self, name: impl AsRef<[u8]>) -> Result<(), libtmux::Error>
@@ -754,6 +767,9 @@ function libtmux::Window::unset_hook: async fn(&self, name: &str) -> Result<(), 
 function libtmux::Window::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Window::width: fn(&self) -> u32
 function libtmux::Window::with_pane: async fn<T, E>(&self, options: impl Into<libtmux::SplitOptions>, operation: impl AsyncFnOnce(&libtmux::Pane) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::WorkaroundDefinition::all: const fn() -> &'static [&'static Self]
+function libtmux::WorkaroundDefinition::find: fn(id: &str) -> Option<&'static Self>
+function libtmux::WorkaroundDefinition::is_active: fn(&self, version: &libtmux::TmuxVersion) -> bool
 function libtmux::blocking::Runtime::new: fn() -> Result<Self, libtmux::Error>
 function libtmux::blocking::Runtime::run: fn<F: Future>(&self, future: F) -> <F as core::future::future::Future>::Output
 function libtmux::blocking::Runtime::try_run: fn<F: Future>(&self, future: F) -> Result<<F as core::future::future::Future>::Output, libtmux::Error>
@@ -1015,6 +1031,10 @@ impl AsRef<str> for libtmux::SessionId
 impl AsRef<str> for libtmux::WindowId
 impl Clone for libtmux::AccessMode
 impl Clone for libtmux::AccessRule
+impl Clone for libtmux::CapabilityDefinition
+impl Clone for libtmux::CapabilityHandling
+impl Clone for libtmux::CapabilityStatus
+impl Clone for libtmux::CapabilitySupport
 impl Clone for libtmux::CaptureOptions
 impl Clone for libtmux::CapturedLine
 impl Clone for libtmux::ChannelWait
@@ -1026,6 +1046,7 @@ impl Clone for libtmux::CommandSummary
 impl Clone for libtmux::ControlClientLimits
 impl Clone for libtmux::ControlLimits
 impl Clone for libtmux::ControlModeErrorKind
+impl Clone for libtmux::DaemonCapabilities
 impl Clone for libtmux::DispatchLimits
 impl Clone for libtmux::EngineCapabilities
 impl Clone for libtmux::EnvironmentEntry
@@ -1083,6 +1104,8 @@ impl Clone for libtmux::WindowId
 impl Clone for libtmux::WindowPlacement
 impl Clone for libtmux::WindowTarget
 impl Clone for libtmux::WindowTree
+impl Clone for libtmux::WorkaroundDefinition
+impl Clone for libtmux::WorkaroundStatus
 impl Clone for libtmux::control::BlockResult
 impl Clone for libtmux::control::ControlSender
 impl Clone for libtmux::control::Event
@@ -1133,6 +1156,10 @@ impl Clone for libtmux::test::DaemonState
 impl Clone for libtmux::test::RetryTimeout
 impl Clone for libtmux::test::TestServerErrorKind
 impl Copy for libtmux::AccessMode
+impl Copy for libtmux::CapabilityDefinition
+impl Copy for libtmux::CapabilityHandling
+impl Copy for libtmux::CapabilityStatus
+impl Copy for libtmux::CapabilitySupport
 impl Copy for libtmux::CaptureOptions
 impl Copy for libtmux::ChannelWait
 impl Copy for libtmux::Chooser
@@ -1169,6 +1196,8 @@ impl Copy for libtmux::ServerGoneKind
 impl Copy for libtmux::SessionNameError
 impl Copy for libtmux::SplitDirection
 impl Copy for libtmux::WindowPlacement
+impl Copy for libtmux::WorkaroundDefinition
+impl Copy for libtmux::WorkaroundStatus
 impl Copy for libtmux::plan::Attribution
 impl Copy for libtmux::plan::Effects
 impl Copy for libtmux::plan::OperationKind
@@ -1191,6 +1220,10 @@ impl Copy for libtmux::test::RetryTimeout
 impl Copy for libtmux::test::TestServerErrorKind
 impl Debug for libtmux::AccessMode
 impl Debug for libtmux::AccessRule
+impl Debug for libtmux::CapabilityDefinition
+impl Debug for libtmux::CapabilityHandling
+impl Debug for libtmux::CapabilityStatus
+impl Debug for libtmux::CapabilitySupport
 impl Debug for libtmux::CaptureOptions
 impl Debug for libtmux::CapturedLine
 impl Debug for libtmux::ChannelWait
@@ -1203,6 +1236,7 @@ impl Debug for libtmux::CommandSummary
 impl Debug for libtmux::ControlClientLimits
 impl Debug for libtmux::ControlLimits
 impl Debug for libtmux::ControlModeErrorKind
+impl Debug for libtmux::DaemonCapabilities
 impl Debug for libtmux::DispatchLimits
 impl Debug for libtmux::EngineCapabilities
 impl Debug for libtmux::EnvironmentEntry
@@ -1264,6 +1298,8 @@ impl Debug for libtmux::WindowPlacement
 impl Debug for libtmux::WindowTarget
 impl Debug for libtmux::WindowTree
 impl Debug for libtmux::WindowTreeFields
+impl Debug for libtmux::WorkaroundDefinition
+impl Debug for libtmux::WorkaroundStatus
 impl Debug for libtmux::blocking::Runtime
 impl Debug for libtmux::control::BlockResult
 impl Debug for libtmux::control::ControlEvents
@@ -1360,6 +1396,10 @@ impl Drop for libtmux::blocking::Runtime
 impl Drop for libtmux::test::TestServer
 impl Eq for libtmux::AccessMode
 impl Eq for libtmux::AccessRule
+impl Eq for libtmux::CapabilityDefinition
+impl Eq for libtmux::CapabilityHandling
+impl Eq for libtmux::CapabilityStatus
+impl Eq for libtmux::CapabilitySupport
 impl Eq for libtmux::CaptureOptions
 impl Eq for libtmux::CapturedLine
 impl Eq for libtmux::ChannelWait
@@ -1369,6 +1409,7 @@ impl Eq for libtmux::CommandSummary
 impl Eq for libtmux::ControlClientLimits
 impl Eq for libtmux::ControlLimits
 impl Eq for libtmux::ControlModeErrorKind
+impl Eq for libtmux::DaemonCapabilities
 impl Eq for libtmux::DispatchLimits
 impl Eq for libtmux::EngineCapabilities
 impl Eq for libtmux::EnvironmentEntry
@@ -1421,6 +1462,8 @@ impl Eq for libtmux::Window
 impl Eq for libtmux::WindowId
 impl Eq for libtmux::WindowPlacement
 impl Eq for libtmux::WindowTarget
+impl Eq for libtmux::WorkaroundDefinition
+impl Eq for libtmux::WorkaroundStatus
 impl Eq for libtmux::control::BlockResult
 impl Eq for libtmux::control::Event
 impl Eq for libtmux::control::Subscription
@@ -1553,6 +1596,8 @@ impl Hash for libtmux::Window
 impl Hash for libtmux::WindowId
 impl Hash for libtmux::WindowPlacement
 impl Hash for libtmux::WindowTarget
+impl JsonSchema for libtmux::CapabilityHandling
+impl JsonSchema for libtmux::CapabilitySupport
 impl JsonSchema for libtmux::plan::CapturePane
 impl JsonSchema for libtmux::plan::KillPane
 impl JsonSchema for libtmux::plan::KillWindow
@@ -1588,6 +1633,10 @@ impl Ord for libtmux::WindowTarget
 impl Ord for libtmux::plan::Safety
 impl PartialEq for libtmux::AccessMode
 impl PartialEq for libtmux::AccessRule
+impl PartialEq for libtmux::CapabilityDefinition
+impl PartialEq for libtmux::CapabilityHandling
+impl PartialEq for libtmux::CapabilityStatus
+impl PartialEq for libtmux::CapabilitySupport
 impl PartialEq for libtmux::CaptureOptions
 impl PartialEq for libtmux::CapturedLine
 impl PartialEq for libtmux::ChannelWait
@@ -1597,6 +1646,7 @@ impl PartialEq for libtmux::CommandSummary
 impl PartialEq for libtmux::ControlClientLimits
 impl PartialEq for libtmux::ControlLimits
 impl PartialEq for libtmux::ControlModeErrorKind
+impl PartialEq for libtmux::DaemonCapabilities
 impl PartialEq for libtmux::DispatchLimits
 impl PartialEq for libtmux::EngineCapabilities
 impl PartialEq for libtmux::EnvironmentEntry
@@ -1649,6 +1699,8 @@ impl PartialEq for libtmux::Window
 impl PartialEq for libtmux::WindowId
 impl PartialEq for libtmux::WindowPlacement
 impl PartialEq for libtmux::WindowTarget
+impl PartialEq for libtmux::WorkaroundDefinition
+impl PartialEq for libtmux::WorkaroundStatus
 impl PartialEq for libtmux::control::BlockResult
 impl PartialEq for libtmux::control::Event
 impl PartialEq for libtmux::control::Subscription
@@ -1695,6 +1747,8 @@ impl PartialOrd for libtmux::TmuxVersion
 impl PartialOrd for libtmux::WindowId
 impl PartialOrd for libtmux::WindowTarget
 impl PartialOrd for libtmux::plan::Safety
+impl Serialize for libtmux::CapabilityHandling
+impl Serialize for libtmux::CapabilitySupport
 impl Serialize for libtmux::plan::CapturePane
 impl Serialize for libtmux::plan::Effects
 impl Serialize for libtmux::plan::KillPane
@@ -1787,6 +1841,8 @@ impl libtmux::query::ReadField<libtmux::Window> for libtmux::query::TextField<li
 impl libtmux::query::ReadField<libtmux::Window> for libtmux::query::TextField<libtmux::Window, libtmux::WindowId>
 impl<'de, T: libtmux::query::Filterable> Deserialize<'de> for libtmux::query::FilterExpr<T>
 impl<'de, T> Deserialize<'de> for libtmux::plan::Slot<T>
+impl<'de> Deserialize<'de> for libtmux::CapabilityHandling
+impl<'de> Deserialize<'de> for libtmux::CapabilitySupport
 impl<'de> Deserialize<'de> for libtmux::plan::CapturePane
 impl<'de> Deserialize<'de> for libtmux::plan::Effects
 impl<'de> Deserialize<'de> for libtmux::plan::KillPane
@@ -1883,6 +1939,8 @@ impl<Target> Debug for libtmux::PaneFields<Target>
 impl<Target> Debug for libtmux::SessionFields<Target>
 impl<Target> Debug for libtmux::WindowFields<Target>
 struct libtmux::AccessRule
+struct libtmux::CapabilityDefinition
+struct libtmux::CapabilityStatus
 struct libtmux::CaptureOptions
 struct libtmux::CapturedLine
 struct libtmux::Client
@@ -1893,6 +1951,7 @@ struct libtmux::CommandResult
 struct libtmux::CommandSummary
 struct libtmux::ControlClientLimits
 struct libtmux::ControlLimits
+struct libtmux::DaemonCapabilities
 struct libtmux::DispatchLimits
 struct libtmux::EngineCapabilities
 struct libtmux::IdParseError
@@ -1929,6 +1988,8 @@ struct libtmux::WindowFields<Target>
 struct libtmux::WindowId
 struct libtmux::WindowTree
 struct libtmux::WindowTreeFields
+struct libtmux::WorkaroundDefinition
+struct libtmux::WorkaroundStatus
 struct libtmux::blocking::Runtime
 struct libtmux::control::BlockResult
 struct libtmux::control::ControlEvents
@@ -1974,6 +2035,16 @@ struct libtmux::test::TestServer
 struct libtmux::test::TestServerBuilder
 struct libtmux::test::TestServerError
 struct_field libtmux::Availability::Available::0: T
+struct_field libtmux::CapabilityDefinition::apis: &'static [&'static str]
+struct_field libtmux::CapabilityDefinition::commands: &'static [(&'static str, &'static [&'static str])]
+struct_field libtmux::CapabilityDefinition::error: &'static str
+struct_field libtmux::CapabilityDefinition::handling: libtmux::CapabilityHandling
+struct_field libtmux::CapabilityDefinition::id: &'static str
+struct_field libtmux::CapabilityDefinition::name: &'static str
+struct_field libtmux::CapabilityDefinition::since: libtmux::ReleaseVersion
+struct_field libtmux::CapabilityDefinition::summary: &'static str
+struct_field libtmux::CapabilityStatus::definition: &'static libtmux::CapabilityDefinition
+struct_field libtmux::CapabilityStatus::support: libtmux::CapabilitySupport
 struct_field libtmux::CapturedLine::starts_output: bool
 struct_field libtmux::CapturedLine::starts_prompt: bool
 struct_field libtmux::CapturedLine::text: libtmux::TmuxText
@@ -2208,6 +2279,15 @@ struct_field libtmux::WindowTree::panes: Vec<libtmux::Pane>
 struct_field libtmux::WindowTree::window: libtmux::Window
 struct_field libtmux::WindowTreeFields::panes: libtmux::query::ManyRelation<libtmux::WindowTree, libtmux::Pane>
 struct_field libtmux::WindowTreeFields::window: libtmux::WindowFields<libtmux::WindowTree>
+struct_field libtmux::WorkaroundDefinition::apis: &'static [&'static str]
+struct_field libtmux::WorkaroundDefinition::broken_in: libtmux::ReleaseVersion
+struct_field libtmux::WorkaroundDefinition::commands: &'static [(&'static str, &'static [&'static str])]
+struct_field libtmux::WorkaroundDefinition::fixed_in: libtmux::ReleaseVersion
+struct_field libtmux::WorkaroundDefinition::id: &'static str
+struct_field libtmux::WorkaroundDefinition::name: &'static str
+struct_field libtmux::WorkaroundDefinition::summary: &'static str
+struct_field libtmux::WorkaroundStatus::active: bool
+struct_field libtmux::WorkaroundStatus::definition: &'static libtmux::WorkaroundDefinition
 struct_field libtmux::control::Event::ClientDetached::client: libtmux::TmuxText
 struct_field libtmux::control::Event::ClientSessionChanged::client: libtmux::TmuxText
 struct_field libtmux::control::Event::ClientSessionChanged::name: libtmux::TmuxText
@@ -2306,6 +2386,11 @@ variant libtmux::Availability::Absent
 variant libtmux::Availability::Available
 variant libtmux::Availability::Unproven
 variant libtmux::Availability::Unsupported
+variant libtmux::CapabilityHandling::Fallback
+variant libtmux::CapabilityHandling::Refuse
+variant libtmux::CapabilitySupport::Available
+variant libtmux::CapabilitySupport::Fallback
+variant libtmux::CapabilitySupport::Unavailable
 variant libtmux::ChannelWait::Signalled
 variant libtmux::ChannelWait::TimedOut
 variant libtmux::Chooser::Buffer

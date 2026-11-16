@@ -230,6 +230,48 @@ pub(crate) async fn endpoint_version(
     }
 }
 
+pub(crate) async fn discover_daemon_version(
+    executor: &Arc<dyn Executor>,
+    configuration: &CoreConfiguration,
+    request_id: RequestId,
+) -> Result<Option<TmuxVersion>, Error> {
+    #[cfg(feature = "control-mode")]
+    if let Some(version) = executor.connected_version() {
+        // The version belongs to this accepted connection, not the shared
+        // endpoint cache. A hook-free round trip refuses a closed route.
+        let command = Command::new("if-shell").arg("-F").arg("0").arg("");
+        let line = command.control_mode_line();
+        let request =
+            CommandRequest::with_global_argv(request_id, configuration.global_argv(), command)
+                .with_control_line(line);
+        let summary = request.summary().clone();
+        let result = within(
+            executor.execute(request),
+            Instant::now().checked_add(configuration.timeout()),
+            request_id,
+            &summary,
+            configuration.timeout(),
+            false,
+        )
+        .await?;
+        if !result.success() {
+            return Err(Error::version_probe_failed(
+                request_id.get(),
+                result.command().clone(),
+                result.exit_code(),
+                result.signal(),
+            ));
+        }
+        version.ensure_supported()?;
+        return Ok(Some(version.clone()));
+    }
+    let version = probe_live_version(executor, configuration, request_id).await?;
+    if let Some(version) = &version {
+        version.ensure_supported()?;
+    }
+    Ok(version)
+}
+
 async fn live_version(
     executor: &Arc<dyn Executor>,
     configuration: &CoreConfiguration,
@@ -247,6 +289,14 @@ async fn live_version(
             ))
         });
     }
+    probe_live_version(executor, configuration, request_id).await
+}
+
+async fn probe_live_version(
+    executor: &Arc<dyn Executor>,
+    configuration: &CoreConfiguration,
+    request_id: RequestId,
+) -> Result<Option<TmuxVersion>, Error> {
     let probe = crate::layout::VersionProbe::new();
     let command = probe.command();
     #[cfg(feature = "control-mode")]

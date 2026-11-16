@@ -1,6 +1,299 @@
-//! Immutable capabilities shared by handles for one configured tmux executable.
+//! Executable diagnostics and daemon-bound feature decisions.
 
-use crate::TmuxVersion;
+use crate::{ReleaseVersion, TmuxVersion};
+
+/// What libtmux does below a feature's required release.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{CapabilityDefinition, CapabilityHandling};
+/// let feature = CapabilityDefinition::find("control-pane-off").expect("a known feature");
+/// assert_eq!(feature.handling, CapabilityHandling::Fallback);
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum CapabilityHandling {
+    /// Refuse the operation before dispatch.
+    Refuse,
+    /// Use the alternative described by the feature's summary.
+    Fallback,
+}
+
+impl CapabilityHandling {
+    /// Return the manifest spelling of this decision.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Refuse => "refuse",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
+/// How a daemon version can perform a named feature.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{CapabilityDefinition, CapabilitySupport, TmuxVersion};
+/// let version = TmuxVersion::parse_output(b"tmux 3.3a\n")?;
+/// let feature = CapabilityDefinition::find("buffer-delete-named").expect("a known feature");
+/// assert_eq!(feature.support(&version), CapabilitySupport::Unavailable);
+/// # Ok::<(), libtmux::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum CapabilitySupport {
+    /// The daemon carries the required behaviour.
+    Available,
+    /// libtmux uses the alternative described by the feature's summary.
+    Fallback,
+    /// libtmux refuses the feature on this version.
+    Unavailable,
+}
+
+impl CapabilitySupport {
+    /// Return the machine-readable spelling of this decision.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Fallback => "fallback",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Immutable metadata for one version-gated libtmux feature.
+///
+/// The registry also supplies native command admission and the published
+/// capability manifest. It describes libtmux's behaviour, including fallbacks.
+///
+/// # Examples
+///
+/// ```
+/// let feature = libtmux::CapabilityDefinition::find("buffer-delete-named")
+///     .expect("a known feature");
+/// assert_eq!(feature.since.to_string(), "3.4");
+/// assert!(!feature.apis.is_empty());
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityDefinition {
+    /// Stable kebab-case feature identity.
+    pub id: &'static str,
+    /// Human-readable name.
+    pub name: &'static str,
+    /// Behaviour and any fallback or refusal limits.
+    pub summary: &'static str,
+    /// First release whose behaviour libtmux accepts for this feature.
+    pub since: ReleaseVersion,
+    /// What libtmux does below `since`.
+    pub handling: CapabilityHandling,
+    /// Public error reported when the feature is refused.
+    pub error: &'static str,
+    /// Public API names in the generated reference.
+    pub apis: &'static [&'static str],
+    /// Native command names and the flags the feature depends on.
+    pub commands: &'static [(&'static str, &'static [&'static str])],
+}
+
+impl CapabilityDefinition {
+    /// Return every definition in registry order, without contacting tmux.
+    #[must_use]
+    pub const fn all() -> &'static [&'static Self] {
+        crate::internal::support::capabilities::CAPABILITIES
+    }
+
+    /// Find a known feature; an unknown identity returns `None`.
+    #[must_use]
+    pub fn find(id: &str) -> Option<&'static Self> {
+        Self::all().iter().copied().find(|entry| entry.id == id)
+    }
+
+    /// Apply native admission's release rule to a version.
+    ///
+    /// This does not contact a daemon. Use [`crate::Server::daemon_capabilities`]
+    /// to query an existing daemon and enforce the supported-daemon minimum.
+    #[must_use]
+    pub fn support(&self, version: &TmuxVersion) -> CapabilitySupport {
+        if version.has_behavior(&self.since) {
+            CapabilitySupport::Available
+        } else {
+            match self.handling {
+                CapabilityHandling::Refuse => CapabilitySupport::Unavailable,
+                CapabilityHandling::Fallback => CapabilitySupport::Fallback,
+            }
+        }
+    }
+}
+
+/// Immutable metadata for a defect in a bounded release interval.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{TmuxVersion, WorkaroundDefinition};
+/// let workaround = WorkaroundDefinition::find("break-pane-misnames-windows")
+///     .expect("a known workaround");
+/// assert!(workaround.is_active(&TmuxVersion::parse_output(b"tmux 3.7\n")?));
+/// assert!(!workaround.is_active(&TmuxVersion::parse_output(b"tmux 3.7a\n")?));
+/// # Ok::<(), libtmux::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkaroundDefinition {
+    /// Stable kebab-case workaround identity.
+    pub id: &'static str,
+    /// Human-readable name.
+    pub name: &'static str,
+    /// Defect and libtmux's handling of it.
+    pub summary: &'static str,
+    /// First affected release, inclusive.
+    pub broken_in: ReleaseVersion,
+    /// First fixed release, exclusive.
+    pub fixed_in: ReleaseVersion,
+    /// Public API names in the generated reference.
+    pub apis: &'static [&'static str],
+    /// Native command names and affected flags.
+    pub commands: &'static [(&'static str, &'static [&'static str])],
+}
+
+impl WorkaroundDefinition {
+    /// Return every workaround in registry order, without contacting tmux.
+    #[must_use]
+    pub const fn all() -> &'static [&'static Self] {
+        crate::internal::support::capabilities::WORKAROUNDS
+    }
+
+    /// Find a known workaround; an unknown identity returns `None`.
+    #[must_use]
+    pub fn find(id: &str) -> Option<&'static Self> {
+        Self::all().iter().copied().find(|entry| entry.id == id)
+    }
+
+    /// Apply the same exact release interval as native admission.
+    #[must_use]
+    pub fn is_active(&self, version: &TmuxVersion) -> bool {
+        crate::internal::feature_policy::in_interval(version, self.broken_in, self.fixed_in)
+    }
+}
+
+/// A named feature's decision for the daemon observed by a report.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// if let Some(report) = server.daemon_capabilities().await? {
+///     for feature in report.features() {
+///         println!("{}: {}", feature.definition.id, feature.support.as_str());
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityStatus {
+    /// The canonical registry definition.
+    pub definition: &'static CapabilityDefinition,
+    /// The decision for the observed daemon version.
+    pub support: CapabilitySupport,
+}
+
+/// A workaround's applicability to the daemon observed by a report.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// if let Some(report) = server.daemon_capabilities().await? {
+///     for workaround in report.workarounds().filter(|entry| entry.active) {
+///         println!("{}", workaround.definition.summary);
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkaroundStatus {
+    /// The canonical registry definition.
+    pub definition: &'static WorkaroundDefinition,
+    /// Whether the observed daemon falls in the affected interval.
+    pub active: bool,
+}
+
+/// Immutable feature decisions for an observed, supported tmux daemon.
+///
+/// A report is advisory: the daemon may be replaced after discovery. Later
+/// operations still enforce their own admission and version fence.
+/// Feature decisions concern release rules; APIs retain their connection and
+/// resource preconditions.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// if let Some(report) = server.daemon_capabilities().await? {
+///     println!("tmux {}", report.tmux_version().raw());
+///     if let Some(feature) = report.feature("buffer-delete-named") {
+///         println!("{}", feature.support.as_str());
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DaemonCapabilities {
+    tmux_version: TmuxVersion,
+}
+
+impl DaemonCapabilities {
+    pub(crate) fn from_tmux_version(tmux_version: TmuxVersion) -> Self {
+        Self { tmux_version }
+    }
+
+    /// Return the observed daemon version, without an executable fallback.
+    #[must_use]
+    pub const fn tmux_version(&self) -> &TmuxVersion {
+        &self.tmux_version
+    }
+
+    /// Return each feature decision in canonical registry order.
+    pub fn features(&self) -> impl ExactSizeIterator<Item = CapabilityStatus> + '_ {
+        CapabilityDefinition::all()
+            .iter()
+            .map(|definition| CapabilityStatus {
+                definition,
+                support: definition.support(&self.tmux_version),
+            })
+    }
+
+    /// Find a feature decision; unknown identities return `None`.
+    #[must_use]
+    pub fn feature(&self, id: &str) -> Option<CapabilityStatus> {
+        self.features().find(|entry| entry.definition.id == id)
+    }
+
+    /// Return each workaround's applicability in canonical registry order.
+    pub fn workarounds(&self) -> impl ExactSizeIterator<Item = WorkaroundStatus> + '_ {
+        WorkaroundDefinition::all()
+            .iter()
+            .map(|definition| WorkaroundStatus {
+                definition,
+                active: definition.is_active(&self.tmux_version),
+            })
+    }
+
+    /// Find a workaround decision; unknown identities return `None`.
+    #[must_use]
+    pub fn workaround(&self, id: &str) -> Option<WorkaroundStatus> {
+        self.workarounds().find(|entry| entry.definition.id == id)
+    }
+}
 
 /// Immutable capability state detected for one configured tmux executable.
 ///
