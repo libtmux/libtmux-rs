@@ -51,6 +51,20 @@ Five workspace packages; the four library/server crates are published:
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
 | `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
 
+`tools/mcp-swap` is for a maintainer who wants an agent CLI to run the
+checkout's `tmux-mcp`. Preview what it would change, then switch:
+
+```console
+$ cargo run --locked --package mcp-swap -- use --dry-run
+```
+
+```console
+$ cargo run --locked --package mcp-swap -- use --source debug
+```
+
+Its [README](../tools/mcp-swap/README.md) lists the other sources and
+`revert`. `just swap-test` runs its tests, and `just check` includes it.
+
 `tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
 the workspace's: it moves at its own pace, and `rmcp` and `darling` require a
 newer compiler than the libraries promise. `fuzz/` is excluded from the
