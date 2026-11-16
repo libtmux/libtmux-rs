@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import pathlib
 import re
-import unittest
 
 import ci_plan
+import pytest
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -79,112 +79,110 @@ def raw_apt_calls(doc: object, path: str) -> list[str]:
     return found
 
 
-class WorkflowTests(unittest.TestCase):
-    def test_the_compatibility_matrix_comes_from_the_plan(self) -> None:
-        compat = job_section(CI, "compat")
-        self.assertIn("include: ${{ fromJSON(needs.plan.outputs.lanes) }}", compat)
-        self.assertIn("runs-on: ${{ needs.plan.outputs.os }}", compat)
-        self.assertIsNone(
-            re.search(r"^\s+(?:lane|tmux-version|tag)s?:\s*\[", CI, re.MULTILINE),
-            "ci.yml lists tmux versions inline; they belong in .github/ci-matrix.txt",
-        )
-
-    def test_the_compatibility_job_runs_the_lane_the_plan_gave_it(self) -> None:
-        compat = job_section(CI, "compat")
-        self.assertIn("LIBTMUX_COMPAT_LANES: ${{ matrix.lane }}", compat)
-        self.assertIn("just compat", compat)
-
-    def test_the_periodic_jobs_run_when_the_plan_says_so(self) -> None:
-        for name in ci_plan.PERIODIC_JOBS:
-            with self.subTest(name):
-                section = job_section(CI, name)
-                self.assertIn("needs: plan", section)
-                self.assertIn("if: needs.plan.outputs.periodic == 'true'", section)
-
-    def test_inputs_reach_the_plan_only_through_the_environment(self) -> None:
-        for line in CI.splitlines():
-            if "${{ inputs." in line:
-                self.assertTrue(
-                    line.strip().startswith("INPUT_"),
-                    f"an input reaches the workflow outside an INPUT_ entry: {line.strip()}",
-                )
-
-    def test_the_weekly_schedule_stays_the_only_one(self) -> None:
-        self.assertEqual(len(re.findall(r"^\s+- cron:", CI, re.MULTILINE)), 1)
-
-    def test_a_dispatch_takes_the_documented_inputs(self) -> None:
-        _, _, after = CI.partition("  workflow_dispatch:\n    inputs:\n")
-        block = after.split("\n  # Scheduled weekly", 1)[0]
-        names = re.findall(r"^      ([a-z-]+):\s*$", block, re.MULTILINE)
-        self.assertEqual(names, ["scope", "tmux-ref", "rust-toolchain", "os", "tmate"])
-
-    def test_a_release_does_not_wait_on_the_narrowed_lanes(self) -> None:
-        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
-        self.assertNotIn("ci.yml", release)
-        self.assertNotIn("ci-matrix", release)
+def test_the_compatibility_matrix_comes_from_the_plan() -> None:
+    compat = job_section(CI, "compat")
+    assert "include: ${{ fromJSON(needs.plan.outputs.lanes) }}" in compat
+    assert "runs-on: ${{ needs.plan.outputs.os }}" in compat
+    assert re.search(r"^\s+(?:lane|tmux-version|tag)s?:\s*\[", CI, re.MULTILINE) is None, (
+        "ci.yml lists tmux versions inline; they belong in .github/ci-matrix.txt"
+    )
 
 
-class ConcurrencyTests(unittest.TestCase):
-    def test_a_dispatch_adds_its_run_id_to_the_group(self) -> None:
-        match = re.search(r"^concurrency:\n  group: (.+)$", CI, re.MULTILINE)
-        self.assertIsNotNone(match)
-        assert match is not None
-        self.assertIn("workflow_dispatch", match.group(1))
-        self.assertIn("github.run_id", match.group(1))
+def test_the_compatibility_job_runs_the_lane_the_plan_gave_it() -> None:
+    compat = job_section(CI, "compat")
+    assert "LIBTMUX_COMPAT_LANES: ${{ matrix.lane }}" in compat
+    assert "just compat" in compat
 
 
-class RequiredTests(unittest.TestCase):
-    def test_the_required_job_waits_for_every_other_job(self) -> None:
-        section = job_section(CI, "required")
-        needs = re.search(r"^    needs: \[([^\]]+)\]", section, re.MULTILINE)
-        self.assertIsNotNone(needs)
-        assert needs is not None
-        waits = sorted(entry.strip() for entry in needs.group(1).split(","))
-        others = sorted(name for name in job_ids(CI) if name != "required")
-        self.assertEqual(waits, others)
-        self.assertIn("if: ${{ always() }}", section)
-        self.assertIn("ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}", section)
+@pytest.mark.parametrize("name", ci_plan.PERIODIC_JOBS)
+def test_the_periodic_jobs_run_when_the_plan_says_so(name: str) -> None:
+    section = job_section(CI, name)
+    assert "needs: plan" in section
+    assert "if: needs.plan.outputs.periodic == 'true'" in section
 
 
-class TmateTests(unittest.TestCase):
-    def test_off_is_quoted_in_the_options_and_the_default(self) -> None:
-        # GitHub reads a bare `off` as false. A default that is not one of the
-        # options refuses every dispatch that sets nothing.
-        self.assertIn("options: ['off', before-tests, on-failure]", CI)
-        self.assertRegex(CI, r"(?m)^        default: ['\"]off['\"]$")
-
-    def test_tmate_is_pinned_limited_and_confined_to_the_compatibility_job(
-        self,
-    ) -> None:
-        uses = CI.count(TMATE)
-        self.assertGreater(uses, 0)
-        self.assertEqual(len(re.findall(TMATE + r"[0-9a-f]{40}\b", CI)), uses)
-        self.assertEqual(CI.count("limit-access-to-actor: true"), uses)
-        compat = job_section(CI, "compat")
-        self.assertEqual(compat.count(TMATE), uses)
-        self.assertIn("timeout-minutes:", compat)
-
-    def test_no_other_workflow_opens_a_session(self) -> None:
-        for path in sorted(WORKFLOWS.glob("*.yml")):
-            if path.name == "ci.yml":
-                continue
-            with self.subTest(path.name):
-                self.assertNotIn("action-tmate", path.read_text(encoding="utf-8"))
+def test_inputs_reach_the_plan_only_through_the_environment() -> None:
+    for line in CI.splitlines():
+        if "${{ inputs." in line:
+            assert line.strip().startswith("INPUT_"), (
+                f"an input reaches the workflow outside an INPUT_ entry: {line.strip()}"
+            )
 
 
-class AptTests(unittest.TestCase):
-    def test_no_step_calls_apt_without_the_wrapper(self) -> None:
-        paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(ACTIONS.glob("*/action.yml"))
-        self.assertIn(WORKFLOWS / "ci.yml", paths)
-        found = []
-        for path in paths:
-            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-            found += raw_apt_calls(doc, path.relative_to(ROOT).as_posix())
-        self.assertEqual(found, [])
+def test_the_weekly_schedule_stays_the_only_one() -> None:
+    assert len(re.findall(r"^\s+- cron:", CI, re.MULTILINE)) == 1
 
-    def test_a_raw_apt_get_is_named_with_its_fix(self) -> None:
-        doc = yaml.safe_load(
-            """
+
+def test_a_dispatch_takes_the_documented_inputs() -> None:
+    _, _, after = CI.partition("  workflow_dispatch:\n    inputs:\n")
+    block = after.split("\n  # Scheduled weekly", 1)[0]
+    names = re.findall(r"^      ([a-z-]+):\s*$", block, re.MULTILINE)
+    assert names == ["scope", "tmux-ref", "rust-toolchain", "os", "tmate"]
+
+
+def test_a_release_does_not_wait_on_the_narrowed_lanes() -> None:
+    release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    assert "ci.yml" not in release
+    assert "ci-matrix" not in release
+
+
+def test_a_dispatch_adds_its_run_id_to_the_group() -> None:
+    match = re.search(r"^concurrency:\n  group: (.+)$", CI, re.MULTILINE)
+    assert match is not None
+    assert "workflow_dispatch" in match.group(1)
+    assert "github.run_id" in match.group(1)
+
+
+def test_the_required_job_waits_for_every_other_job() -> None:
+    section = job_section(CI, "required")
+    needs = re.search(r"^    needs: \[([^\]]+)\]", section, re.MULTILINE)
+    assert needs is not None
+    waits = sorted(entry.strip() for entry in needs.group(1).split(","))
+    others = sorted(name for name in job_ids(CI) if name != "required")
+    assert waits == others
+    assert "if: ${{ always() }}" in section
+    assert "ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}" in section
+
+
+def test_off_is_quoted_in_the_options_and_the_default() -> None:
+    # GitHub reads a bare `off` as false. A default that is not one of the
+    # options refuses every dispatch that sets nothing.
+    assert "options: ['off', before-tests, on-failure]" in CI
+    assert re.search(r"(?m)^        default: ['\"]off['\"]$", CI)
+
+
+def test_tmate_is_pinned_limited_and_confined_to_the_compatibility_job() -> None:
+    uses = CI.count(TMATE)
+    assert uses > 0
+    assert len(re.findall(TMATE + r"[0-9a-f]{40}\b", CI)) == uses
+    assert CI.count("limit-access-to-actor: true") == uses
+    compat = job_section(CI, "compat")
+    assert compat.count(TMATE) == uses
+    assert "timeout-minutes:" in compat
+
+
+@pytest.mark.parametrize(
+    "path",
+    [path for path in sorted(WORKFLOWS.glob("*.yml")) if path.name != "ci.yml"],
+    ids=lambda path: path.name,
+)
+def test_no_other_workflow_opens_a_session(path: pathlib.Path) -> None:
+    assert "action-tmate" not in path.read_text(encoding="utf-8")
+
+
+def test_no_step_calls_apt_without_the_wrapper() -> None:
+    paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(ACTIONS.glob("*/action.yml"))
+    assert WORKFLOWS / "ci.yml" in paths
+    found = []
+    for path in paths:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        found += raw_apt_calls(doc, path.relative_to(ROOT).as_posix())
+    assert found == []
+
+
+def test_a_raw_apt_get_is_named_with_its_fix() -> None:
+    doc = yaml.safe_load(
+        """
 jobs:
   build:
     steps:
@@ -194,20 +192,18 @@ jobs:
           sudo apt-get update
           echo done
 """
+    )
+    assert raw_apt_calls(doc, "ci.yml") == [
+        (
+            "ci.yml: job build, step Install tmux runs `sudo apt-get update` "
+            "directly; use the shared libtmux/.github apt-get action"
         )
-        self.assertEqual(
-            raw_apt_calls(doc, "ci.yml"),
-            [
-                (
-                    "ci.yml: job build, step Install tmux runs `sudo apt-get update` "
-                    "directly; use the shared libtmux/.github apt-get action"
-                )
-            ],
-        )
+    ]
 
-    def test_the_shared_action_passes(self) -> None:
-        doc = yaml.safe_load(
-            """
+
+def test_the_shared_action_passes() -> None:
+    doc = yaml.safe_load(
+        """
 jobs:
   build:
     steps:
@@ -216,82 +212,83 @@ jobs:
           update: "true"
           args: install --yes tmux
 """
+    )
+    assert raw_apt_calls(doc, "ci.yml") == []
+
+
+def test_the_shared_actions_are_pinned_to_a_full_commit() -> None:
+    pattern = re.compile(r"uses:\s*(libtmux/\.github/\S+)@(\S+)")
+    found = [
+        (path.name, action, ref)
+        for path in sorted(WORKFLOWS.glob("*.yml"))
+        for action, ref in pattern.findall(path.read_text(encoding="utf-8"))
+    ]
+    assert found, "no workflow uses a shared action"
+    unpinned = [
+        f"{name}: {action}@{ref}"
+        for name, action, ref in found
+        if not re.fullmatch(r"[0-9a-f]{40}", ref)
+    ]
+    assert unpinned == []
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "apt update",
+        "sudo -E apt-get install -y tmux",
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tmux",
+        "test -x /usr/bin/tmux || sudo apt-get install -y tmux",
+    ],
+)
+def test_every_spelling_of_a_raw_call_is_caught(call: str) -> None:
+    action = {"runs": {"steps": [{"run": call}]}}
+    assert raw_apt_calls(action, "action.yml") == [
+        (
+            f"action.yml: step #1 runs `{call}` directly; "
+            "use the shared libtmux/.github apt-get action"
         )
-        self.assertEqual(raw_apt_calls(doc, "ci.yml"), [])
-
-    def test_the_shared_actions_are_pinned_to_a_full_commit(self) -> None:
-        pattern = re.compile(r"uses:\s*(libtmux/\.github/\S+)@(\S+)")
-        found = [
-            (path.name, action, ref)
-            for path in sorted(WORKFLOWS.glob("*.yml"))
-            for action, ref in pattern.findall(path.read_text(encoding="utf-8"))
-        ]
-        self.assertTrue(found, "no workflow uses a shared action")
-        for name, action, ref in found:
-            with self.subTest(f"{name}: {action}"):
-                self.assertRegex(ref, r"^[0-9a-f]{40}$")
-
-    def test_every_spelling_of_a_raw_call_is_caught(self) -> None:
-        for call in (
-            "apt update",
-            "sudo -E apt-get install -y tmux",
-            "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tmux",
-            "test -x /usr/bin/tmux || sudo apt-get install -y tmux",
-        ):
-            with self.subTest(call):
-                action = {"runs": {"steps": [{"run": call}]}}
-                self.assertEqual(
-                    raw_apt_calls(action, "action.yml"),
-                    [
-                        (
-                            f"action.yml: step #1 runs `{call}` directly; "
-                            "use the shared libtmux/.github apt-get action"
-                        )
-                    ],
-                )
+    ]
 
 
-class ScriptModeTests(unittest.TestCase):
-    def test_a_python_file_is_executable_exactly_when_it_has_a_shebang(self) -> None:
-        # ruff's EXE001 and EXE002 check this, but not under WSL, so a contributor
-        # there would only learn of a wrong mode from CI.
-        files = [
-            *sorted((ROOT / "scripts").rglob("*.py")),
-            *sorted((ROOT / "crates/tmux-workspace/tests/fixtures").glob("*.py")),
-        ]
-        self.assertGreater(len(files), 20)
-        wrong = []
-        for path in files:
-            has_shebang = path.read_text(encoding="utf-8").startswith("#!")
-            is_executable = bool(path.stat().st_mode & 0o111)
-            if has_shebang != is_executable:
-                wrong.append(path.relative_to(ROOT).as_posix())
-        self.assertEqual(wrong, [])
+def test_a_python_file_is_executable_exactly_when_it_has_a_shebang() -> None:
+    # ruff's EXE001 and EXE002 check this, but not under WSL, so a contributor
+    # there would only learn of a wrong mode from CI.
+    files = [
+        *sorted((ROOT / "scripts").rglob("*.py")),
+        *sorted((ROOT / "crates/tmux-workspace/tests/fixtures").glob("*.py")),
+    ]
+    assert len(files) > 20
+    wrong = []
+    for path in files:
+        has_shebang = path.read_text(encoding="utf-8").startswith("#!")
+        is_executable = bool(path.stat().st_mode & 0o111)
+        if has_shebang != is_executable:
+            wrong.append(path.relative_to(ROOT).as_posix())
+    assert wrong == []
 
 
-class DocumentTests(unittest.TestCase):
-    lanes = ci_plan.parse_manifest((ROOT / ".github" / "ci-matrix.txt").read_text(encoding="utf-8"))
-
-    def tags(self, *kinds: str) -> set[str]:
-        return {lane.tag for lane in self.lanes if lane.kind in kinds}
-
-    def test_the_readme_states_the_floor_the_manifest_tests(self) -> None:
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        start = readme.index("- **tmux ")
-        bullet = readme[start : readme.index("\n- **", start + 1)]
-        named = RELEASE.findall(bullet)
-        supported = [lane.tag for lane in self.lanes if lane.kind == "supported"]
-        self.assertEqual(named[:1], supported[:1], "the floor is the oldest lane")
-        self.assertLessEqual(set(named), set(supported))
-
-    def test_contributing_states_every_release_the_manifest_builds(self) -> None:
-        text = (ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8")
-        start = text.index("\n## Compatibility\n")
-        end = text.find("\n## ", start + 1)
-        section = text[start:] if end == -1 else text[start:end]
-        bold = " ".join(re.findall(r"\*\*([^*]+)\*\*", section))
-        self.assertEqual(set(RELEASE.findall(bold)), self.tags("supported", "witness", "refused"))
+LANES = ci_plan.parse_manifest((ROOT / ".github" / "ci-matrix.txt").read_text(encoding="utf-8"))
 
 
-if __name__ == "__main__":
-    unittest.main()
+def tags(*kinds: str) -> set[str]:
+    return {lane.tag for lane in LANES if lane.kind in kinds}
+
+
+def test_the_readme_states_the_floor_the_manifest_tests() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    start = readme.index("- **tmux ")
+    bullet = readme[start : readme.index("\n- **", start + 1)]
+    named = RELEASE.findall(bullet)
+    supported = [lane.tag for lane in LANES if lane.kind == "supported"]
+    assert named[:1] == supported[:1], "the floor is the oldest lane"
+    assert set(named) <= set(supported)
+
+
+def test_contributing_states_every_release_the_manifest_builds() -> None:
+    text = (ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    start = text.index("\n## Compatibility\n")
+    end = text.find("\n## ", start + 1)
+    section = text[start:] if end == -1 else text[start:end]
+    bold = " ".join(re.findall(r"\*\*([^*]+)\*\*", section))
+    assert set(RELEASE.findall(bold)) == tags("supported", "witness", "refused")
