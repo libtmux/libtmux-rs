@@ -140,6 +140,28 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn capability_schema_descriptions_exclude_rustdoc_examples() -> TestResult {
+    let tool = tools("inspect")?
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "get_tmux_capabilities")
+        .expect("the capability tool");
+    let output = tool.output_schema.expect("typed capability output");
+    for name in ["CapabilityHandling", "CapabilitySupport"] {
+        let description = output["$defs"][name]["description"]
+            .as_str()
+            .expect("a schema description");
+        assert!(
+            !description
+                .lines()
+                .any(|line| line.starts_with('#') || line.starts_with("```")),
+            "{name} copies Rust examples into the MCP schema: {description}"
+        );
+    }
+    Ok(())
+}
+
 /// The hand-kept lists above, not the capability rows the hints derive from,
 /// say which tools must never look read-only or harmless to a client, and
 /// that every inspect tool looks read-only. The observer client that

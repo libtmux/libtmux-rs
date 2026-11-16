@@ -17,6 +17,10 @@ use crate::{ReleaseVersion, TmuxVersion};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schemars(description = "What libtmux does below a feature's required release.")
+)]
 pub enum CapabilityHandling {
     /// Refuse the operation before dispatch.
     Refuse,
@@ -51,6 +55,10 @@ impl CapabilityHandling {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schemars(description = "How a daemon version can perform a named feature.")
+)]
 pub enum CapabilitySupport {
     /// The daemon carries the required behaviour.
     Available,
