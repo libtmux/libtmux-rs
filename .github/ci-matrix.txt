@@ -22,7 +22,7 @@ supported     3.4     9ae69c3795ab5ef6b4d760f6398cd9281151f632  3.4       worksp
 supported     3.5a    549c35b06165f6ae023115eb76f83f2cbf945395  3.5a      workspace         -
 supported     3.6b    0623d1e968423ad0c192e0d8debf1258671063d5  3.6b      workspace         -
 supported     3.7b    e802909de06012a4df6209d55e86487c56223163  3.7b      format-catalog    -
-supported     3.8     7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53  3.8       workspace         -
+supported     3.8     7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53  3.8       workspace         3.3a
 witness       3.7     81f88f8517c9fc5371b56cf117530c6b477c96ac  3.7       feature-boundary  3.3a,3.7b
 refused       3.2a    3b929f332aafa7f1080eacc31feb11ffbb1d1841  3.2a      reject-core       -
 refused       3.3     87fe00e8b44901240fc22d7120c1b31e4331f6f5  3.3       reject-boundary   -
