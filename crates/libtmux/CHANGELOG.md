@@ -16,6 +16,13 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Added
+
+- `Server::daemon_capabilities` reports feature availability and exact-release
+  workarounds for the existing daemon without starting one. Public registry
+  definitions support lookup and iteration; reports preserve native mutation
+  admission and distinguish unavailable features from library fallbacks. (#158)
+
 ### Changed
 
 - **Behaviour change.** `Server::save_buffer` creates a missing file with mode
