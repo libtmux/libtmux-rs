@@ -168,9 +168,17 @@ supported minimum are history rather than live gates.
 `Server::daemon_capabilities` freshly describes an existing daemon. A cold
 endpoint returns `None` without an executable fallback or a startup. Discovery
 never updates the version cache, so it cannot grant a stale handle mutation
-authority after replacement. A control route first checks liveness with a
-hook-free `if-shell -F 0` round trip, then reads its sender's immutable
-acquisition version. It never reconnects through the configured socket.
+authority after replacement. Both routes use one marked `list-commands -F`
+query, filtered to that command. A control route checks the response against
+its sender's immutable acquisition version and never reconnects through the
+configured socket. Subprocess discovery passes `-N` to suppress startup.
+
+Discovery trusts the native `list-commands` spelling: the daemon must not
+alias it. tmux expands aliases before resolving built-ins, so no external
+command can prove all its own command spellings unaliased. The native query
+has no registered after hook at the supported floor or current release.
+Aliases for `run-shell` and `if-shell` cannot intercept discovery. Existing
+mutation admission probes retain their separate behavior.
 
 Undated `master` reports remain available diagnostically and cannot pass the
 version check. Creating executable reports may use `tmux` or its exact

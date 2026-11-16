@@ -132,6 +132,8 @@ An absent daemon has null `daemon_version` and empty decision lists. Query,
 parse, unsupported-version and closed-route failures remain tool errors.
 Cancellation stops the native read through the core transport. The result
 grants no authority to a later operation and does not change tool selection.
+Discovery requires the daemon's native `list-commands` spelling to remain
+unaliased. It trusts that command and does not audit arbitrary server aliases.
 
 `tmux://capabilities` is the server's one resource. It reports the
 startup-frozen effective surface, the selected socket, socket provenance,

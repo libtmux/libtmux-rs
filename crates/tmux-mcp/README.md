@@ -540,6 +540,7 @@ fields.
 feature availability, fallbacks and exact-release workarounds. Call it before
 choosing a version-dependent operation. Null `daemon_version` means no daemon
 exists; errors and cancellation never become executable-version fallbacks.
+The daemon must leave the native `list-commands` command unaliased.
 Later operations still enforce their own admission.
 
 ### Asking first: annotations

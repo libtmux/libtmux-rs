@@ -135,6 +135,24 @@ impl VersionProbe {
         self.command_for("#{version}")
     }
 
+    pub(crate) fn query_command(&self) -> Command {
+        Command::new("list-commands")
+            .arg("-F")
+            .arg(format!("{}#{{version}}", self.marker))
+            .arg("list-commands")
+    }
+
+    pub(crate) fn parse_query(&self, stdout: &[u8]) -> Result<TmuxVersion, Error> {
+        let value = stdout.trim_ascii();
+        let Some(version) = value.strip_prefix(self.marker.as_bytes()) else {
+            return Err(Error::from_invalid_version_output(stdout.len()));
+        };
+        if version.contains(&b'\n') || version.contains(&b'\r') {
+            return Err(Error::from_invalid_version_output(stdout.len()));
+        }
+        Self::parse_version(version, stdout.len())
+    }
+
     /// The probe for a format of the caller's own. tmux reports only the first
     /// word of what it fails to parse, so the format must contain no space.
     pub(crate) fn command_for(&self, format: &str) -> Command {
@@ -161,10 +179,14 @@ impl VersionProbe {
         let Some(version) = self.report(stderr) else {
             return Ok(None);
         };
+        Self::parse_version(version, stderr.len()).map(Some)
+    }
+
+    fn parse_version(version: &[u8], output_len: usize) -> Result<TmuxVersion, Error> {
         let mut framed = b"tmux ".to_vec();
         framed.extend_from_slice(version);
         framed.push(b'\n');
-        TmuxVersion::parse_report(&framed, stderr.len()).map(Some)
+        TmuxVersion::parse_report(&framed, output_len)
     }
 }
 
@@ -241,6 +263,28 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_query_requires_one_marked_native_report() {
+        let probe = VersionProbe::new();
+        assert_eq!(
+            probe
+                .parse_query(format!("{}3.8\n", probe.marker).as_bytes())
+                .unwrap()
+                .raw(),
+            "3.8"
+        );
+        for output in [
+            "3.8\n".to_owned(),
+            format!("unrelated\n{}3.8\n", probe.marker),
+            format!("{}3.8\nextra\n", probe.marker),
+            format!("{}3.8\n{}3.8\n", probe.marker, probe.marker),
+            format!("{}\n", probe.marker),
+            format!("{}unknown\n", probe.marker),
+        ] {
+            assert!(probe.parse_query(output.as_bytes()).is_err(), "{output:?}");
+        }
+    }
 
     fn serialized(body: &[u8]) -> Vec<u8> {
         let checksum = body.iter().fold(0_u16, |sum, byte| {

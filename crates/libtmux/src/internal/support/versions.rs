@@ -235,41 +235,62 @@ pub(crate) async fn discover_daemon_version(
     configuration: &CoreConfiguration,
     request_id: RequestId,
 ) -> Result<Option<TmuxVersion>, Error> {
+    let probe = crate::layout::VersionProbe::new();
+    let command = probe.query_command();
     #[cfg(feature = "control-mode")]
-    if let Some(version) = executor.connected_version() {
-        // The version belongs to this accepted connection, not the shared
-        // endpoint cache. A hook-free round trip refuses a closed route.
-        let command = Command::new("if-shell").arg("-F").arg("0").arg("");
-        let line = command.control_mode_line();
-        let request =
-            CommandRequest::with_global_argv(request_id, configuration.global_argv(), command)
-                .with_control_line(line);
-        let summary = request.summary().clone();
-        let result = within(
-            executor.execute(request),
-            Instant::now().checked_add(configuration.timeout()),
-            request_id,
-            &summary,
-            configuration.timeout(),
-            false,
-        )
-        .await?;
-        if !result.success() {
-            return Err(Error::version_probe_failed(
-                request_id.get(),
-                result.command().clone(),
-                result.exit_code(),
-                result.signal(),
-            ));
+    let connected = if executor.renders_control_line() {
+        Some(executor.connected_version().ok_or_else(|| {
+            Error::control_mode(std::io::Error::other(
+                "a control-routed handle holds no checked daemon version",
+            ))
+        })?)
+    } else {
+        None
+    };
+    #[cfg(feature = "control-mode")]
+    let line = executor
+        .renders_control_line()
+        .then(|| command.control_mode_line());
+    let mut global_argv = configuration.global_argv().to_vec();
+    global_argv.push(std::ffi::OsString::from("-N"));
+    let request = CommandRequest::with_global_argv(request_id, &global_argv, command);
+    #[cfg(feature = "control-mode")]
+    let request = request.with_control_line(line.flatten());
+    let summary = request.summary().clone();
+    let result = within(
+        executor.execute(request),
+        Instant::now().checked_add(configuration.timeout()),
+        request_id,
+        &summary,
+        configuration.timeout(),
+        false,
+    )
+    .await?;
+    if !result.success() {
+        #[cfg(feature = "control-mode")]
+        let unbound = connected.is_none();
+        #[cfg(not(feature = "control-mode"))]
+        let unbound = true;
+        if unbound && is_cold(result.stderr()) {
+            return Ok(None);
         }
-        version.ensure_supported()?;
-        return Ok(Some(version.clone()));
+        return Err(Error::version_probe_failed(
+            request_id.get(),
+            result.command().clone(),
+            result.exit_code(),
+            result.signal(),
+        ));
     }
-    let version = probe_live_version(executor, configuration, request_id).await?;
-    if let Some(version) = &version {
-        version.ensure_supported()?;
+    let version = probe.parse_query(result.stdout())?;
+    version.ensure_supported()?;
+    #[cfg(feature = "control-mode")]
+    if let Some(connected) = connected {
+        if &version != connected {
+            return Err(Error::server_replaced(request_id.get(), summary));
+        }
+        return Ok(Some(connected.clone()));
     }
-    Ok(version)
+    Ok(Some(version))
 }
 
 async fn live_version(

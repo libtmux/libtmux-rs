@@ -8,8 +8,10 @@ use crate::{ReleaseVersion, TmuxVersion};
 ///
 /// ```
 /// use libtmux::{CapabilityDefinition, CapabilityHandling};
-/// let feature = CapabilityDefinition::find("control-pane-off").expect("a known feature");
+/// let feature = CapabilityDefinition::find("control-pane-off")
+///     .ok_or("control-pane-off is not in the registry")?;
 /// assert_eq!(feature.handling, CapabilityHandling::Fallback);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -40,9 +42,10 @@ impl CapabilityHandling {
 /// ```
 /// use libtmux::{CapabilityDefinition, CapabilitySupport, TmuxVersion};
 /// let version = TmuxVersion::parse_output(b"tmux 3.3a\n")?;
-/// let feature = CapabilityDefinition::find("buffer-delete-named").expect("a known feature");
+/// let feature = CapabilityDefinition::find("buffer-delete-named")
+///     .ok_or("buffer-delete-named is not in the registry")?;
 /// assert_eq!(feature.support(&version), CapabilitySupport::Unavailable);
-/// # Ok::<(), libtmux::Error>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -78,9 +81,10 @@ impl CapabilitySupport {
 ///
 /// ```
 /// let feature = libtmux::CapabilityDefinition::find("buffer-delete-named")
-///     .expect("a known feature");
+///     .ok_or("buffer-delete-named is not in the registry")?;
 /// assert_eq!(feature.since.to_string(), "3.4");
 /// assert!(!feature.apis.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityDefinition {
@@ -139,10 +143,10 @@ impl CapabilityDefinition {
 /// ```
 /// use libtmux::{TmuxVersion, WorkaroundDefinition};
 /// let workaround = WorkaroundDefinition::find("break-pane-misnames-windows")
-///     .expect("a known workaround");
+///     .ok_or("break-pane-misnames-windows is not in the registry")?;
 /// assert!(workaround.is_active(&TmuxVersion::parse_output(b"tmux 3.7\n")?));
 /// assert!(!workaround.is_active(&TmuxVersion::parse_output(b"tmux 3.7a\n")?));
-/// # Ok::<(), libtmux::Error>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkaroundDefinition {

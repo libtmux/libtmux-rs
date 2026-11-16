@@ -817,8 +817,10 @@ impl Server {
     ///
     /// `None` means the configured endpoint has no daemon. A control-routed
     /// handle checks its accepted connection and reports that daemon instead.
-    /// The result is fresh, runs no user hook, and never changes mutation
-    /// admission. Later operations retain their own version checks.
+    /// The result is fresh and never changes mutation admission. Discovery
+    /// requires the native `list-commands` command: the daemon must not alias
+    /// that spelling. Under that precondition it runs no user hook. Later
+    /// operations retain their own version checks.
     ///
     /// # Errors
     ///

@@ -201,7 +201,7 @@ Return metadata for one session. Inspect tmux metadata; accepts no client-suppli
 
 ## `get_tmux_capabilities`
 
-Discover the connected tmux daemon's version, named feature availability, fallbacks and exact-release workarounds without starting a daemon. Null daemon_version means no daemon exists; query failures remain errors. Check this report before choosing a version-dependent operation. Later calls still enforce admission. tmux://capabilities separately describes the startup-frozen tool selection and policy. Inspect tmux metadata; accepts no client-supplied executable input.
+Discover the connected tmux daemon's version, named feature availability, fallbacks and exact-release workarounds without starting a daemon. Null daemon_version means no daemon exists; query failures remain errors. The daemon must leave the native list-commands command unaliased. Check this report before choosing a version-dependent operation. Later calls still enforce admission. tmux://capabilities separately describes the startup-frozen tool selection and policy. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`

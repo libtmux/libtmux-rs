@@ -142,6 +142,8 @@ another with [`ServerBuilder::tmux_executable`].
 
 Discovery reports the existing daemon and starts nothing. A missing daemon
 returns `None`; query failures remain errors.
+The daemon must leave `list-commands` unaliased; discovery trusts that native
+command and does not audit arbitrary server aliases.
 
 ```rust
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -153,7 +155,8 @@ let guard = TestServer::new().await?;
 let server = guard.server();
 server.set_buffer(Some("example"), "payload").await?;
 if let Some(report) = server.daemon_capabilities().await? {
-    let feature = report.feature("buffer-delete-named").expect("a known feature");
+    let feature = report.feature("buffer-delete-named")
+        .ok_or("buffer-delete-named is not in the registry")?;
     if feature.support == CapabilitySupport::Available {
         server.delete_buffer("example").await?;
         assert!(server.buffer("example").await?.is_none());

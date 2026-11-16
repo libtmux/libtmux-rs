@@ -92,6 +92,119 @@ async fn discovery_of_an_absent_daemon_does_not_start_one() {
     server.shutdown().await.expect("the client closes");
 }
 
+async fn native_oracle(socket: &Path, args: &[&str]) -> std::process::Output {
+    let binary = std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into());
+    let mut command = tokio::process::Command::new(binary);
+    command
+        .args(["-N", "-S"])
+        .arg(socket)
+        .args(args)
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .kill_on_drop(true);
+    tokio::time::timeout(std::time::Duration::from_millis(500), command.output())
+        .await
+        .expect("the independent native oracle finishes")
+        .expect("the independent native oracle runs")
+}
+
+async fn discovery_alias_witnesses(socket: &Path) -> [std::process::Output; 2] {
+    [
+        native_oracle(socket, &["show-buffer", "-b", "discovery-run-alias"]).await,
+        native_oracle(socket, &["show-buffer", "-b", "discovery-if-alias"]).await,
+    ]
+}
+
+fn assert_no_discovery_alias_effect(outputs: &[std::process::Output; 2]) {
+    for output in outputs {
+        assert!(
+            !output.status.success() && output.stdout.is_empty(),
+            "discovery executed an aliased command: {output:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn discovery_avoids_run_shell_and_if_shell_alias_effects() {
+    let guard = TestServer::new().await.expect("a private daemon");
+    #[cfg(feature = "control-mode")]
+    let control = {
+        use libtmux::control::ControlMode;
+
+        let version = guard.server().daemon_version().await.expect("the release");
+        if version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
+            let session = guard
+                .server()
+                .new_session("discovery")
+                .await
+                .expect("a session");
+            let (sender, events) = ControlMode::attach(guard.server(), session.id())
+                .await
+                .expect("a connection")
+                .split();
+            let routed = guard
+                .server()
+                .over_control_mode(&sender)
+                .await
+                .expect("a route");
+            Some((sender, events, routed))
+        } else {
+            None
+        }
+    };
+    for (option, alias) in [
+        (
+            "command-alias[998]",
+            "run-shell=set-buffer -b discovery-run-alias payload ; run",
+        ),
+        (
+            "command-alias[999]",
+            "if-shell=set-buffer -b discovery-if-alias payload ; if",
+        ),
+    ] {
+        assert!(
+            native_oracle(guard.socket_path(), &["set-option", "-s", option, alias])
+                .await
+                .status
+                .success()
+        );
+    }
+    assert_no_discovery_alias_effect(&discovery_alias_witnesses(guard.socket_path()).await);
+    let unbound = guard.server().daemon_capabilities().await;
+    let unbound_effects = discovery_alias_witnesses(guard.socket_path()).await;
+    #[cfg(feature = "control-mode")]
+    let routed = if let Some((_, _, routed)) = &control {
+        Some(routed.daemon_capabilities().await)
+    } else {
+        None
+    };
+    let final_effects = discovery_alias_witnesses(guard.socket_path()).await;
+    for option in ["command-alias[998]", "command-alias[999]"] {
+        assert!(
+            native_oracle(guard.socket_path(), &["set-option", "-s", "-u", option])
+                .await
+                .status
+                .success()
+        );
+    }
+    #[cfg(feature = "control-mode")]
+    if let Some((_, events, _)) = control {
+        events.shutdown().await.expect("the connection closes");
+    }
+    guard.shutdown().await.expect("the fixture closes");
+    assert_no_discovery_alias_effect(&unbound_effects);
+    assert_no_discovery_alias_effect(&final_effects);
+    let report = unbound.expect("the native query").expect("a daemon");
+    #[cfg(feature = "control-mode")]
+    if let Some(routed) = routed {
+        assert_eq!(
+            routed.expect("the connected query").expect("a daemon"),
+            report
+        );
+    }
+    assert!(!report.tmux_version().raw().is_empty());
+}
+
 async fn check_older_client_against_current_daemon(current: &TestServer, minimum: &Path) {
     let identity = current
         .server()
