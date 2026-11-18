@@ -14,6 +14,88 @@ use serde::Serialize;
 use crate::caller::Relation;
 use crate::schema::ChannelWaitOutcomeSchema;
 
+/// Fresh release decisions for the existing tmux daemon.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct TmuxCapabilities {
+    /// Observed daemon version, or null when the endpoint has no daemon.
+    pub daemon_version: Option<String>,
+    /// Named feature decisions; empty when no daemon exists.
+    pub capabilities: Vec<TmuxCapability>,
+    /// Exact-release workaround decisions; empty when no daemon exists.
+    pub workarounds: Vec<TmuxWorkaround>,
+}
+
+/// One canonical core feature projected for the observed daemon.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct TmuxCapability {
+    /// Stable kebab-case feature identity.
+    pub id: &'static str,
+    /// Human-readable name.
+    pub name: &'static str,
+    /// Behaviour and any fallback or refusal limits.
+    pub summary: &'static str,
+    /// First release whose behaviour libtmux accepts for this feature.
+    pub since: String,
+    /// What libtmux does below the required release.
+    pub handling: libtmux::CapabilityHandling,
+    /// Availability or fallback for the observed daemon.
+    pub support: libtmux::CapabilitySupport,
+}
+
+/// One canonical core workaround projected for the observed daemon.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct TmuxWorkaround {
+    /// Stable kebab-case workaround identity.
+    pub id: &'static str,
+    /// Human-readable name.
+    pub name: &'static str,
+    /// Defect and libtmux's handling of it.
+    pub summary: &'static str,
+    /// First affected release, inclusive.
+    pub broken_in: String,
+    /// First fixed release, exclusive.
+    pub fixed_in: String,
+    /// Whether the observed daemon falls in the affected interval.
+    pub active: bool,
+}
+
+impl From<Option<libtmux::DaemonCapabilities>> for TmuxCapabilities {
+    fn from(report: Option<libtmux::DaemonCapabilities>) -> Self {
+        let Some(report) = report else {
+            return Self {
+                daemon_version: None,
+                capabilities: Vec::new(),
+                workarounds: Vec::new(),
+            };
+        };
+        Self {
+            daemon_version: Some(report.tmux_version().raw().to_owned()),
+            capabilities: report
+                .features()
+                .map(|entry| TmuxCapability {
+                    id: entry.definition.id,
+                    name: entry.definition.name,
+                    summary: entry.definition.summary,
+                    since: entry.definition.since.to_string(),
+                    handling: entry.definition.handling,
+                    support: entry.support,
+                })
+                .collect(),
+            workarounds: report
+                .workarounds()
+                .map(|entry| TmuxWorkaround {
+                    id: entry.definition.id,
+                    name: entry.definition.name,
+                    summary: entry.definition.summary,
+                    broken_in: entry.definition.broken_in.to_string(),
+                    fixed_in: entry.definition.fixed_in.to_string(),
+                    active: entry.active,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// One session, as the protocol sees it.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct SessionView {

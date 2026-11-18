@@ -92,6 +92,29 @@ def test_only_the_minimum_and_the_safe_buffer_releases_provide_a_variable() -> N
     assert harness.feature_environment("3.8", BINARY) == {}
 
 
+def test_current_lane_builds_the_floor_for_connected_discovery() -> None:
+    current = next(lane for lane in load_lanes(harness.MANIFEST) if lane.tag == "3.8")
+    assert "3.3a" in current.requires
+
+
+def test_current_lane_qualifies_core_and_mcp_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    run = harness.Harness(load_lanes(harness.MANIFEST), tmp_path, "unused")
+    steps: list[harness.Step] = []
+    monkeypatch.setattr(run, "run_step", steps.append)
+    monkeypatch.setattr(run, "run_workspace", lambda *_: None)
+    run.test_lane("3.8")
+    assert len(steps) == 2
+    assert "capabilities" in steps[0].argv
+    assert "daemon_capability_tool_" in steps[1].argv
+    for step in steps:
+        assert step.env["LIBTMUX_TEST_TMUX"] == str(run.binary("3.8"))
+        assert step.env["LIBTMUX_TEST_MINIMUM_TMUX"] == str(run.binary("3.3a"))
+        assert step.env["PATH"].startswith(str(run.install_prefix("3.8") / "bin"))
+        assert step.env["LIBTMUX_REQUIRE_NATIVE"] == "LIBTMUX_TEST_MINIMUM_TMUX"
+
+
 @pytest.mark.parametrize("family", harness.REQUIRED_FAMILIES)
 def test_a_missing_test_family_fails_the_lane(family: str) -> None:
     listing = "\n".join(f"{other}x: test" for other in harness.REQUIRED_FAMILIES if other != family)

@@ -80,4 +80,8 @@ impl Executor for ControlModeExecutor {
     fn renders_control_line(&self) -> bool {
         true
     }
+
+    fn connected_version(&self) -> Option<&crate::TmuxVersion> {
+        Some(self.sender.version())
+    }
 }

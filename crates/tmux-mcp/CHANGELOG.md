@@ -20,6 +20,13 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Added
+
+- `get_tmux_capabilities` exposes the core daemon's feature and workaround
+  decisions through the Inspect toolset and read batches. A missing daemon
+  returns no version and empty decisions; `tmux://capabilities` retains the
+  startup-frozen tool policy. (#158)
+
 ### Changed
 
 - Requires `rmcp` 3.9 or later. Releases before 3.9.0 read Streamable HTTP

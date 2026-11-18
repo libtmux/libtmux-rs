@@ -1159,6 +1159,7 @@ impl TmuxTools {
             literalized = [],
             nested = [
                 "list_sessions", "list_windows", "list_panes", "get_server_info",
+                "get_tmux_capabilities",
                 "get_session_info", "get_window_info", "get_pane_info", "capture_pane",
                 "capture_since", "snapshot_pane", "search_panes", "find_pane_by_position",
                 "get_tmux_variables", "show_option", "show_environment", "show_hooks"

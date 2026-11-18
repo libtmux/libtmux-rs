@@ -18,7 +18,7 @@
     {
       "id": "rust-construction",
       "title": "Construct a private server",
-      "description": "Construct a handle without starting tmux, then create a session on its own socket.",
+      "description": "Construct a handle without starting tmux, then create a private daemon and gate named-buffer deletion on its discovered capabilities.",
       "sourceFile": "crates/libtmux/examples/api_construction.rs",
       "cargoExample": "api_construction",
       "targets": [
@@ -27,7 +27,11 @@
         "libtmux::ServerBuilder::socket_path",
         "libtmux::ServerBuilder::config_file",
         "libtmux::ServerBuilder::default_timeout",
-        "libtmux::ServerBuilder::build"
+        "libtmux::ServerBuilder::build",
+        "libtmux::Server::daemon_capabilities",
+        "libtmux::DaemonCapabilities",
+        "libtmux::DaemonCapabilities::feature",
+        "libtmux::CapabilitySupport"
       ],
       "expectedOutput": "construction: private daemon started by new_session"
     },

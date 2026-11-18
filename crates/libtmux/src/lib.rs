@@ -388,7 +388,10 @@ pub fn __fuzz_layout(input: &[u8]) {
 #[cfg(feature = "test-support")]
 pub mod test;
 
-pub use capabilities::EngineCapabilities;
+pub use capabilities::{
+    CapabilityDefinition, CapabilityHandling, CapabilityStatus, CapabilitySupport,
+    DaemonCapabilities, EngineCapabilities, WorkaroundDefinition, WorkaroundStatus,
+};
 pub use client::Client;
 pub use command::{Command, CommandChain, CommandResult, CommandSummary};
 #[cfg(feature = "control-mode")]

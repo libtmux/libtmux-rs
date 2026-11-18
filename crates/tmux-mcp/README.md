@@ -418,7 +418,7 @@ capabilities, and the [tool pages][tools] publish it.
 
 | Toolset | Intent | Tools |
 |---|---|---|
-| [`inspect`][toolset-inspect] (18) | Read bounded tmux state and terminal output | [`call_read_tools_batch`][call_read_tools_batch], [`capture_pane`][capture_pane], [`capture_since`][capture_since], [`find_pane_by_position`][find_pane_by_position], [`get_pane_info`][get_pane_info], [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_tmux_variables`][get_tmux_variables], [`get_window_info`][get_window_info], [`list_panes`][list_panes], [`list_sessions`][list_sessions], [`list_windows`][list_windows], [`search_panes`][search_panes], [`show_environment`][show_environment], [`show_hooks`][show_hooks], [`show_option`][show_option], [`snapshot_pane`][snapshot_pane], [`wait_for_text`][wait_for_text] |
+| [`inspect`][toolset-inspect] (19) | Read bounded tmux state and terminal output | [`call_read_tools_batch`][call_read_tools_batch], [`capture_pane`][capture_pane], [`capture_since`][capture_since], [`find_pane_by_position`][find_pane_by_position], [`get_pane_info`][get_pane_info], [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_tmux_capabilities`][get_tmux_capabilities], [`get_tmux_variables`][get_tmux_variables], [`get_window_info`][get_window_info], [`list_panes`][list_panes], [`list_sessions`][list_sessions], [`list_windows`][list_windows], [`search_panes`][search_panes], [`show_environment`][show_environment], [`show_hooks`][show_hooks], [`show_option`][show_option], [`snapshot_pane`][snapshot_pane], [`wait_for_text`][wait_for_text] |
 | [`manage`][toolset-manage] (13) | Change tmux objects without starting a process | [`move_window`][move_window], [`rename_session`][rename_session], [`rename_window`][rename_window], [`resize_pane`][resize_pane], [`resize_window`][resize_window], [`select_layout`][select_layout], [`select_pane`][select_pane], [`select_window`][select_window], [`set_mouse_enabled`][set_mouse_enabled], [`set_pane_title`][set_pane_title], [`signal_channel`][signal_channel], [`swap_pane`][swap_pane], [`wait_for_channel`][wait_for_channel] |
 | [`execute`][toolset-execute] (9) | Start configured processes or drive pane programs | [`create_session`][create_session], [`create_window`][create_window], [`paste_text`][paste_text], [`respawn_pane`][respawn_pane], [`run_shell_command`][run_shell_command], [`send_keys`][send_keys], [`send_keys_batch`][send_keys_batch], [`set_synchronize_panes`][set_synchronize_panes], [`split_window`][split_window] |
 | [`teardown`][toolset-teardown] (5) | Delete tmux state | [`clear_pane_scrollback`][clear_pane_scrollback], [`kill_pane`][kill_pane], [`kill_session`][kill_session], [`kill_window`][kill_window], [`set_history_limit`][set_history_limit] |
@@ -533,6 +533,15 @@ fields.
 | URI | Holds |
 |---|---|
 | [`tmux://capabilities`] | The frozen effective tool surface, boundary, and connection provenance |
+
+### [`get_tmux_capabilities`][get_tmux_capabilities]: choose an operation for the daemon
+
+`get_tmux_capabilities` separately reports the existing daemon's version,
+feature availability, fallbacks and exact-release workarounds. Call it before
+choosing a version-dependent operation. Null `daemon_version` means no daemon
+exists; errors and cancellation never become executable-version fallbacks.
+The daemon must leave the native `list-commands` command unaliased.
+Later operations still enforce their own admission.
 
 ### Asking first: annotations
 
@@ -758,6 +767,7 @@ or [MIT license](LICENSE-MIT) at your option.
 [find_pane_by_position]: https://libtmux.org/en/rs/latest/mcp/tools/find_pane_by_position/
 [get_pane_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_pane_info/
 [get_server_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_server_info/
+[get_tmux_capabilities]: https://libtmux.org/en/rs/latest/mcp/tools/get_tmux_capabilities/
 [get_session_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_session_info/
 [get_tmux_variables]: https://libtmux.org/en/rs/latest/mcp/tools/get_tmux_variables/
 [get_window_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_window_info/

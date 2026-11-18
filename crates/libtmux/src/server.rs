@@ -813,6 +813,35 @@ impl Server {
         self.core.capabilities().await
     }
 
+    /// Discover feature decisions for the existing daemon without starting one.
+    ///
+    /// `None` means the configured endpoint has no daemon. A control-routed
+    /// handle checks its accepted connection and reports that daemon instead.
+    /// The result is fresh and never changes mutation admission. Discovery
+    /// requires the native `list-commands` command: the daemon must not alias
+    /// that spelling. Under that precondition it runs no user hook. Later
+    /// operations retain their own version checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport, timeout or shutdown error, a failed or malformed
+    /// version probe, or an unsupported or unrecognised daemon version.
+    /// A closed control connection is an error, not an absent endpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// if let Some(report) = server.daemon_capabilities().await? {
+    ///     println!("tmux {}", report.tmux_version().raw());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn daemon_capabilities(&self) -> Result<Option<crate::DaemonCapabilities>, Error> {
+        self.core.daemon_capabilities().await
+    }
+
     /// Return the version of the daemon this handle reaches.
     ///
     /// The version has passed the supported-minimum check. A cold endpoint

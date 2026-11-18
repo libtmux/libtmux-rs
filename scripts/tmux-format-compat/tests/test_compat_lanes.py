@@ -128,7 +128,7 @@ def run_lanes(lanes, request: str) -> list[str]:
 
 
 def test_a_lane_is_built_then_tested(lanes) -> None:
-    assert run_lanes(lanes, "3.8") == ["build 3.8", "test 3.8"]
+    assert run_lanes(lanes, "3.8") == ["build 3.3a", "build 3.8", "test 3.8"]
 
 
 def test_a_lane_that_needs_other_builds_gets_them_first_and_untested(lanes) -> None:

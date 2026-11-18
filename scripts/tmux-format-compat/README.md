@@ -21,6 +21,11 @@ build. The `compat` CI job takes its lanes from `scripts/ci-plan`. The shared
 binary only, so it does not keep these commit pins, and the `format-catalog`
 lane needs the source tree.
 
+The 3.8 lane also builds 3.3a and runs core and MCP capability discovery with
+the newer client against both daemons. This pins connected-daemon decisions,
+control-connection binding and preservation of mutation admission after a
+socket replacement.
+
 `just compat` runs it. It is slow, builds every lane it is given and needs
 Linux, a `C.UTF-8` locale and `uv`.
 

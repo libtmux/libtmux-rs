@@ -15,6 +15,7 @@ const INSPECT: &[&str] = &[
     "list_windows",
     "list_panes",
     "get_server_info",
+    "get_tmux_capabilities",
     "get_session_info",
     "get_window_info",
     "get_pane_info",
@@ -135,6 +136,28 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
             jsonschema::draft202012::meta::validate(&output)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn capability_schema_descriptions_exclude_rustdoc_examples() -> TestResult {
+    let tool = tools("inspect")?
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "get_tmux_capabilities")
+        .expect("the capability tool");
+    let output = tool.output_schema.expect("typed capability output");
+    for name in ["CapabilityHandling", "CapabilitySupport"] {
+        let description = output["$defs"][name]["description"]
+            .as_str()
+            .expect("a schema description");
+        assert!(
+            !description
+                .lines()
+                .any(|line| line.starts_with('#') || line.starts_with("```")),
+            "{name} copies Rust examples into the MCP schema: {description}"
+        );
     }
     Ok(())
 }
@@ -617,7 +640,7 @@ fn aggregate_only_selection_keeps_native_pruned_operation_schemas() -> TestResul
         .iter()
         .map(|name| name.as_str().expect("nested name"))
         .collect();
-    assert_eq!(authority.len(), 15);
+    assert_eq!(authority.len(), 16);
     assert!(!authority.contains("capture_pane"));
 
     let schema = serde_json::Value::Object((*batch.input_schema).clone());

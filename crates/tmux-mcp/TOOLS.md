@@ -61,7 +61,7 @@ Call a serial batch of at most sixteen enabled inspect tools. One approval for t
 - May return untrusted content: `true`
 - Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":true,"readOnlyHint":true}`
 - Input literalization: `{}`
-- Nested authority: `["capture_pane","capture_since","find_pane_by_position","get_pane_info","get_server_info","get_session_info","get_tmux_variables","get_window_info","list_panes","list_sessions","list_windows","search_panes","show_environment","show_hooks","show_option","snapshot_pane"]`
+- Nested authority: `["capture_pane","capture_since","find_pane_by_position","get_pane_info","get_server_info","get_session_info","get_tmux_capabilities","get_tmux_variables","get_window_info","list_panes","list_sessions","list_windows","search_panes","show_environment","show_hooks","show_option","snapshot_pane"]`
 - Amplifies future input: `false`
 
 ## `capture_pane`
@@ -187,6 +187,21 @@ Report every session with its windows and panes, in one call. Prefer this over c
 ## `get_session_info`
 
 Return metadata for one session. Inspect tmux metadata; accepts no client-supplied executable input.
+
+- Toolset: `inspect`
+- Process reach: `none`
+- Tmux effects: `["observe"]`
+- Output classes: `["tmux-metadata"]`
+- May expose secrets: `true`
+- May return untrusted content: `true`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
+- Input literalization: `{}`
+- Nested authority: `[]`
+- Amplifies future input: `false`
+
+## `get_tmux_capabilities`
+
+Discover the connected tmux daemon's version, named feature availability, fallbacks and exact-release workarounds without starting a daemon. Null daemon_version means no daemon exists; query failures remain errors. The daemon must leave the native list-commands command unaliased. Check this report before choosing a version-dependent operation. Later calls still enforce admission. tmux://capabilities separately describes the startup-frozen tool selection and policy. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`

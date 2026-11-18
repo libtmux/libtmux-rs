@@ -23,6 +23,10 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- Documentation builds accept the typed Rust example runner and the older
+  shell runner in tagged sources through the shared publisher.
+- The tmux 3.8 compatibility lane also builds 3.3a and checks core and MCP
+  capability discovery with different client and daemon releases. (#158)
 - CI installs the toolchain `rust-toolchain.toml` pins and caches builds with
   `actions-rust-lang/setup-rust-toolchain`, where jobs installed `stable` and
   let the pin override it inside the checkout. Clippy and rustfmt failures now

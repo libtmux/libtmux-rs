@@ -136,6 +136,43 @@ Async operations need an entered Tokio runtime. The default executable is
 `tmux`, found on the `PATH` captured when the [`Server`] is built; select
 another with [`ServerBuilder::tmux_executable`].
 
+## Choose an operation for the daemon
+
+### [`Server::daemon_capabilities`]: version-gated operations
+
+Discovery reports the existing daemon and starts nothing. A missing daemon
+returns `None`; query failures remain errors.
+The daemon must leave `list-commands` unaliased; discovery trusts that native
+command and does not audit arbitrary server aliases.
+
+```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+# runtime.block_on(async {
+use libtmux::{CapabilitySupport, test::TestServer};
+
+let guard = TestServer::new().await?;
+let server = guard.server();
+server.set_buffer(Some("example"), "payload").await?;
+if let Some(report) = server.daemon_capabilities().await? {
+    let feature = report.feature("buffer-delete-named")
+        .ok_or("buffer-delete-named is not in the registry")?;
+    if feature.support == CapabilitySupport::Available {
+        server.delete_buffer("example").await?;
+        assert!(server.buffer("example").await?.is_none());
+    }
+}
+guard.shutdown().await?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+# })?;
+# Ok(())
+# }
+```
+
+Feature decisions include fallbacks and exact-release workarounds. Later
+operations still enforce admission if the daemon changes. `capabilities()`
+separately describes the configured executable and can answer without a daemon.
+
 ## Where to start
 
 By what you came to do:
@@ -143,6 +180,7 @@ By what you came to do:
 | I want to | Call | Shown in |
 | --- | --- | --- |
 | Make a session and tear it down | [`Server::with_session`] | `examples/scratch.rs` |
+| Choose a version-dependent operation | [`Server::daemon_capabilities`] | `examples/api_construction.rs` |
 | Reach a session someone left running | [`Server::session`], [`Server::sessions`] | `examples/inspect.rs` |
 | Find the pane my process is in | [`Pane::from_env`] | `examples/inspect.rs` |
 | Add a window, split a pane | [`Session::new_window`], [`Pane::split`] | `examples/scratch.rs` |
@@ -1014,6 +1052,7 @@ or [MIT license](LICENSE-MIT) at your option.
 [`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/error-errorkind-partialeffect/
 [`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-default_timeout/
 [`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/server-server-shutdown/
+[`Server::daemon_capabilities`]: https://libtmux.org/en/rs/latest/reference/server-server-daemon_capabilities/
 [`libtmux::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
 [`TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
 [`CommandChain::new(a).then(b)`]: https://libtmux.org/en/rs/latest/reference/command-commandchain/

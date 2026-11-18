@@ -16,6 +16,22 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Added
+
+- `Server::daemon_capabilities` reports feature availability and exact-release
+  workarounds for the existing daemon without starting one. Public registry
+  definitions support lookup and iteration; reports preserve native mutation
+  admission and distinguish unavailable features from library fallbacks. (#158)
+
+### Fixed
+
+- `Server::daemon_capabilities` uses a native `list-commands` query, so
+  configured `run-shell` and `if-shell` aliases cannot intercept discovery.
+  The daemon must leave `list-commands` unaliased.
+- `CapabilityHandling` and `CapabilitySupport` JSON Schema descriptions omit
+  Rust examples, avoiding duplicate `Examples` headings in the MCP capability
+  tool page. Their Rustdoc examples and enum values are unchanged.
+
 ### Changed
 
 - **Behaviour change.** `Server::save_buffer` creates a missing file with mode

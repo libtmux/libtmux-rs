@@ -372,6 +372,33 @@ class Harness:
                 )
             )
 
+        if tag == "3.8":
+            environment = {
+                "LIBTMUX_TEST_TMUX": str(binary),
+                "LIBTMUX_TEST_MINIMUM_TMUX": str(current),
+                "LIBTMUX_REQUIRE_NATIVE": "LIBTMUX_TEST_MINIMUM_TMUX",
+                "PATH": f"{self.install_prefix(tag) / 'bin'}{os.pathsep}{os.environ['PATH']}",
+            }
+            self.run_step(
+                Step(
+                    cargo_test("libtmux", "--test", "capabilities", "--", "--test-threads=1"),
+                    environment,
+                )
+            )
+            self.run_step(
+                Step(
+                    cargo_test(
+                        "tmux-mcp",
+                        "--test",
+                        "protocol",
+                        "daemon_capability_tool_",
+                        "--",
+                        "--test-threads=1",
+                    ),
+                    environment,
+                )
+            )
+
         self.run_workspace(tag, lane, binary)
 
     def run_workspace(self, tag: str, lane: Lane | None, binary: Path) -> None:
