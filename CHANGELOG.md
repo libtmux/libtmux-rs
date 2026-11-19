@@ -23,6 +23,11 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- `cargo deny check` now accepts RUSTSEC-2026-0543, which marks `chrono`
+  unmaintained, so `just check` passes again. Only `tmux-mcp` reaches `chrono`,
+  through `rmcp`, and no `rmcp` release drops it yet. `deny.toml` names that one
+  advisory and says when to delete the entry; every other advisory still fails
+  the check, as do yanked crates, licences, bans and sources. (#171)
 - CI installs the toolchain `rust-toolchain.toml` pins and caches builds with
   `actions-rust-lang/setup-rust-toolchain`, where jobs installed `stable` and
   let the pin override it inside the checkout. Clippy and rustfmt failures now
