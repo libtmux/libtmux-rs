@@ -28,6 +28,14 @@ allow-wildcard-paths = true
 
 [advisories]
 yanked = "deny"
+# `chrono` reaches the tree only through `rmcp`, which depends on it
+# unconditionally and enables the `chrono04` feature of `schemars`; no
+# `rmcp` release up to 3.11.0 has a feature that drops it. Remove this entry
+# once an `rmcp` release moves to `jiff` or `time` (or makes `chrono`
+# optional) and `tmux-mcp` requires that release.
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained with no patched version; a dependency of rmcp, which has no release without it yet" },
+]
 
 [sources]
 unknown-registry = "deny"
