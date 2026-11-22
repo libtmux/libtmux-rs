@@ -393,19 +393,38 @@ other Unix targets, and the checks that hold the CI workflows to the plan. The
 recipe runs these four commands, and the CI `just check` job runs the recipe:
 
 ```console
-$ uv run --locked ruff format --check
+$ uv run \
+    --project scripts \
+    --locked \
+    ruff format \
+    --check \
+    --config scripts/pyproject.toml \
+    scripts \
+    crates/tmux-workspace/tests/fixtures
 ```
 
 ```console
-$ uv run --locked ruff check
+$ uv run \
+    --project scripts \
+    --locked \
+    ruff check \
+    --config scripts/pyproject.toml \
+    scripts \
+    crates/tmux-workspace/tests/fixtures
 ```
 
 ```console
-$ uv run --locked ty check
+$ uv run \
+    --project scripts \
+    --locked \
+    ty check \
+    --project scripts \
+    scripts \
+    crates/tmux-workspace/tests/fixtures
 ```
 
 ```console
-$ uv run --locked pytest scripts
+$ uv run --project scripts --locked pytest scripts
 ```
 
 These gates are **not** in `just check` and run only in CI:

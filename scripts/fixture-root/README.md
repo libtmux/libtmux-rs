@@ -21,5 +21,5 @@ $ uv run scripts/fixture-root/fixture_root.py
 Run its tests:
 
 ```console
-$ uv run pytest scripts/fixture-root
+$ uv run --project scripts pytest scripts/fixture-root
 ```

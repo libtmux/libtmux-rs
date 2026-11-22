@@ -18,5 +18,5 @@ $ uv run scripts/bench-regressions/bench_regressions.py target/criterion
 Run its tests:
 
 ```console
-$ uv run pytest scripts/bench-regressions
+$ uv run --project scripts pytest scripts/bench-regressions
 ```

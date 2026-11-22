@@ -27,5 +27,5 @@ $ uv run scripts/public-api/public_api.py target/doc/libtmux.json \
 Run its tests:
 
 ```console
-$ uv run pytest scripts/public-api
+$ uv run --project scripts pytest scripts/public-api
 ```

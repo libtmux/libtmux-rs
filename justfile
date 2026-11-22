@@ -224,10 +224,10 @@ fmt:
 # Format, lint, type check and test the support scripts
 [group: 'lint']
 scripts:
-    uv run --locked ruff format --check
-    uv run --locked ruff check
-    uv run --locked ty check
-    uv run --locked pytest scripts
+    uv run --project scripts --locked ruff format --check --config scripts/pyproject.toml scripts crates/tmux-workspace/tests/fixtures
+    uv run --project scripts --locked ruff check --config scripts/pyproject.toml scripts crates/tmux-workspace/tests/fixtures
+    uv run --project scripts --locked ty check --project scripts scripts crates/tmux-workspace/tests/fixtures
+    uv run --project scripts --locked pytest scripts
 
 # Run clippy over every target and feature
 [group: 'lint']

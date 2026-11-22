@@ -15,5 +15,5 @@ $ uv run scripts/check-changelogs/check_changelogs.py
 Run its tests, which break a copy of the crates one way at a time:
 
 ```console
-$ uv run pytest scripts/check-changelogs
+$ uv run --project scripts pytest scripts/check-changelogs
 ```

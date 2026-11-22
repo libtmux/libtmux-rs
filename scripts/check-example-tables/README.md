@@ -15,5 +15,5 @@ $ uv run scripts/check-example-tables/check_example_tables.py README.md
 Run its tests, which need no cargo:
 
 ```console
-$ uv run pytest scripts/check-example-tables
+$ uv run --project scripts pytest scripts/check-example-tables
 ```

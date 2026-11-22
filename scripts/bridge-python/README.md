@@ -24,5 +24,5 @@ $ RUNNER_TEMP="$(mktemp -d)" \
 Run its tests:
 
 ```console
-$ uv run pytest scripts/bridge-python
+$ uv run --project scripts pytest scripts/bridge-python
 ```

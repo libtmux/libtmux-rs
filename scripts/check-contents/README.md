@@ -18,5 +18,5 @@ $ uv run scripts/check-contents/check_contents.py \
 Run its tests, which break a document one way at a time:
 
 ```console
-$ uv run pytest scripts/check-contents
+$ uv run --project scripts pytest scripts/check-contents
 ```

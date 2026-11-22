@@ -24,5 +24,5 @@ $ uv run scripts/run-examples/run_examples.py
 Run its tests, which need no tmux server:
 
 ```console
-$ uv run pytest scripts/run-examples
+$ uv run --project scripts pytest scripts/run-examples
 ```

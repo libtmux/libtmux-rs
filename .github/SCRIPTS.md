@@ -32,7 +32,8 @@ inline (PEP 723) and run scripts with `uv run`.
   does, who runs it, how) and `tests/`. A short single-purpose script may be
   one file with a usage header.
 - Scripts pass `ruff format`, `ruff check`, `ty check` and `pytest`, with
-  `pytest-asyncio` for async code and doctests collected, in CI.
+  `pytest-asyncio` for async code and doctests collected, configured in
+  `scripts/pyproject.toml` (`uv run --project scripts`) and run in CI.
 - Use current language and tool idioms; no shims below the project's floor.
 - Before a new or rewritten script merges, a reviewer who did not write it
   checks it against [WRITING.md](WRITING.md) and

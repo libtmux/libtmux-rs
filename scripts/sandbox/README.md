@@ -33,5 +33,5 @@ Run the tests here. `crates/libtmux/tests/sandbox_runner.rs` runs the runner
 around real tmux servers, and `sandbox_canary.rs` asserts what it did:
 
 ```console
-$ uv run pytest scripts/sandbox
+$ uv run --project scripts pytest scripts/sandbox
 ```

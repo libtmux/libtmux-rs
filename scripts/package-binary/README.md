@@ -23,5 +23,5 @@ $ uv run scripts/package-binary/package_binary.py \
 Run its tests:
 
 ```console
-$ uv run pytest scripts/package-binary
+$ uv run --project scripts pytest scripts/package-binary
 ```
