@@ -50,7 +50,7 @@ Protocol.
 [Load workspaces](#load-workspaces-from-yaml) ·
 [Drive tmux from an agent](#drive-tmux-from-an-agent) ·
 [Packages](#packages) · [What it leaves out](#what-it-leaves-out) ·
-[Support](#support-and-status) · [Documentation](#documentation)
+[Support](#support-and-status)
 
 ## Quick start
 
@@ -145,7 +145,10 @@ use libtmux::{PaneWait, SplitDirection, SplitOptions};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let session = guard.server().new_session("work").await?;
-    let mut window = session.active_window().await?.expect("a session has a window");
+    let mut window = session
+        .active_window()
+        .await?
+        .expect("a session has a window");
 
     // No client sizes this window, so say how big it is.
     window.resize(100, 40).await?;
@@ -240,7 +243,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sessions = SessionTree::filter_fields();
     let windows = WindowTree::filter_fields();
-    let has_build = sessions.windows.any(windows.window.window_name.eq("build"));
+    let has_build = sessions
+        .windows
+        .any(windows.window.window_name.eq("build"));
 
     // `hierarchy` gathers the whole tree in three tmux commands, not one
     // per object.
@@ -368,7 +373,9 @@ planner how it would group them before anything runs:
 # #[cfg(not(feature = "plan"))]
 # fn main() {}
 # #[cfg(feature = "plan")]
-use libtmux::plan::{NewSession, Plan, Planner, SendKeys, SplitWindow, StepReason};
+use libtmux::plan::{
+    NewSession, Plan, Planner, SendKeys, SplitWindow, StepReason,
+};
 # #[cfg(feature = "plan")]
 use libtmux::test::TestServer;
 
@@ -441,9 +448,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #     return Ok(());
 # }
     let session = guard.server().new_session("watching").await?;
-    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
-        .await?
-        .split();
+    let (commands, mut events) =
+        ControlMode::attach(guard.server(), session.id())
+            .await?
+            .split();
 
     commands
         .subscribe("windows", &Subscription::Session, "#{session_windows}")
@@ -453,7 +461,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // value as well as watching it.
     while let Some(event) = events.next_event().await {
         if let Event::SubscriptionChanged { name, value, .. } = event? {
-            println!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
+            println!(
+                "{} = {}",
+                name.to_string_lossy(),
+                value.to_string_lossy()
+            );
             break;
         }
     }
@@ -474,9 +486,9 @@ what it became, not the steps between. More:
 ### [`tmux-workspace load`][workspace-cli-load]: build a session from a file
 
 [`tmux-workspace`](crates/tmux-workspace) is a native tmuxp. It
-[loads][workspace-cli-load] tmuxp workspace files, [freezes][workspace-cli-freeze]
-running sessions back into them, and [imports][workspace-cli-import]
-tmuxinator and teamocil projects.
+[loads][workspace-cli-load] tmuxp workspace files,
+[freezes][workspace-cli-freeze] running sessions back into them, and
+[imports][workspace-cli-import] tmuxinator and teamocil projects.
 
 ```console
 $ cargo install tmux-workspace --locked
@@ -614,66 +626,17 @@ $ claude mcp add tmux \
 - **Unix only.** Native Windows is unsupported, because tmux does not run
   there.
 
-## Documentation
+[Documentation](https://libtmux.org/en/rs/) ·
+[API reference][libtmux-api] ·
+[docs.rs][libtmux-docsrs] ·
+[Design notes](crates/libtmux/docs/design.md) ·
+[Changelog](CHANGELOG.md) ·
+[Contributing](.github/CONTRIBUTING.md) ·
+[AI policy](https://libtmux.org/en/meta/ai-policy/)
 
-You may be looking for:
-
-- [API documentation](https://docs.rs/libtmux) — every public item, with a
-  runnable example
-- [API reference](https://libtmux.org/en/rs/latest/reference/) — the same
-  items on libtmux.org, with guides and concepts beside them
-- [The `libtmux` guide](crates/libtmux/README.md) — features, the three
-  transport switches, testing
-- [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
-  package**, if you want an agent to drive tmux
-- [Examples](crates/libtmux/examples) — programs that run and clean up after
-  themselves, from reading a server to watching one over control mode
-- [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
-- [Changelog](CHANGELOG.md) — changes that span crates, with a link to the
-  changelog of each crate
-
-## Development
-
-`just` lists every recipe. Cargo is authoritative; the justfile only groups
-Cargo commands.
-
-```console
-$ just check
-```
-
-That runs what CI runs. [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md)
-has the gates and the things that will bite, and
-[`.github/WRITING.md`](.github/WRITING.md) says how the prose reads.
-
-## AI policy
-
-Use these packages with AI tools as you like. When contributing, check what you
-submit and wait for a maintainer's invitation before preparing a pull request.
-See the [AI policy](https://libtmux.org/en/meta/ai-policy/), also kept as
-[AI_POLICY.md](https://github.com/libtmux/.github/blob/HEAD/AI_POLICY.md).
-
-## Attribution
-
-Please use the following BibTeX template to cite libtmux-rs in scientific discourse:
-
-```bibtex
-@misc{libtmux-rs,
-   author = {Tony Narlock},
-   year = {2026},
-   note = {https://libtmux.org/en/rs/},
-   title = {libtmux-rs: Rust wrapper for tmux}
-}
-```
-
-## License
-
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option.
-
-Unless you explicitly state otherwise, any contribution intentionally
-submitted for inclusion in this workspace by you, as defined in the Apache-2.0
-license, shall be dual licensed as above, without any additional terms or
-conditions.
+Licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT). Part of the
+[libtmux.org](https://libtmux.org/) family alongside
+[Python libtmux](https://github.com/tmux-python/libtmux).
 
 [libtmux-api]: https://libtmux.org/en/rs/latest/reference/
 [libtmux-docsrs]: https://docs.rs/libtmux/latest/libtmux/

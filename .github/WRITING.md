@@ -1,96 +1,63 @@
 # Writing
 
-How this repository writes, for humans and agents alike. It governs
-`README.md`, `CHANGELOG.md`, release notes, commit messages, CLI and help
-text, error messages, rustdoc, and source comments — every surface a reader
-reaches without opening the code.
+Repository-specific rules for `README.md`, `CHANGELOG.md`, release notes,
+commit messages, CLI and help text, error messages, `rustdoc`, and source
+comments in `libtmux-rs`.
 
-For building, testing, the gates, and pull requests, see
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+Shared organization voice, CommonMark wrapping, code-fence formatting,
+source-comment gates, slop prevention, and commit conventions live in
+[`libtmux/.github` `WRITING.md`][org-writing]. Building, testing, gates, and
+pull requests live in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## Voice
+## Terminology and spelling
 
-Calm, technical, economical. The register to aim for is a good man page
-written by someone who also cares about API design, not a product page.
+- Headings are sentence case: `## Platform support`, not `## Platform Support`.
+- `tmux` is lowercase everywhere, including at the start of a sentence —
+  rewrite the sentence instead.
+- Crate names are as published and in backticks: `libtmux`, `libtmux-macros`,
+  `tmux-mcp`, `tmux-workspace`. The repository is `libtmux-rs`; the crate is
+  `libtmux`. They are not interchangeable.
+- Write `prerelease`, not `pre-release`. Write `changelog`, not `change log`.
+- Rust is capitalised; `rustdoc`, `rustfmt`, `clippy`, and `cargo` are not,
+  except at the start of a sentence.
+- Prose here uses British spelling — `behaviour`, `catalogued`, `artefact`.
+  Identifiers and `rustdoc` follow Rust's own conventions, which are American:
+  `color`, `initialize`. Do not change one to match the other.
+- Use the same verb for the same operation everywhere. `kill` is what tmux
+  calls it, so it is what we call it; not "delete", "remove", or "close".
+- Keep `Note:`, `Important:`, and `Warning:` out of prose; reserve an
+  admonition for something genuinely destructive.
+- Give measurements with their conditions and reproduction command rather than
+  adjectives, and never claim speed from the implementation language.
 
-The pattern that carries most sentences is **fact, then behavior, then escape
-hatch**:
+## README shape
 
-> Symlinks are not followed by default. Use `--follow` to traverse them.
+Both the root `README.md` and each crate's `README.md` follow this shape:
 
-Rules that follow from it:
-
-- State the default explicitly. Never make a reader infer whether something is
-  stable, experimental, platform-specific, or destructive.
-- Describe behavior before implementation. A reader needs to know what happens
-  before they need to know how.
-- Document surprising behavior rather than leaving it to be discovered. Name
-  sharp edges; do not hide them.
-- Give measurements with their conditions, never adjectives. "20 MB versus
-  about 100 bytes over two seconds against a flooding neighbour" is a claim; a
-  reader can check it. "Much faster" is not.
-- A performance number appears identically everywhere it appears, next to the
-  command that reproduces it.
-- Caveats increase credibility. The sentence that says what did not improve is
-  the one that makes the rest believable.
-- Prefer concrete nouns and active declarative sentences.
-- Put identifiers, paths, environment variables, commands, and flags in
-  backticks.
-- Never claim speed from the implementation language.
-
-### Diction
-
-| Instead of | Prefer |
-| --- | --- |
-| "easy", "simple", "just" | omit |
-| "obvious" | omit; if it were, you would not be writing it |
-| "blazing fast", "high performance" | give the number and the conditions |
-| "powerful", "flexible", "seamless" | state the capability |
-| "robust" | name the failure that is handled |
-| "comprehensive" | name what is covered |
-| "production-ready" | state the guarantee |
-| "optimized" | give the magnitude |
-| "various fixes" | name the components |
-| "under the hood" | omit unless a caller can observe it |
-| "please note that" | state the fact |
-| "leverage", "utilize" | "use" |
-| "in order to" | "to" |
-| "we added", "new and improved" | "`Foo` now …" |
-
-### One voice per surface
-
-| Surface | Voice |
-| --- | --- |
-| `README.md` | concise teacher |
-| rustdoc | the contract a caller may rely on |
-| `--help` | reference manual |
-| `CHANGELOG.md` | ledger |
-| GitHub release | upgrade briefing |
-| error message | diagnosis |
-| commit subject | the semantic delta |
-| commit body | engineering rationale |
-| source comment | what the code cannot say itself |
-
-## README
-
-The README is not the manual. It answers what this is, why you would use it,
-what using it feels like, how to install it, and where everything else lives.
-
-- Say what the crate does in the first sentence, without backstory. Project
-  history belongs in `crates/libtmux/docs/design.md`.
-- Put concepts before switches. The behavioral model teaches the reader; a
-  flag dump does not. `--help` and the API documentation own the switches.
-- Say who it is not for, and name the alternative. The paragraph that turns a
-  reader away is worth more than the one that keeps the wrong reader.
-- Compatibility is content, not an afterthought: the tmux floor, the MSRV, and
-  the platforms belong in the README under their own heading, as floors a
-  reader can act on.
-- A Rust example on a README is compiled by `cargo test --doc`, on the five
-  pages wired in for it. Write examples that run; one that cannot compile is
-  not an example. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists which pages those
-  are, and says that adding a README means wiring it in.
-- Badges: CI, the published crates, the libtmux.org docs, MSRV, license. That
-  is the set.
+- **Header.** The logo, a centred title, and a badge row: CI, published crates,
+  the `libtmux.org` docs, MSRV, and license. Link only pages returning 200.
+- **First sentence and boundaries.** Say what the crate does without backstory
+  (project history belongs in `crates/libtmux/docs/design.md`), put concepts
+  before switches, and say who it is not for while naming the alternative.
+- **Tasks and linked APIs.** A `##` heading names what the reader came to do; a
+  `###` heading links an API name to its `libtmux.org` reference page, followed
+  by a colon and its job in plain words, then linked sibling APIs, the example,
+  what it prints, at most one short note, and a `More:` link to the guide.
+- **Short paragraphs, no inventories.** Keep paragraphs to three lines or
+  fewer, turn lists of facts into bullets, and omit feature inventories,
+  toolchain patch versions, CI matrix logs, and gate boilerplate.
+- **Executable examples.** Rust examples on the five wired README pages (listed
+  in [`CONTRIBUTING.md`](CONTRIBUTING.md)) are compiled by `cargo test --doc`,
+  and longer programs live in `examples/` where `just examples` runs them.
+  Examples start with their imports and own a private server through
+  `TestServer`, never shell `tmux`, `tmux kill-server`, or `rm`.
+- **Headline features.** Typed queries, the planner and `Planner::explain`,
+  chaining, and control mode each get a section with a linked heading and an
+  example. Describe none the crate lacks.
+- **Packages and closing sections.** Keep the package table and per-crate
+  headings linking trunk directories, API reference, registry, and changelog,
+  and close with short bold-lead bullets under `What it leaves out` and
+  `Support and status` (`tmux 3.3a or newer`, `Rust 1.85 or newer`).
 
 The version warning is worded the same in every libtmux port. Do not reword it:
 
@@ -98,54 +65,12 @@ The version warning is worded the same in every libtmux port. Do not reword it:
 > settled: any release may change or remove exported identifiers, and the
 > changelog marks each break. Pin an exact version to avoid one.
 
-## README shape
-
-A README is read at a glance, so it is made of short parts a reader can find by
-scanning. This is the shape of the repository README and of each crate's.
-
-- **Header.** The logo, a centred title, and a badge row. Add no badge or link
-  for a registry or libtmux.org page that does not return 200.
-- **Sections are tasks.** A `##` heading names what the reader came to do, in
-  their words: "Find sessions, windows and panes".
-- **Headings are the API.** A `###` heading is an API name linked to its
-  libtmux.org reference page, then a colon and its job in plain words: the
-  linked `Server::sessions`, a colon, and "what tmux has now".
-- **Under a heading:** a line or two linking sibling APIs, the example, what it
-  prints, at most one short note, and a `More:` link to the guide.
-- **No paragraph over three lines.** A list of facts is a bullet list.
-- **No feature inventory.** The sections and their examples show what exists.
-- **Requirements are floors.** "tmux 3.3a or newer", "Rust 1.85 or newer". No
-  patch versions of a toolchain, no CI matrix, no kernel or libc detail; link
-  the page that holds it.
-- **Cut what a reader would assume or never need.** That examples are tested,
-  how the docs are built, what the checks cover, and words like "evidence",
-  "qualification" or "contract" used as filler.
-- **Packages.** Keep the table. Under it, one heading per crate linking its
-  directory on the trunk branch, a one-line description, then a line of links
-  to the API reference, the registry and the changelog.
-- **Support and status, What it leaves out.** Short bullets with a bold lead.
-- **Add, never remove.** An example, a command block, an index table, a package
-  list or a guide table stays. Shorten the prose around it and move detail to a
-  guide.
-- **Examples start with their imports,** so a reader can paste one into a file
-  and run it. In a section of examples, later ones may continue from the first.
-- **Examples own their tmux server.** They start a private server through the
-  library, `TestServer` here, and clean it up through the library. A step that
-  needs `tmux ...` in the shell, `tmux kill-server` or `rm` is a missing
-  library call, not an example.
-- **Every displayed example comes from a file CI runs.** A Rust block on a
-  README is a doctest, and a longer program lives in `examples/` where
-  `just examples` runs it. Wire a new README in before writing examples on it.
-- **Show the headline features the crate has.** Typed queries, the planner and
-  `Planner::explain`, chaining, and control mode each get a section with a
-  linked heading and an example. Describe none the crate lacks.
-
 ## API documentation
 
-rustdoc is the reference. The [Rust API Guidelines][api-guidelines] are the
+`rustdoc` is the reference. The [Rust API Guidelines][api-guidelines] are the
 baseline; what follows is where this repository is more specific.
 
-**The first sentence stands alone.** rustdoc renders it as the summary in
+**The first sentence stands alone.** `rustdoc` renders it as the summary in
 search results and in module listings, away from everything after it. Write a
 noun and its semantic distinction, not a restatement of the name.
 
@@ -183,7 +108,7 @@ channel inside a type is not documentation.
   no unsafe code here to document. If that ever changes, the section states
   the proof obligation the caller must uphold, and the reason it holds.
 
-**Examples use `?`, not `unwrap()`.** Clippy denies `unwrap_used`,
+**Examples use `?`, not `unwrap()`.** `clippy` denies `unwrap_used`,
 `expect_used`, and `panic` outside tests, and an example teaches whatever it
 shows. Hide the setup with `#` so the example stays short and still compiles:
 
@@ -208,7 +133,7 @@ method below" — the link survives a rename and a reader can follow it.
 **Document invariants on the type that holds them.** "Offsets always fall on
 UTF-8 code point boundaries" is worth more than ten paragraphs about methods.
 
-**A doc comment belongs to the item below it.** rustdoc treats it as an
+**A doc comment belongs to the item below it.** `rustdoc` treats it as an
 attribute and never checks that the prose describes that item, so a block
 inserted one line too high silently hands a type its neighbour's summary.
 Never insert a doc block without landing above the whole of the previous
@@ -217,234 +142,63 @@ meaning.
 
 ## Source comments
 
-A comment ships only if it passes all three gates. Fail any: delete or
-rewrite. Borderline: delete — borderline means the information is
-reconstructible, which is what makes deletion cheap.
+Source comments answer to the shared Loss, Ceiling, and Upkeep gates in
+[`libtmux/.github` `WRITING.md`][org-writing]: one or two lines stating an
+invariant, upstream tmux quirk, protocol constraint, lifetime or concurrency
+rule, or why code that looks wrong is intentional, with deliberation kept in
+the commit message.
 
-**Loss.** Three years from now, would losing this cost a maintainer real time
-rediscovering intent, an invariant, a constraint, or a failure mode the code
-and tests do not already make obvious?
-
-**Elite.** Would SQLite, Redis, the Go standard library, or CPython write this
-comment, at this length? Those projects state the constraint and stop. They do
-not argue with an imagined objector.
-
-**Upkeep.** Will it stay true without maintenance? A comment that hand-syncs a
-value the code owns — a count, an offset, a line reference, a duplicated
-constant — is false the first time that value moves.
-
-### Ceiling
-
-One or two lines. A comment reaching four is either carrying several facts, in
-which case split it, or arguing, in which case cut it to the fact.
-
-Rationale, alternatives weighed, and the story of how the code got here belong
-in the commit message: timestamped, attached to the exact diff, and free to
-maintain.
-
-A comment often holds both a constraint and the deliberation that found it.
-Keep the constraint, cut the deliberation. "Runs at most once per second"
-survives; "this is the right trade for now" does not.
-
-### Keep
-
-- Why over how: upstream quirks, protocol and compatibility constraints,
-  performance tradeoffs still part of the contract.
-- Invariants, preconditions, ordering, lifetime, and concurrency requirements
-  that types and tests cannot express.
-- Code that looks wrong but is not, so a later cleanup does not reintroduce
-  the bug.
-- A high-level sketch of an algorithm whose local operations do not reveal the
-  whole.
-
-### Delete
-
-- Narration of the next lines; code translated into English.
-- Restated names, types, defaults, or control flow.
-- Values duplicated from the code and hand-synced.
-- Justification, hedging, or apology for a choice.
-- Speculation about future requirements.
-- History version control already holds, including commented-out code.
-- Ticket and issue numbers. They say nothing to a reader without tracker
-  access, and they rot when the tracker moves. Unfinished work goes in the
-  tracker, not the source.
-- Transient observations — "currently", "for now", "the latest release" — that
-  go stale with no nearby edit.
-
-### The upkeep gate in practice
-
-It reaches values that track our own code. It does not reach frozen external
-facts.
-
-Bad (Delete):
-
-```rust
-// There are 321 tests to complete for servers.
-```
-
-Good (Keep):
+Upkeep reaches values tracking our own code (`// There are 321 tests...`), not
+frozen external facts:
 
 ```rust
 // tmux < 3.2 reports the pane ID only after the command completes,
 // so this query must stay separate.
 ```
 
-### Documentation exception
-
-Doctests, minimal usage examples, and the `# Errors` and `# Panics` lines on
-public API are exempt from the loss gate — they serve the caller, not the
-maintainer. They are exempt from nothing else. Ceiling: a good man page entry.
-
-Rustdoc `///` comments and `# Examples` doctests fall under this exception; a
-rustdoc example is compiled and run.
+`rustdoc` `///` comments, `# Examples` doctests, and `# Errors` and `# Panics`
+sections are exempt from the loss gate because they serve the caller, while
+keeping the same brevity and upkeep bar.
 
 ## Changelog
 
-`CHANGELOG.md` is a ledger, not a narrative and not `git log`. It is scanned,
-not read: a reader asks whether a release affects them and wants the answer
-without a paragraph. One change, one bullet.
+Each published crate keeps its own `CHANGELOG.md` beside its `Cargo.toml`
+(`crates/libtmux/CHANGELOG.md`, `crates/libtmux-macros/CHANGELOG.md`,
+`crates/tmux-mcp/CHANGELOG.md`, `crates/tmux-workspace/CHANGELOG.md`), and an
+entry lives in the single file of the crate it changes. The root
+`CHANGELOG.md` holds cross-crate changes, documentation, CI, tests, release
+tooling, and each release's opening version summary.
 
-The shape already in the file, and to keep:
-
-- [Keep a Changelog][keep-a-changelog] headings — `### Added`, `### Changed`,
-  `### Fixed`, `### Removed` — under `## <version> - <date>`, with entries
-  landing under `## Unreleased` until a release names them.
-- A heading prefixed with the crate name when only that crate moved, as in
-  `## tmux-mcp 0.1.0-alpha.4 - 2026-08-14`, and an opening line saying which
-  crate got which number whenever the versions diverge.
-- `**Breaking.**` as an inline lead-in on the bullet. Any `0.1.N` release may
-  break the API, so the marker flags each break a caller has to act on, and the
-  changelog is where a reader finds them.
-
-Each published crate keeps its own `CHANGELOG.md` beside its `Cargo.toml`, and
-an entry goes in the file of the crate it changes:
-`crates/tmux-mcp/CHANGELOG.md` for `tmux-mcp`, `crates/libtmux/CHANGELOG.md`
-for `libtmux`, and likewise for
-`libtmux-macros` and `tmux-workspace`. The root `CHANGELOG.md` holds what
-belongs to no single crate: a change that spans crates, documentation, CI,
-tests and release tooling, and the opening paragraph of a release, which says
-which crate got which number. An entry lives in exactly one file. Release
-headings are the workspace's, so each file carries every one and says
-``No entries for `libtmux-macros`.`` under a release with nothing for its crate;
-the `## tmux-mcp 0.1.0-alpha.4` heading is in `tmux-mcp`'s file and the root's
-only. A crate ships its changelog, and `just package` refuses a shipped
-document that links a file the crate does not ship, so a link in one is
-absolute.
-
-Writing an entry:
-
-- Lead with the identifier and a concrete verb: add, fix, remove, refuse,
-  report, `now`, `no longer`. Name identifiers literally —
-  `Pane::capture_lines`, `LIBTMUX_TOOLSETS`, `tmux://capabilities`.
-- Write from the caller's side. "Reduce peak memory when traversing large
-  trees", not "replace the walker with a channel-based scheduler."
-- A second sentence carries the impact, and is usually the sentence worth
-  having: what the old behavior was, what a caller should do instead, what is
-  unaffected.
-- State a changed default explicitly, and an incompatibility more explicitly
-  still, with the way forward in the same bullet.
-- Do not sell a fix. "No longer returns another command's reply", not
-  "improves reliability". Do not describe effort.
-- A refactor no caller can observe is not an entry. A dependency bump is not
-  an entry unless it changes behavior or addresses a vulnerability.
-- An MSRV change is never filed as "update toolchain". It is a compatibility
-  change, named with both versions.
-
-## Release notes
-
-The changelog is the durable ledger; the GitHub release is an upgrade
-briefing, written for someone deciding whether to take this version now. They
-are not the same document, and the release note is allowed to be shorter.
-
-A release note leads with the two or three things that change a decision:
-breaking changes first, then new capability, then anything with a measured
-effect. Implementation improvements appear only where a caller observes the
-result. Link to the changelog for the rest; do not paste it.
-
-The publish workflow writes a short note from the tag. Expanding it by hand is
-worthwhile for a release with a break in it, and unnecessary otherwise.
-
-No emoji, in release notes or anywhere else.
+- Use [Keep a Changelog][keep-a-changelog] sections (`### Added`,
+  `### Changed`, `### Fixed`, `### Removed`) under `## <version> - <date>`,
+  with unreleased work under `## Unreleased`.
+- Prefix crate-only releases as `## tmux-mcp 0.1.0-alpha.4 - 2026-08-14` (kept
+  in `tmux-mcp`'s file and the root's only). Every crate file carries each
+  workspace release heading and writes ``No entries for `libtmux-macros`.``
+  when unchanged.
+- Prefix breaking `0.1.N` bullets with `**Breaking.**` and give the migration
+  in the same bullet.
+- Lead with the literal identifier (`Pane::capture_lines`, `LIBTMUX_TOOLSETS`,
+  `tmux://capabilities`) and a concrete verb from the caller's side; record an
+  MSRV raise with both versions.
+- Use absolute links inside crate changelogs because `just package` refuses
+  links to files the crate tarball does not ship.
+- GitHub release notes brief upgraders on breaking changes, new capability, and
+  measured effects without emoji, linking the changelog rather than pasting it.
 
 ## Commit messages
 
-```
-Scope(type[detail]): concise description
+Follow the `Scope(type[detail]): concise description` format (50-character
+subject excluding `(#NN)`, 72-character body lines, blank line between `why:`
+and `what:`) in [`libtmux/.github` `WRITING.md`][org-writing].
 
-why: Explanation of necessity or impact.
-
-what:
-- Specific technical changes made
-- Focused on a single topic
-```
-
-Keep the subject to 50 characters or fewer, excluding any trailing `(#NN)` PR
-reference, and wrap body lines at 72. Separate `why:` and `what:` with a blank
-line.
-
-The subject is the semantic delta, and should read as a changelog fragment:
-`Avoid following junctions during recursive scans`, not `Update scanner`. The
-scope names a subsystem — `Pane`, `ControlMode`, `tmux-mcp` — not a filename.
-
-The body explains why, not the diff. The diff already shows what changed; the
-message records the invariant that was wrong, why this approach was chosen,
-and what deliberately did not change. A negative result belongs here: the
-sentence saying which case did not improve is the one a reader five years from
-now needs.
-
-Types in use:
-
-- **feat** — new features or enhancements
-- **fix** — bug fixes
-- **refactor** — restructuring without functional change
-- **docs** — documentation
-- **chore** — maintenance: tooling, config
-- **test** — test-related
-- **style** — formatting
-- **rs(deps)** — dependencies
-- **rs(deps[dev])** — dev dependencies
-- **ai(rules[AGENTS])** — agent rule updates
-
-`dependabot.yml` writes `rs(deps) `, `rs(deps[toolchain]) `, and `ci(deps) `
-in the same format.
-
-Example:
-
-```
-Pane(feat[send_keys]): Add support for a literal flag
-
-why: Send characters without tmux interpreting them.
-
-what:
-- Add a literal field to SendKeysOptions
-- Pass -l when it is set
-```
-
-For a multi-line message, use a heredoc so the formatting survives:
-
-```console
-$ git commit -m "$(cat <<'EOF'
-Scope(feat[detail]): Concise description
-
-why: Explanation of the change.
-
-what:
-- First change
-- Second change
-EOF
-)"
-```
-
-### Release commits
-
-Tagging is allowed here, and a tag publishes to crates.io. A published version
-is immutable — it can be yanked, never replaced — so push one tag, watch it
-land, and only then push the next. The procedure is in
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-A release commit subject is plain and short: `Tag v<version>`. The detail goes
-in the body. Do not use the `Scope(type[detail]):` format for a release; it
-buries the lede.
+- Scopes name a subsystem (`Pane`, `ControlMode`, `tmux-mcp`), not a filename.
+- Types in use include `feat`, `fix`, `refactor`, `docs`, `chore`, `test`,
+  `style`, `rs(deps)`, `rs(deps[dev])`, `rs(deps[toolchain])`, `ci(deps)`, and
+  `ai(rules[AGENTS])`.
+- Release commits use `Tag v<version>` rather than `Scope(type[detail]):`. A
+  tag publishes to crates.io and cannot be replaced; push one tag at a time per
+  [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## CLI and help text
 
@@ -473,104 +227,22 @@ the message exists so a person can act on it.
 Defaults belong in the help text, next to the flag, not in prose a reader has
 to hunt through.
 
-## Terminology and capitalization
+## Markdown and directives
 
-- Headings are sentence case: `## Platform support`, not `## Platform Support`.
-- `tmux` is lowercase, always, including at the start of a sentence — rewrite
-  the sentence instead.
-- Crate names are as published and in backticks: `libtmux`, `libtmux-macros`,
-  `tmux-mcp`, `tmux-workspace`. The repository is `libtmux-rs`; the crate is
-  `libtmux`. They are not interchangeable.
-- Write `prerelease`, not `pre-release`. Write `changelog`, not `change log`.
-- Rust is capitalized; `rustdoc`, `rustfmt`, `clippy`, and `cargo` are not,
-  except at the start of a sentence.
-- Prose here uses British spelling — `behaviour`, `catalogued`, `artefact`.
-  Identifiers and rustdoc follow Rust's own conventions, which are American:
-  `color`, `initialize`. Do not change one to match the other.
-- Use the same verb for the same operation everywhere. `kill` is what tmux
-  calls it, so it is what we call it; not "delete", "remove", or "close".
-- Keep `Note:`, `Important:`, and `Warning:` out of prose. If it matters, say
-  it in a sentence. Reserve an admonition for something genuinely destructive.
+Follow the CommonMark, 80-column repository wrapping, reference-link, and
+paste-and-run `console` fence rules in
+[`libtmux/.github` `WRITING.md`][org-writing] (no `> [!NOTE]` or `> [!WARNING]`
+alerts in tracked `.md` files, and no hard-wrapping in issue or pull request
+bodies).
 
-## Code blocks
+- Doctests and executed examples are exempt from single-command fence
+  splitting because the test suite runs them.
+- Never reformat directive comments: `#![cfg_attr]`, `#[allow]`, the `region:`
+  markers the documentation site slices examples between, and the
+  `<!-- example-output: -->` markers `just example-tables` runs.
+- Preserve every comment documenting an invariant, protocol constraint,
+  platform quirk, or upstream workaround.
 
-Code blocks are paste-and-run units: pasting one block runs exactly one
-intended action. Doctests and other executed examples are exempt — the test
-suite runs them, nobody pastes them.
-
-- **One command per block.** Multiple steps may share a block only when
-  explicitly chained with `&&`, `;`, or `\` continuations — the chain is then
-  one logical command.
-- **Explanations go in prose above the block**, never as `#` comments inside
-  it.
-- **Command menus are per-command blocks with prose lead-ins**, not tables.
-- **Shell commands use the `console` tag with a `$ ` prefix.** This separates
-  interactive commands from scripts and enables prompt-aware copy.
-- **Split long commands with `\`** — one flag or flag-and-value pair per
-  indented continuation line, positional arguments last.
-- **Show output only when the output is the point.** An example carrying both
-  the invocation and what it printed is worth more than prose describing it,
-  and it has to be deterministic to be worth anything.
-
-Good:
-
-Show the last ten commits as a graph:
-
-```console
-$ git log \
-    --max-count=10 \
-    --graph \
-    --oneline
-```
-
-Bad:
-
-```console
-# Show the last ten commits as a graph
-$ git log --max-count=10 --graph --oneline
-```
-
-## Markdown
-
-- Plain CommonMark. No renderer-specific extensions, and no GitHub alert
-  blocks (`> [!NOTE]`, `> [!WARNING]`) — they are literal text everywhere but
-  GitHub. Prose that renders everywhere beats a callout that renders once.
-- Markdown files in this repository wrap at 80 columns. A URL that cannot
-  break is the exception; prefer a reference-style link so the prose still
-  wraps.
-- Pull request and issue bodies do not wrap. GitHub renders a single newline
-  as a space in a file and as a line break in a comment, so a wrapped comment
-  body arrives as ragged stubs.
-- Directive comments are not prose and are never reformatted: `#![cfg_attr]`,
-  `#[allow]`, the `region:` markers the documentation site slices an example
-  between, and the `<!-- example-output: -->` markers `just example-tables`
-  runs.
-
-## Slop prevention
-
-Treat AI slop as review-hostile noise, not as proof the text is wrong. The
-goal is information density.
-
-- **AI signatures.** No "Generated by", no conversational filler, no
-  unexplained emoji, no tool metadata.
-- **Brittle references.** No hard-coded line numbers, fragile file counts,
-  dated "as of" claims, bare SHAs, or local absolute paths, unless the
-  artefact is strictly evidentiary, such as a benchmark log.
-- **Diff narration.** Do not restate what moved, was renamed, or was removed
-  in anything the reader holds alongside the diff. The diff and the commit
-  message already carry it.
-- **Branch-internal narrative.** Do not mention intermediate states, abandoned
-  approaches, or "no longer" behavior unless users of a published release
-  actually experienced the old state.
-- **Low-value scaffolding.** No ownerless TODOs, unused future-proofing, debug
-  artefacts, or defensive wrappers around unreachable failure modes.
-- **Prose inflation.** Governed by the diction table above.
-- **Coded labels.** Plain imperatives only. No `[R1]`, no `Option B`, no index
-  a reader has to decode.
-
-Preserve the why. Never delete a comment documenting an invariant, a protocol
-constraint, a platform quirk, or an upstream workaround — those are the facts
-the source comment gates keep, and every other comment is judged against them.
-
+[org-writing]: https://github.com/libtmux/.github/blob/main/WRITING.md
 [api-guidelines]: https://rust-lang.github.io/api-guidelines/documentation.html
 [keep-a-changelog]: https://keepachangelog.com/en/1.1.0/
