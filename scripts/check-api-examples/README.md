@@ -22,5 +22,5 @@ $ uv run scripts/check-api-examples/check_api_examples.py --output payload.json
 Run its tests:
 
 ```console
-$ uv run pytest scripts/check-api-examples
+$ uv run --project scripts pytest scripts/check-api-examples
 ```

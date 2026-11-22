@@ -17,5 +17,5 @@ $ uv run scripts/check-doctests-run/check_doctests_run.py crates
 Run its tests:
 
 ```console
-$ uv run pytest scripts/check-doctests-run
+$ uv run --project scripts pytest scripts/check-doctests-run
 ```

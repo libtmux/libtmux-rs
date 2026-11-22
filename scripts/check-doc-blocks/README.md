@@ -16,5 +16,5 @@ $ uv run scripts/check-doc-blocks/check_doc_blocks.py crates
 Run its tests:
 
 ```console
-$ uv run pytest scripts/check-doc-blocks
+$ uv run --project scripts pytest scripts/check-doc-blocks
 ```

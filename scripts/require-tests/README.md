@@ -20,5 +20,5 @@ $ uv run scripts/require-tests/require_tests.py \
 Run its tests:
 
 ```console
-$ uv run pytest scripts/require-tests
+$ uv run --project scripts pytest scripts/require-tests
 ```

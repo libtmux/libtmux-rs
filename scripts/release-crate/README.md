@@ -39,5 +39,5 @@ $ uv run scripts/release-crate/release_crate.py \
 Run its tests:
 
 ```console
-$ uv run pytest scripts/release-crate
+$ uv run --project scripts pytest scripts/release-crate
 ```

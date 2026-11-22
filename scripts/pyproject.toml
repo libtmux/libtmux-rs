@@ -1,0 +1,98 @@
+# Tooling for the maintainer scripts under scripts/. The Rust crates have no
+# Python dependency and do not build or install this project.
+[project]
+name = "libtmux-rs-scripts"
+version = "0.0.0"
+description = "Format, lint, type and test configuration for scripts/"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = [
+  "pytest>=9.2",
+  "pytest-asyncio>=1.4",
+  "pyyaml>=6.0",
+  "ruff>=0.17",
+  "ty>=0.0.101",
+]
+
+[tool.uv]
+package = false
+# Lock only releases at least three days old. Project settings override a
+# contributor's own uv configuration, so `uv lock --project scripts --check`
+# gives the same answer on every machine. A relative value needs uv 0.9.17 or
+# newer.
+exclude-newer = "3 days"
+
+[tool.pytest.ini_options]
+# Each script is a plain module in its own directory, so its tests import it by
+# directory.
+pythonpath = [
+  "bench-regressions",
+  "check-api-examples",
+  "check-changelogs",
+  "check-contents",
+  "check-doc-blocks",
+  "check-doctests-run",
+  "check-example-tables",
+  "example-coverage",
+  "public-api",
+  "require-tests",
+  "sandbox",
+  "ci-plan",
+  "check-package-contents",
+  "run-examples",
+  "tmux-format-compat",
+  "tmux-format-compat/tests",
+  "fixture-root",
+  "bridge-python",
+  "fuzz-run",
+  "package-binary",
+  "release-crate",
+]
+testpaths = ["."]
+markers = [
+  "slow: starts and kills real process trees, about 40 s for the supervisor cases",
+]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+  "--doctest-modules",
+  "--strict-config",
+  "--strict-markers",
+  "-p",
+  "no:cacheprovider",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+include = ["**/*.py"]
+
+[tool.ruff.lint]
+extend-select = ["B", "C4", "I", "RUF", "SIM", "UP"]
+
+[tool.ty.environment]
+python-version = "3.12"
+extra-paths = [
+  "bench-regressions",
+  "check-api-examples",
+  "check-changelogs",
+  "check-contents",
+  "check-doc-blocks",
+  "check-doctests-run",
+  "check-example-tables",
+  "example-coverage",
+  "public-api",
+  "require-tests",
+  "sandbox",
+  "ci-plan",
+  "check-package-contents",
+  "run-examples",
+  "tmux-format-compat",
+  "tmux-format-compat/tests",
+  "fixture-root",
+  "bridge-python",
+  "fuzz-run",
+  "package-binary",
+  "release-crate",
+]

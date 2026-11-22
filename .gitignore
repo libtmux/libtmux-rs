@@ -35,4 +35,4 @@ __pycache__/
 /fuzz/coverage/
 
 # The scripts/ tooling environment.
-/.venv/
+/scripts/.venv/

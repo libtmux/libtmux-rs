@@ -20,5 +20,5 @@ $ uv run scripts/fuzz-run/fuzz_run.py layout
 Run its tests:
 
 ```console
-$ uv run pytest scripts/fuzz-run
+$ uv run --project scripts pytest scripts/fuzz-run
 ```

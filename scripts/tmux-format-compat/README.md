@@ -32,5 +32,5 @@ Run its tests. The supervisor cases kill, stop and fork processes, so each runs
 in a process of its own:
 
 ```console
-$ uv run pytest scripts/tmux-format-compat
+$ uv run --project scripts pytest scripts/tmux-format-compat
 ```

@@ -25,5 +25,5 @@ $ uv run scripts/check-package-contents/check_package_contents.py \
 Run its tests, which build small trees and break each rule:
 
 ```console
-$ uv run pytest scripts/check-package-contents
+$ uv run --project scripts pytest scripts/check-package-contents
 ```

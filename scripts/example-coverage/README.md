@@ -27,5 +27,5 @@ $ uv run scripts/example-coverage/example_coverage.py \
 Run its tests:
 
 ```console
-$ uv run pytest scripts/example-coverage
+$ uv run --project scripts pytest scripts/example-coverage
 ```

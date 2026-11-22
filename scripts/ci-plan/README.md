@@ -34,5 +34,5 @@ $ NEEDS_JSON='{"plan":{"result":"success"}}' \
 Run its tests, which include the checks that hold the workflows to the plan:
 
 ```console
-$ uv run pytest scripts/ci-plan
+$ uv run --project scripts pytest scripts/ci-plan
 ```
