@@ -8,6 +8,8 @@ pub mod control;
 #[cfg(feature = "serde")]
 mod creation_wire;
 mod error;
+#[path = "formats/catalog.rs"]
+mod format_catalog;
 mod framed;
 mod new_session;
 mod operand;
