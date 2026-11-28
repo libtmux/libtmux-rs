@@ -1051,42 +1051,58 @@ async fn a_name_shaped_like_a_flag_is_refused_not_obeyed() {
 }
 
 #[tokio::test]
-async fn a_whole_hook_write_refuses_bytes_rather_than_substituting_them() {
-    use libtmux_tokio::{IndexedHooks, ReplaceMode, TmuxText};
+async fn a_whole_hook_write_preserves_the_bytes_native_tmux_accepts() {
+    use libtmux_tokio::{IndexedHooks, ReplaceMode};
     use std::collections::BTreeMap;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
 
-    // A hook value is a tmux command, and tmux refuses one carrying a byte it
-    // cannot read. Passing the bytes through a `String` first replaced that
-    // byte with U+FFFD, which tmux then accepted: the caller was told the
-    // write succeeded and tmux held a command they had not written.
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::new().await.expect("private daemon");
     let server = guard.server();
-
-    let mut command = b"set-environment -g MARK \"a".to_vec();
-    command.push(0xff);
-    command.extend_from_slice(b"b\"");
-
-    let mut entries = BTreeMap::new();
-    entries.insert(0, TmuxText::from(command));
-    server
-        .set_hooks(
-            "alert-bell",
-            &IndexedHooks::from(entries),
-            ReplaceMode::Replace,
-        )
+    let native = || {
+        let mut command = tokio::process::Command::new(server.tmux_executable());
+        command
+            .args(["-N", "-S"])
+            .arg(server.socket_path())
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .kill_on_drop(true);
+        command
+    };
+    let input = b"set-environment -g MARK a\xffb";
+    let native_write = native()
+        .args(["set-hook", "-g", "alert-bell[0]"])
+        .arg(OsStr::from_bytes(input))
+        .output()
         .await
-        .expect_err("tmux refuses a command it cannot read");
-
-    assert!(
-        server
-            .hook("alert-bell")
+        .unwrap();
+    let read_slot = || async {
+        native()
+            .args(["show-options", "-gqv", "alert-bell[0]"])
+            .output()
             .await
-            .expect("the hook reads")
-            .is_none_or(|hook| hook.get(0).is_none()),
-        "nothing was stored under a substituted value",
-    );
+            .unwrap()
+    };
+    let reference = read_slot().await;
+    assert!(reference.status.success());
+    let clear = native()
+        .args(["set-hook", "-gu", "alert-bell"])
+        .output()
+        .await
+        .unwrap();
+    assert!(clear.status.success());
+    let empty = read_slot().await;
+    assert!(empty.status.success() && empty.stdout.is_empty());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    let hooks = IndexedHooks::from(BTreeMap::from([(0, TmuxText::from(input.to_vec()))]));
+    let written = server
+        .set_hooks("alert-bell", &hooks, ReplaceMode::Replace)
+        .await;
+    assert_eq!(written.is_ok(), native_write.status.success());
+    let after = read_slot().await;
+    assert!(after.status.success());
+    assert_eq!(after.stdout, reference.stdout);
+    guard.shutdown().await.expect("private daemon shuts down");
 }
 
 #[tokio::test]
