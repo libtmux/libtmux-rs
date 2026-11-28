@@ -1660,3 +1660,44 @@ async fn reused_ids_on_a_restarted_daemon_make_distinct_handles() {
     server.shutdown().await.unwrap();
     guard.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn releasing_a_channel_scope_leaves_the_replacement_daemons_lock_held() {
+    let binary = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&binary)
+        .start()
+        .await
+        .unwrap();
+    guard.session("original").await.unwrap();
+    let socket = guard.socket_path();
+    let result = guard
+        .server()
+        .with_channel_lock("deploy", async |_| {
+            assert!(
+                native(&binary, socket, &[OsStr::new("kill-server")])
+                    .status
+                    .success()
+            );
+            wait_until_gone(&binary, socket);
+            let start = ["new-session", "-d", "-s", "replacement", "sleep 30"].map(OsStr::new);
+            assert!(native(&binary, socket, &start).status.success());
+            let lock = ["-N", "wait-for", "-L", "deploy"].map(OsStr::new);
+            assert!(native(&binary, socket, &lock).status.success());
+            Ok::<(), Error>(())
+        })
+        .await;
+    let unlock = ["-N", "wait-for", "-U", "deploy"].map(OsStr::new);
+    let still_locked = native(&binary, socket, &unlock).status.success();
+    let stop = ["-N", "kill-server"].map(OsStr::new);
+    assert!(native(&binary, socket, &stop).status.success());
+    guard.shutdown().await.unwrap();
+    assert!(matches!(
+        result,
+        Err(libtmux_tokio::ScopeError::Cleanup { .. })
+    ));
+    assert!(
+        still_locked,
+        "cleanup must leave the new daemon's lock for its owner"
+    );
+}

@@ -5,6 +5,28 @@ use crate::Error;
 use crate::internal::wait_for;
 
 impl Server {
+    /// A parked waiter or deferred unlock belongs to the daemon that admitted it.
+    async fn channel_server(&self) -> Result<Self, Error> {
+        #[cfg(feature = "control-mode")]
+        if let Some(native) = self.core.native_server() {
+            return Ok(native.clone());
+        }
+        self.for_discovery().await
+    }
+
+    async fn acquire_channel(&self, channel: &str) -> Result<Self, Error> {
+        let budget = self.default_timeout();
+        let start = tokio::time::Instant::now();
+        let server = tokio::time::timeout(budget, self.channel_server())
+            .await
+            .map_err(|_| libtmux_core::Error::BeforeSpawn)??;
+        let remaining = budget
+            .checked_sub(start.elapsed())
+            .ok_or(libtmux_core::Error::BeforeSpawn)?;
+        wait_for::lock(&server.core, channel, remaining).await?;
+        Ok(server)
+    }
+
     /// Signal a `wait-for` channel, releasing anything waiting on it.
     ///
     /// [`Server::wait_for_channel`] is the other half, and either order works:
@@ -77,13 +99,12 @@ impl Server {
         let server = self.clone();
         let channel = channel.to_owned();
         let held = channel.clone();
-        let unlocking = self.clone();
 
         crate::internal::scoped::run(
             "with-channel-lock",
-            async move { server.lock_channel(&held).await.map(|()| server.clone()) },
-            move |_| async move { unlocking.unlock_channel(&channel).await },
-            async |_| operation(self).await,
+            async move { server.acquire_channel(&held).await },
+            move |owner| async move { wait_for::unlock(&owner.core, &channel).await },
+            operation,
         )
         .await
     }
@@ -98,8 +119,8 @@ impl Server {
     ///
     /// Returns an error when tmux refuses the channel name, and
     /// [`crate::ErrorKind::Timeout`] when the channel is still held after
-    /// [`Server::default_timeout`]. A handle from `Server::over_control_mode`
-    /// is refused, for the reason [`Self::wait_for_channel`] gives.
+    /// [`Server::default_timeout`]. A dedicated subprocess waits on the daemon
+    /// that admitted the request, leaving an attached control connection free.
     ///
     /// # Cancel safety
     ///
@@ -115,7 +136,7 @@ impl Server {
     /// defect (`cmd_wait_for_unlock` in `cmd-wait-for.c`), measured on 3.2a,
     /// 3.7d and 3.8.
     pub async fn lock_channel(&self, channel: &str) -> Result<(), Error> {
-        wait_for::lock(&self.core, channel, self.default_timeout()).await
+        self.acquire_channel(channel).await.map(|_| ())
     }
 
     /// Unlock a `wait-for` channel.
@@ -173,11 +194,8 @@ impl Server {
     /// an error, so "nothing signalled it" stays distinct from "the command
     /// did not get through" -- the caller retries only one of those.
     ///
-    /// A handle from `Server::over_control_mode` is refused with
-    /// [`crate::ControlModeErrorKind::BlockingCommand`]: a connection runs one
-    /// command at a time, and tmux closes a blocking `wait-for` the moment it
-    /// queues it, so the wait would neither wait nor let anything else
-    /// through. `Server::signal_channel` routes as usual.
+    /// A control-backed server parks an ordinary client on the same daemon.
+    /// Commands on the attached control connection can still run while it waits.
     ///
     /// # Cancel safety
     ///
@@ -222,6 +240,12 @@ impl Server {
         channel: &str,
         within: Duration,
     ) -> Result<ChannelWait, Error> {
-        wait_for::wait(&self.core, channel, within.min(self.default_timeout())).await
+        let budget = within.min(self.default_timeout());
+        let start = tokio::time::Instant::now();
+        let Ok(owner) = tokio::time::timeout(budget, self.channel_server()).await else {
+            return Ok(ChannelWait::TimedOut);
+        };
+        let owner = owner?;
+        wait_for::wait(&owner.core, channel, budget.saturating_sub(start.elapsed())).await
     }
 }

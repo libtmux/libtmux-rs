@@ -271,7 +271,7 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
 /// nobody sent and the connection would answer nothing else until the channel
 /// was signalled.
 #[tokio::test]
-async fn a_blocking_channel_call_is_refused_rather_than_routed() {
+async fn an_attached_client_can_signal_while_its_ordinary_client_waits() {
     let guard = TestServer::new().await.expect("a private tmux starts");
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
@@ -291,31 +291,24 @@ async fn a_blocking_channel_call_is_refused_rather_than_routed() {
         .await
         .expect("the connection reaches the same server");
 
-    for refused in [
+    use std::time::Duration;
+    assert_eq!(
         routed
-            .wait_for_channel("never-signalled", std::time::Duration::from_secs(5))
+            .wait_for_channel("handoff", Duration::from_millis(100))
             .await
-            .err(),
-        routed.lock_channel("never-signalled").await.err(),
-    ] {
-        let refused = refused.expect("a blocking channel call is refused");
-        assert!(
-            matches!(
-                refused,
-                libtmux_tokio::Error::ControlMode {
-                    kind: libtmux_tokio::ControlModeErrorKind::BlockingCommand,
-                    ..
-                }
-            ),
-            "refused for blocking the connection: {refused:?}",
-        );
-    }
-
-    // The connection still answers, and the half that does not block routes.
-    routed
-        .signal_channel("never-signalled")
-        .await
-        .expect("signalling does not block, so it routes");
+            .unwrap(),
+        libtmux_tokio::ChannelWait::TimedOut
+    );
+    routed.signal_channel("handoff").await.unwrap();
+    assert_eq!(
+        routed
+            .wait_for_channel("handoff", Duration::from_secs(3))
+            .await
+            .unwrap(),
+        libtmux_tokio::ChannelWait::Signalled
+    );
+    routed.lock_channel("handoff-lock").await.unwrap();
+    routed.unlock_channel("handoff-lock").await.unwrap();
     assert_eq!(
         routed
             .sessions()
