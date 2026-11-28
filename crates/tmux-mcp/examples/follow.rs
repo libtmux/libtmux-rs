@@ -11,7 +11,7 @@
 //! $ cargo run --example follow
 //! ```
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use rmcp::handler::server::wrapper::Parameters;
 use serde_json::json;
 use tmux_mcp::{Reporter, Selection, TmuxTools};

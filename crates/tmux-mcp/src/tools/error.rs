@@ -77,8 +77,8 @@ impl IntoContents for ToolError {
 ///
 /// libtmux already draws the distinctions above, so they are carried through
 /// rather than flattened.
-pub(super) fn tmux_error(error: &libtmux::Error) -> ToolError {
-    use libtmux::ErrorKind;
+pub(super) fn tmux_error(error: &libtmux_tokio::Error) -> ToolError {
+    use libtmux_tokio::ErrorKind;
 
     let kind = error.kind();
     let retryable = error.is_transient();
@@ -144,7 +144,7 @@ impl EffectBoundary {
         self.effect_seen = true;
     }
 
-    pub(super) fn error(&self, error: libtmux::Error) -> ToolError {
+    pub(super) fn error(&self, error: libtmux_tokio::Error) -> ToolError {
         let error = if self.effect_seen {
             error.after_effect(self.operation)
         } else {
@@ -153,7 +153,7 @@ impl EffectBoundary {
         tmux_error(&error)
     }
 
-    pub(super) fn tmux<T>(&self, result: Result<T, libtmux::Error>) -> Result<T, ToolError> {
+    pub(super) fn tmux<T>(&self, result: Result<T, libtmux_tokio::Error>) -> Result<T, ToolError> {
         result.map_err(|error| self.error(error))
     }
 
@@ -273,8 +273,8 @@ pub(crate) fn unoffered_tool(tool: &str, exists: bool) -> ErrorData {
 mod tests {
     use std::time::Duration;
 
-    use libtmux::test::TestServer;
-    use libtmux::{Command, CommandChain, DispatchLimits, ErrorKind, Server};
+    use libtmux_tokio::test::TestServer;
+    use libtmux_tokio::{Command, CommandChain, DispatchLimits, ErrorKind, Server};
     use rmcp::model::ErrorCode;
 
     use super::{EffectBoundary, tmux_error};
@@ -283,8 +283,8 @@ mod tests {
     /// can branch on, not as a transport failure.
     #[test]
     fn a_version_refusal_names_its_remedy() {
-        let found = libtmux::TmuxVersion::parse_output(b"tmux 3.2a\n").expect("parses");
-        let refusal: libtmux::Error = found
+        let found = libtmux_tokio::TmuxVersion::parse_output(b"tmux 3.2a\n").expect("parses");
+        let refusal: libtmux_tokio::Error = found
             .ensure_supported()
             .expect_err("3.2a is below the floor")
             .into();
@@ -307,7 +307,7 @@ mod tests {
     fn an_effect_boundary_changes_only_later_failures() {
         let mut boundary = EffectBoundary::new("send_keys");
         let first = boundary
-            .error(libtmux::Error::RuntimeNested)
+            .error(libtmux_tokio::Error::RuntimeNested)
             .into_error_data();
         assert_eq!(first.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
@@ -317,7 +317,7 @@ mod tests {
 
         boundary.mark();
         let later = boundary
-            .error(libtmux::Error::RuntimeNested)
+            .error(libtmux_tokio::Error::RuntimeNested)
             .into_error_data();
         assert_eq!(later.code, ErrorCode::INTERNAL_ERROR);
         let detail = later.data.expect("the later error carries detail");
@@ -386,7 +386,7 @@ mod tests {
         coordinator.shutdown().await.expect("the coordinator stops");
         guard.shutdown().await.expect("tmux fixture shuts down");
 
-        assert_eq!(held, libtmux::ChannelWait::Signalled);
+        assert_eq!(held, libtmux_tokio::ChannelWait::Signalled);
         assert_eq!(error.kind(), ErrorKind::Refused);
         let projected = tmux_error(&error).into_error_data();
         assert_eq!(projected.code, ErrorCode::INTERNAL_ERROR);

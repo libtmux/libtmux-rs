@@ -867,24 +867,10 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 name = "libtmux"
 version = "0.1.2"
 dependencies = [
- "caseless",
- "criterion",
- "futures-core",
- "jsonschema",
+ "libtmux-blocking",
  "libtmux-core",
- "libtmux-macros",
- "regex",
- "rustix",
- "schemars",
- "serde",
- "serde_json",
- "static_assertions",
- "tempfile",
- "thiserror",
+ "libtmux-tokio",
  "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -920,6 +906,28 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "trybuild",
+]
+
+[[package]]
+name = "libtmux-tokio"
+version = "0.1.2"
+dependencies = [
+ "criterion",
+ "futures-core",
+ "getrandom 0.3.4",
+ "jsonschema",
+ "libtmux-core",
+ "rustix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1674,7 +1682,7 @@ version = "0.1.2"
 dependencies = [
  "getrandom 0.4.3",
  "jsonschema",
- "libtmux",
+ "libtmux-tokio",
  "regex",
  "rmcp",
  "schemars",
@@ -1692,7 +1700,8 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
- "libtmux",
+ "libtmux-core",
+ "libtmux-tokio",
  "nix",
  "regex",
  "rustix",

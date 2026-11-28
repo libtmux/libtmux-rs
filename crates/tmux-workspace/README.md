@@ -320,7 +320,7 @@ windows:
     )?;
 
     // Building a handle starts nothing; `plan` is where the commands appear.
-    let server = libtmux::Server::new()?;
+    let server = libtmux_tokio::Server::new()?;
     let plan = WorkspaceBuilder::new(&server).plan(&workspace);
 
     let commands: Vec<String> = plan

@@ -74,14 +74,14 @@ fn wait_until_gone(binary: &OsStr, socket: &Path) {
 
 async fn native_frame_generation_case(replacement: Option<OsString>) {
     let fixture = NativeFrameFixture::new();
-    let server = libtmux::Server::builder()
+    let server = libtmux_tokio::Server::builder()
         .socket_path(&fixture.socket)
         .tmux_executable(&fixture.executable)
         .config_file("/dev/null")
         .build()
         .expect("server handle");
     server
-        .new_session(libtmux::NewSession::new("original").command("exec sleep 60"))
+        .new_session(libtmux_tokio::NewSession::new("original").command("exec sleep 60"))
         .await
         .expect("original daemon starts");
     let generation = server.generation().await.expect("checked generation");
@@ -1189,7 +1189,7 @@ async fn a_staged_frame_removes_itself_and_refuses_an_occupied_path() {
 /// `output.shutdown()`; every other shutdown error is real and must discard
 /// the view being built. Nothing in the ordinary tool path can reach that
 /// branch, since [`crate::exec::wait_for_text`] always attaches with
-/// [`libtmux::ControlLimits::default`], which no ordinary pane output
+/// [`libtmux_tokio::ControlLimits::default`], which no ordinary pane output
 /// exceeds -- this is why `wait_for_text_with_limits` exists.
 ///
 /// Attaches before sending the adversarial line, rather than sending it a
@@ -1198,8 +1198,8 @@ async fn a_staged_frame_removes_itself_and_refuses_an_occupied_path() {
 /// is complete before the flood starts instead of racing it.
 #[tokio::test]
 async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() {
-    use libtmux::ControlLimits;
-    use libtmux::test::TestServer;
+    use libtmux_tokio::ControlLimits;
+    use libtmux_tokio::test::TestServer;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let Some(guard) = crate::test_support::control_fixture(guard).await else {
@@ -1283,7 +1283,7 @@ async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo()
 
     use crate::{SendKeysArgs, TmuxTools};
 
-    let guard = libtmux::test::TestServer::builder()
+    let guard = libtmux_tokio::test::TestServer::builder()
         .start()
         .await
         .expect("tmux starts");
@@ -1297,10 +1297,10 @@ async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo()
         .expect("session starts");
     let pane = session.panes().await.expect("panes list").remove(0);
 
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
         server
             .cmd(
-                libtmux::Command::new("display-message")
+                libtmux_tokio::Command::new("display-message")
                     .arg("-p")
                     .arg("-t")
                     .arg(pane.id().to_string())

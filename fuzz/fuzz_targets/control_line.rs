@@ -9,5 +9,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    libtmux::control::__fuzz_parse_control_line(data);
+    libtmux_tokio::control::__fuzz_parse_control_line(data);
 });

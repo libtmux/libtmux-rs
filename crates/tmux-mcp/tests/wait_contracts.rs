@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use libtmux::test::TestServer;
-use libtmux::{Command, NewSession, Server};
+use libtmux_tokio::test::TestServer;
+use libtmux_tokio::{Command, NewSession, Server};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 

@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
-use libtmux::{Pane, ServerGeneration};
+use libtmux_tokio::{Pane, ServerGeneration};
 use tokio_util::sync::CancellationToken;
 
 use crate::ToolError;
@@ -184,7 +184,7 @@ fn retain_lease_until(proof: impl Future<Output = ()> + Send + 'static, lease: P
 }
 
 pub(crate) struct RunTransport<'a> {
-    pub(crate) server: &'a libtmux::Server,
+    pub(crate) server: &'a libtmux_tokio::Server,
     pub(crate) generation: ServerGeneration,
     pub(crate) executable: &'a OsStr,
     pub(crate) endpoint: &'a Path,
@@ -197,17 +197,17 @@ pub(crate) struct RunTransport<'a> {
 #[derive(Debug)]
 pub(crate) enum RunError {
     /// The watcher or confirmed dispatch failed.
-    Tmux(libtmux::Error),
+    Tmux(libtmux_tokio::Error),
     /// Pane input may have reached tmux, but delivery was not acknowledged.
-    DispatchUnknown(Box<libtmux::Error>),
+    DispatchUnknown(Box<libtmux_tokio::Error>),
     /// Pane state changed after watcher setup and before dispatch.
     Guard(ToolError),
     /// Completion framing failed before the pane watcher was attached.
     Frame,
 }
 
-impl From<libtmux::Error> for RunError {
-    fn from(error: libtmux::Error) -> Self {
+impl From<libtmux_tokio::Error> for RunError {
+    fn from(error: libtmux_tokio::Error) -> Self {
         Self::Tmux(error)
     }
 }
@@ -438,7 +438,7 @@ mod tests {
     )]
     async fn final_guard_awaits_prepared_shutdown_before_return() {
         let _serial = CLEANUP_TEST.lock().await;
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");
@@ -511,7 +511,7 @@ mod tests {
     )]
     async fn a_replacement_daemon_can_reserve_its_reused_pane_id() {
         let _serial = CLEANUP_TEST.lock().await;
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");
@@ -537,10 +537,10 @@ mod tests {
         let socket = server.socket_path().to_path_buf();
 
         server.kill().await.expect("first daemon stops");
-        libtmux::test::retry_until(Duration::from_secs(5), async || !server.is_alive().await)
+        libtmux_tokio::test::retry_until(Duration::from_secs(5), async || !server.is_alive().await)
             .await
             .expect("the first daemon goes away");
-        let replacement = libtmux::Server::builder()
+        let replacement = libtmux_tokio::Server::builder()
             .tmux_executable(executable)
             .socket_path(&socket)
             .build()
@@ -596,7 +596,7 @@ mod tests {
     )]
     async fn endpoint_aliases_share_one_pane_reservation() {
         let _serial = CLEANUP_TEST.lock().await;
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");

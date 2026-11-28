@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
@@ -65,7 +65,7 @@ struct Target {
 }
 
 impl Target {
-    async fn new(server: &libtmux::Server, tool: &str) -> Self {
+    async fn new(server: &libtmux_tokio::Server, tool: &str) -> Self {
         let session_name = format!("surface-{tool}");
         let session = server
             .new_session(session_name.as_str())
@@ -203,7 +203,7 @@ fn is_version_refusal(result: &CallToolResult) -> bool {
 async fn every_advertised_tool_answers_the_schema_it_publishes() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let control = support::supports_control(guard.server()).await;
-    let staging = support::supports(guard.server(), &libtmux::since::NAMED_BUFFER_IDENTITY).await;
+    let staging = support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await;
     let selection =
         Selection::parse(Some("inspect,manage,execute,teardown"), None, None).expect("selection");
     let offered = TmuxTools::builder(guard.server().clone())

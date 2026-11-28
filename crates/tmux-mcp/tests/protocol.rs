@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use rmcp::model::{CallToolRequestParams, ReadResourceRequestParams, ResourceContents};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
@@ -50,7 +50,7 @@ fn selection(toolsets: &str) -> Selection {
 
 #[tokio::test]
 async fn client_sees_the_exact_cross_port_inventory() {
-    let server = libtmux::Server::builder()
+    let server = libtmux_tokio::Server::builder()
         .socket_name("libtmux-mcp")
         .build()
         .expect("server config");
@@ -123,7 +123,7 @@ async fn client_sees_the_exact_cross_port_inventory() {
 
 #[tokio::test]
 async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect,manage,execute,teardown"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -166,7 +166,7 @@ async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
 
 #[tokio::test]
 async fn read_batch_rejects_more_than_sixteen_operations() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -194,7 +194,7 @@ async fn read_batch_rejects_more_than_sixteen_operations() {
 
 #[tokio::test]
 async fn send_keys_batch_rejects_more_than_sixty_four_operations() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("execute"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -311,7 +311,7 @@ async fn read_batch_preserves_a_nested_protocol_error() {
 
 #[tokio::test]
 async fn withheld_tools_are_neither_listed_nor_callable() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -338,7 +338,7 @@ async fn withheld_tools_are_neither_listed_nor_callable() {
 
 #[tokio::test]
 async fn capabilities_resource_reports_the_effective_surface() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(
             Selection::parse(Some("inspect"), None, Some("capture_pane")).expect("selection"),
         )
@@ -479,7 +479,7 @@ async fn aggregate_only_selection_dispatches_hidden_native_routes() {
 
 #[tokio::test]
 async fn capability_report_uses_the_common_socket_and_boundary_shape() {
-    let server = libtmux::Server::builder()
+    let server = libtmux_tokio::Server::builder()
         .socket_name("libtmux-mcp")
         .build()
         .expect("server config");
@@ -593,7 +593,7 @@ async fn a_tmux_refusal_is_an_is_error_result_not_a_protocol_error() {
 /// the model to read.
 #[tokio::test]
 async fn an_unknown_tool_is_still_a_protocol_error() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -613,7 +613,7 @@ async fn an_unknown_tool_is_still_a_protocol_error() {
 #[test]
 fn the_instructions_match_their_reviewed_snapshot() {
     use rmcp::ServerHandler as _;
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .caller(None)
         .build();
     let instructions = tools.get_info().instructions.expect("instructions");

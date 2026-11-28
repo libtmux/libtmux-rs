@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
-use libtmux::{PaneSize, SplitDirection, SplitOptions};
+use libtmux_tokio::{PaneSize, SplitDirection, SplitOptions};
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{CallToolRequestParams, ErrorData};
@@ -521,7 +521,7 @@ impl TmuxTools {
             .into_keys()
             .collect();
         for session in sessions.iter().filter(|session| !session.is_empty()) {
-            let id: libtmux::SessionId = session
+            let id: libtmux_tokio::SessionId = session
                 .parse()
                 .map_err(|_| decode_error(format!("tmux expanded session_id as {session:?}")))?;
             let Some(session) = self
@@ -947,9 +947,9 @@ impl TmuxTools {
         }): Parameters<CreateWindowArgs>,
     ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&session).await?;
-        let mut options = name.map(libtmux::TmuxArg::from).map_or_else(
-            libtmux::NewWindowOptions::unnamed,
-            libtmux::NewWindowOptions::new,
+        let mut options = name.map(libtmux_tokio::TmuxArg::from).map_or_else(
+            libtmux_tokio::NewWindowOptions::unnamed,
+            libtmux_tokio::NewWindowOptions::new,
         );
         if let Some(directory) = start_directory {
             options = options.start_directory(directory);
@@ -1031,9 +1031,9 @@ impl TmuxTools {
     ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
         let mode = if kill_first {
-            libtmux::Respawn::Replacing
+            libtmux_tokio::Respawn::Replacing
         } else {
-            libtmux::Respawn::OnlyIfDead
+            libtmux_tokio::Respawn::OnlyIfDead
         };
         pane.respawn(None::<String>, mode)
             .await

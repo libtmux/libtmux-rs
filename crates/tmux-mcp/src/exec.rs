@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use libtmux::{CaptureOptions, ControlLimits, ControlModeErrorKind, Error, Pane};
+use libtmux_tokio::{CaptureOptions, ControlLimits, ControlModeErrorKind, Error, Pane};
 use regex::bytes::Regex;
 use serde::Serialize;
 
@@ -258,7 +258,7 @@ impl Patterns {
 ///
 /// Returns an error when the pane cannot be watched or read.
 pub(crate) async fn wait_for_text(
-    server: &libtmux::Server,
+    server: &libtmux_tokio::Server,
     pane: &Pane,
     patterns: &Patterns,
     stops: &Patterns,
@@ -272,7 +272,7 @@ pub(crate) async fn wait_for_text(
     let streams = server
         .daemon_version()
         .await?
-        .has_behavior(&libtmux::since::CONTROL_ACQUISITION);
+        .has_behavior(&libtmux_tokio::since::CONTROL_ACQUISITION);
     if !streams {
         return wait_for_text_polling(pane, patterns, stops, timeout, cancelled, echo).await;
     }
@@ -583,7 +583,7 @@ async fn confirmed_above(
 /// The read loop [`wait_for_text_with_limits`] runs once attached.
 async fn wait_on_output(
     pane: &Pane,
-    mut output: libtmux::control::PaneOutput,
+    mut output: libtmux_tokio::control::PaneOutput,
     patterns: &Patterns,
     stops: &Patterns,
     timeout: Duration,

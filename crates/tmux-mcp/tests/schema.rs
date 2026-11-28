@@ -65,7 +65,7 @@ const TEARDOWN: &[&str] = &[
 ];
 
 fn tools(toolsets: &str) -> Result<TmuxTools, Box<dyn Error>> {
-    Ok(TmuxTools::builder(libtmux::Server::new()?)
+    Ok(TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(Selection::parse(Some(toolsets), None, None)?)
         .build())
 }
@@ -221,7 +221,7 @@ fn every_input_property_carries_a_description() -> TestResult {
 #[test]
 fn default_tool_list_stays_under_its_byte_ceiling() -> TestResult {
     const CEILING: usize = 120_000;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(Selection::parse_for_socket(None, None, None, true)?)
         .build();
     let bytes = serde_json::to_string(&tools.offered())?.len();
@@ -478,7 +478,7 @@ fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
     let mut expected: BTreeSet<_> = eligible.iter().copied().collect();
     expected.remove("capture_pane");
     let selected = Selection::parse(Some("inspect"), None, Some("capture_pane"))?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools
@@ -506,7 +506,7 @@ fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
 
     let exclusions = eligible.join(",");
     let selected = Selection::parse(Some("inspect"), None, Some(&exclusions))?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools
@@ -599,7 +599,7 @@ fn aggregate_only_selection_keeps_native_pruned_operation_schemas() -> TestResul
         Some("call_read_tools_batch"),
         Some("capture_pane"),
     )?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let offered = tools.offered();
@@ -659,7 +659,7 @@ fn empty_aggregate_authority_has_a_valid_impossible_schema() -> TestResult {
         Some("call_read_tools_batch"),
         Some(&eligible.join(",")),
     )?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools.offered().into_iter().next().expect("batch route");
@@ -726,7 +726,7 @@ fn aggregate_effects_and_outputs_follow_pruned_authority() -> TestResult {
         Some("call_read_tools_batch"),
         Some("capture_since"),
     )?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools.offered().into_iter().next().expect("batch route");
@@ -759,7 +759,7 @@ fn aggregate_effects_and_outputs_follow_pruned_authority() -> TestResult {
         .collect::<Vec<_>>()
         .join(",");
     let selected = Selection::parse(Some(""), Some("call_read_tools_batch"), Some(&excluded))?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools.offered().into_iter().next().expect("batch route");

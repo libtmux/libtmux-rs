@@ -447,7 +447,7 @@ pub(crate) fn resolve(
         report: CapabilityReport {
             schema_version: 2,
             frozen: true,
-            minimum_tmux_version: libtmux::TmuxVersion::MIN_SUPPORTED.to_string(),
+            minimum_tmux_version: libtmux_tokio::TmuxVersion::MIN_SUPPORTED.to_string(),
             boundary: BoundaryReport {
                 one_socket_per_process: true,
                 per_call_socket_selection: false,

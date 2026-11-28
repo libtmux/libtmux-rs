@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         // Nothing here talks to tmux: the surface is decided before any
         // command runs, so a server is needed only to build the tools.
-        let tools = TmuxTools::builder(libtmux::Server::new()?)
+        let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
             .selection(Selection::parse(Some(toolsets), None, None)?)
             .build();
         let offered = tools.offered();
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(Selection::parse(
             Some("inspect,manage,execute,teardown"),
             None,

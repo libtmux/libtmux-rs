@@ -64,7 +64,7 @@ fn generated_reference() -> TestResult<String> {
 }
 
 fn append_tools(output: &mut String) -> TestResult {
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(Selection::parse(
             Some("inspect,manage,execute,teardown"),
             None,
@@ -308,7 +308,7 @@ impl Launch {
             self.setting(EXCLUDE_TOOLS_ENV),
         )
         .map_err(|error| error.to_string())?;
-        let server = libtmux::Server::new().map_err(|error| error.to_string())?;
+        let server = libtmux_tokio::Server::new().map_err(|error| error.to_string())?;
         TmuxTools::builder(server)
             .selection(selection)
             .try_build()
@@ -672,7 +672,7 @@ const TOOL_PAGE: &str = "https://libtmux.org/en/rs/latest/mcp/tools/";
 
 /// Every tool the registry offers, with the toolset it belongs to.
 fn registered_tools() -> TestResult<Vec<(String, String)>> {
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(Selection::parse(
             Some("inspect,manage,execute,teardown"),
             None,

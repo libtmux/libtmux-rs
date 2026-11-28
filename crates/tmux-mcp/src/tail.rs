@@ -14,7 +14,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use libtmux::{Error, Pane};
+use libtmux_tokio::{Error, Pane};
 
 use crate::identity::{InstanceId, InstanceIdentity};
 

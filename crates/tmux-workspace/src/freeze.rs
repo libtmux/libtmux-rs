@@ -11,7 +11,7 @@
 //! frozen pane carries its current command and says nothing about how it got
 //! there.
 
-use libtmux::{Error, Session};
+use libtmux_tokio::{Error, Session};
 
 use crate::config::{PaneConfig, ShellCommand, WindowConfig, Workspace};
 
@@ -37,10 +37,10 @@ use crate::config::{PaneConfig, ShellCommand, WindowConfig, Workspace};
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 /// # runtime.block_on(async {
-/// use libtmux::{SplitDirection, SplitOptions};
+/// use libtmux_tokio::{SplitDirection, SplitOptions};
 /// use tmux_workspace::freeze;
 ///
-/// let guard = libtmux::test::TestServer::new().await?;
+/// let guard = libtmux_tokio::test::TestServer::new().await?;
 /// let session = guard.server().new_session("built-by-hand").await?;
 /// let mut window = session.active_window().await?.expect("a window");
 /// window.split(SplitOptions::new(SplitDirection::Below)).await?;

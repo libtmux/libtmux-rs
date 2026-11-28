@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // A server is needed to build the tools, but nothing here talks to tmux:
     // the surface is decided before any command runs.
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selection)
         .build();
 

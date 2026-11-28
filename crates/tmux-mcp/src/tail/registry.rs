@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use libtmux::{Error, Pane, TmuxText};
+use libtmux_tokio::{Error, Pane, TmuxText};
 use tokio::sync::{mpsc, oneshot};
 
 use super::hold;

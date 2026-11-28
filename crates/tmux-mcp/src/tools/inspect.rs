@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use libtmux::{CaptureOptions, Command, TmuxText};
+use libtmux_tokio::{CaptureOptions, Command, TmuxText};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{tool, tool_router};
 
@@ -535,7 +535,7 @@ impl TmuxTools {
             entries: entries
                 .into_iter()
                 .map(|(name, entry)| match entry {
-                    libtmux::EnvironmentEntry::Set(value) => {
+                    libtmux_tokio::EnvironmentEntry::Set(value) => {
                         let allowed = self.environment_values.contains(&name);
                         EnvironmentEntry {
                             name,
@@ -544,7 +544,7 @@ impl TmuxTools {
                             withheld: !allowed,
                         }
                     }
-                    libtmux::EnvironmentEntry::Removed => EnvironmentEntry {
+                    libtmux_tokio::EnvironmentEntry::Removed => EnvironmentEntry {
                         name,
                         state: EnvironmentState::Removed,
                         value: None,

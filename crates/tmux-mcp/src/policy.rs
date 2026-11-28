@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use libtmux::Server;
+use libtmux_tokio::Server;
 use rmcp::model::ErrorData;
 use serde::{Deserialize, Serialize};
 

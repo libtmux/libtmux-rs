@@ -7,7 +7,7 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Output, Stdio};
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_tmux-mcp");
@@ -296,12 +296,12 @@ fn layout_process(guard: &TestServer) -> Process {
     )
 }
 
-async fn layout_window() -> (TestServer, libtmux::Window) {
+async fn layout_window() -> (TestServer, libtmux_tokio::Window) {
     let guard = TestServer::new().await.expect("tmux starts");
     let session = guard.session("keeper").await.expect("session starts");
     let window = session.windows().await.expect("windows").remove(0);
     window
-        .split(libtmux::SplitDirection::Below)
+        .split(libtmux_tokio::SplitDirection::Below)
         .await
         .expect("split");
     (guard, window)
@@ -366,13 +366,13 @@ fn real_tmux_compat_mcp_layout_wire_preserves_keeper_and_native_errors() {
             .format(None, "#{version}")
             .await
             .expect("version");
-        libtmux::TmuxVersion::parse_output(
+        libtmux_tokio::TmuxVersion::parse_output(
             format!("tmux {}\n", version.to_string_lossy()).as_bytes(),
         )
         .expect("native version")
     });
     eprintln!("MCP layout wire daemon: {}", version.raw());
-    let mirrored = version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS);
+    let mirrored = version.has_behavior(&libtmux_tokio::since::MIRRORED_LAYOUTS);
     let cases = [
         ("not-a-layout", Some("invalid_input")),
         ("-E", Some("invalid_input")),

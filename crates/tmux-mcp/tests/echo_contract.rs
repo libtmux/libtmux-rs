@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tokio_util::sync::CancellationToken;
 
 mod support;
@@ -309,7 +309,7 @@ async fn s5_unsubmitted_type_ahead_into_a_cold_shell_is_never_matched() {
     guard
         .server()
         .cmd(
-            libtmux::Command::new("set-option")
+            libtmux_tokio::Command::new("set-option")
                 .arg("-g")
                 .arg("default-command")
                 .arg("stty raw -echo; sleep 0.4; exec cat"),
@@ -331,7 +331,7 @@ async fn s5_unsubmitted_type_ahead_into_a_cold_shell_is_never_matched() {
     // change before dispatching anything. That refusal is its job, so a
     // refused send is made again; once `cat` runs it echoes the text back,
     // and that echo must be discounted just the same.
-    let queued = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let queued = libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         tools
             .send_keys(args(serde_json::json!({
                 "pane": pane,
@@ -382,7 +382,7 @@ async fn s6_an_unrecognized_key_stops_discounting_the_line() {
     guard
         .server()
         .cmd(
-            libtmux::Command::new("set-option")
+            libtmux_tokio::Command::new("set-option")
                 .arg("-g")
                 .arg("default-command")
                 .arg("/bin/bash --noprofile --norc"),
@@ -491,7 +491,7 @@ async fn a_resize_between_submit_and_output_does_not_defeat_the_mask() {
     guard
         .server()
         .cmd(
-            libtmux::Command::new("resize-window")
+            libtmux_tokio::Command::new("resize-window")
                 .arg("-t")
                 .arg(&pane)
                 .arg("-x")
@@ -621,7 +621,7 @@ async fn s2_run_shell_commands_dispatch_line_is_not_the_match() {
     guard
         .server()
         .cmd(
-            libtmux::Command::new("resize-window")
+            libtmux_tokio::Command::new("resize-window")
                 .arg("-t")
                 .arg(&pane)
                 .arg("-x")

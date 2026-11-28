@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libtmux::{Command, CommandChain, Error, NewSession};
+use libtmux_tokio::{Command, CommandChain, Error, NewSession};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{tool, tool_router};
 
@@ -63,7 +63,7 @@ fn input_dispatch(
     Some(commands.fold(CommandChain::new(first), CommandChain::then))
 }
 
-async fn delete_private_paste_buffer(server: &libtmux::Server, name: &str) -> Result<(), Error> {
+async fn delete_private_paste_buffer(server: &libtmux_tokio::Server, name: &str) -> Result<(), Error> {
     if server.buffer(name).await?.is_none() {
         return Ok(());
     }
@@ -88,7 +88,7 @@ impl TmuxTools {
     /// Refuse to destroy a window that currently contains the caller pane.
     pub(super) async fn protect_window_caller(
         &self,
-        window: &libtmux::Window,
+        window: &libtmux_tokio::Window,
     ) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
@@ -101,7 +101,7 @@ impl TmuxTools {
     }
 
     /// Refuse to destroy a session that currently contains the caller pane.
-    async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ToolError> {
+    async fn protect_session_caller(&self, session: &libtmux_tokio::Session) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
@@ -658,7 +658,7 @@ impl TmuxTools {
             .arg(&buffer)
             .arg("--")
             .sensitive_arg(OsString::from(payload))
-            .requires_tmux("paste_text", libtmux::since::NAMED_BUFFER_IDENTITY);
+            .requires_tmux("paste_text", libtmux_tokio::since::NAMED_BUFFER_IDENTITY);
         let staged = self.server.cmd(staging).await.and_then(|result| {
             match result.refusal_for("set-buffer") {
                 Some(error) => Err(error),
@@ -777,8 +777,8 @@ fn paste_outcome(pasted: Result<(), Error>, deleted: Result<(), Error>) -> Resul
 mod tests {
     use std::time::Duration;
 
-    use libtmux::test::TestServer;
-    use libtmux::{Command, Error, ErrorKind, Server, ServerGoneKind};
+    use libtmux_tokio::test::TestServer;
+    use libtmux_tokio::{Command, Error, ErrorKind, Server, ServerGoneKind};
     use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ErrorCode;
 
@@ -871,7 +871,7 @@ mod tests {
         bounded.shutdown().await.expect("the bounded handle stops");
         guard.shutdown().await.expect("tmux fixture shuts down");
 
-        assert_eq!(held, libtmux::ChannelWait::Signalled);
+        assert_eq!(held, libtmux_tokio::ChannelWait::Signalled);
         let Err(error) = result else {
             panic!("Enter reached tmux but its held reply did not fail");
         };

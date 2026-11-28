@@ -5,9 +5,8 @@ use std::{
 };
 
 use clap::ArgMatches;
-use libtmux::{
+use libtmux_tokio::{
     Command, NewSession, NewWindowOptions, Server, Session, SplitDirection, SplitOptions,
-    escape_format,
 };
 use serde_json::{Value, json};
 
@@ -182,7 +181,7 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
         // A socket with no server behind it holds no session either, so it is
         // the answer a name that is not running gets, not a transport error.
         let found = match server.session(name).await {
-            Err(libtmux::Error::ServerGone { .. }) => None,
+            Err(libtmux_tokio::Error::ServerGone { .. }) => None,
             other => other?,
         };
         return found.ok_or_else(|| {
@@ -198,7 +197,7 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
         }
     }
     let mut sessions = match server.sessions().await {
-        Err(libtmux::Error::ServerGone { .. }) => Vec::new(),
+        Err(libtmux_tokio::Error::ServerGone { .. }) => Vec::new(),
         other => other?,
     };
     if sessions.is_empty() {
@@ -728,7 +727,10 @@ fn tmux_context(context: &str) -> Result<(&str, u32)> {
     })
 }
 
-async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libtmux::SessionId)> {
+async fn target_context(
+    server: &Server,
+    target: &str,
+) -> Result<(u32, u64, libtmux_tokio::SessionId)> {
     let result = server
         .cmd(
             Command::new("display-message")
@@ -744,7 +746,7 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
     let parsed = (|| {
         let pid = fields.next()?.parse::<u32>().ok()?;
         let started = fields.next()?.parse::<u64>().ok()?;
-        let session = fields.next()?.parse::<libtmux::SessionId>().ok()?;
+        let session = fields.next()?.parse::<libtmux_tokio::SessionId>().ok()?;
         (pid > 0 && started > 0 && fields.next().is_none()).then_some((pid, started, session))
     })();
     parsed.ok_or_else(|| append_context("target has no live daemon and session identity"))
@@ -757,7 +759,7 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
 /// other server, so it counts only once `TMUX` and `server` agree on the
 /// daemon and on the pane's session. Aimed elsewhere, there is no current
 /// session to default to, which is not an error.
-async fn invoking_session(server: &Server) -> Option<libtmux::SessionId> {
+async fn invoking_session(server: &Server) -> Option<libtmux_tokio::SessionId> {
     let pane = std::env::var("TMUX_PANE").ok()?;
     let context = std::env::var("TMUX").ok()?;
     let (socket, pid) = tmux_context(&context).ok()?;
@@ -774,7 +776,7 @@ async fn invoking_session(server: &Server) -> Option<libtmux::SessionId> {
 async fn append_target(server: &Server) -> Result<AppendTarget> {
     let pane = std::env::var("TMUX_PANE")
         .map_err(|_| CliError::usage("append requires TMUX_PANE identifying the current pane"))?
-        .parse::<libtmux::PaneId>()
+        .parse::<libtmux_tokio::PaneId>()
         .map_err(|error| append_context(error.to_string()))?;
     let context = std::env::var("TMUX")
         .map_err(|_| CliError::usage("append requires the inherited TMUX daemon identity"))?;
@@ -831,8 +833,7 @@ async fn build(
     } else {
         effects.stage = "session-creation";
         effects.mutation_started = Some(effects.stage);
-        let mut options = NewSession::new(&workspace.name)
-            .start_directory(&workspace.directory);
+        let mut options = NewSession::new(&workspace.name).start_directory(&workspace.directory);
         // No `-x`/`-y` at all with detection disabled: tmux then sizes the
         // session from the largest attached client, or `default-size`.
         if let Some((columns, rows)) = context.dimensions {
@@ -1157,7 +1158,7 @@ async fn build_window(
     effects: &mut Effects,
     window_index: usize,
     readiness: bool,
-) -> Result<libtmux::Window> {
+) -> Result<libtmux_tokio::Window> {
     if let Some(progress) = &mut report.progress {
         progress.window(window_index + 1, config)?;
     }
@@ -1169,9 +1170,9 @@ async fn build_window(
         .name
         .as_ref()
         .map_or_else(NewWindowOptions::unnamed, |name| {
-            NewWindowOptions::new(escape_format(name))
+            NewWindowOptions::new(name.as_str())
         });
-    options = options.start_directory(escape_format(&first.directory));
+    options = options.start_directory(&first.directory);
     if let Some(index) = config.index {
         options = options.index(index);
     }
@@ -1209,8 +1210,8 @@ async fn build_window(
     // divides the active pane, which a detached split never changes.
     let mut source = panes[0].clone();
     for pane_config in config.panes.iter().skip(1) {
-        let mut split = SplitOptions::new(SplitDirection::Below)
-            .start_directory(escape_format(&pane_config.directory));
+        let mut split =
+            SplitOptions::new(SplitDirection::Below).start_directory(&pane_config.directory);
         if let Some(shell) = &pane_config.shell {
             split = split.command(shell);
         }
@@ -1221,7 +1222,7 @@ async fn build_window(
         effects.panes.push(pane.id().to_string());
         source = pane.clone();
         panes.push(pane);
-        window.select_layout(libtmux::Layout::Tiled).await?;
+        window.select_layout(libtmux_tokio::Layout::Tiled).await?;
     }
     if let Some(layout) = config.layout.as_deref().filter(|layout| !layout.is_empty()) {
         window.select_layout(layout).await?;
@@ -1266,7 +1267,10 @@ async fn build_window(
     Ok(window)
 }
 
-async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand]) -> Result<()> {
+async fn send_commands(
+    pane: &libtmux_tokio::Pane,
+    commands: &[normalize::TypedCommand],
+) -> Result<()> {
     for command in commands {
         tokio::time::sleep(command.before).await;
         if command.enter {
@@ -1282,7 +1286,7 @@ async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand
 /// Sets the options held back until the first pane's shell started, then waits
 /// for the window's name to follow it.
 async fn name_after_first_shell(
-    window: &libtmux::Window,
+    window: &libtmux_tokio::Window,
     deferred: &mut Vec<(&String, &String)>,
     wait: bool,
 ) -> Result<()> {
@@ -1302,7 +1306,7 @@ async fn name_after_first_shell(
 /// the forked `tmux` can outlive the shell's start. Without this the window
 /// is `tmux` to whatever reads it as the loader exits. A window that is not
 /// renamed automatically, or a probe that fails, ends the wait at once.
-async fn wait_for_window_name(window: &libtmux::Window) {
+async fn wait_for_window_name(window: &libtmux_tokio::Window) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
         let Ok(reading) = window
@@ -1321,7 +1325,7 @@ async fn wait_for_window_name(window: &libtmux::Window) {
     }
 }
 
-async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<()> {
+async fn wait_for_prompt(pane: &libtmux_tokio::Pane, report: &mut Reporter) -> Result<()> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
         match pane.format("#{cursor_x},#{cursor_y}").await {
@@ -1436,11 +1440,11 @@ pub(super) async fn capture(session: &Session) -> Result<Value> {
     Ok(value)
 }
 
-fn option_value(value: libtmux::OptionValue) -> Value {
+fn option_value(value: libtmux_tokio::OptionValue) -> Value {
     match value {
-        libtmux::OptionValue::Flag(value) => json!(value),
-        libtmux::OptionValue::Number(value) => json!(value),
-        libtmux::OptionValue::Text(value) => json!(value.to_string_lossy()),
+        libtmux_tokio::OptionValue::Flag(value) => json!(value),
+        libtmux_tokio::OptionValue::Number(value) => json!(value),
+        libtmux_tokio::OptionValue::Text(value) => json!(value.to_string_lossy()),
         _ => Value::Null,
     }
 }
@@ -1535,7 +1539,7 @@ async fn require_attach_context(server: &Server) -> Result<bool> {
         command.arg("#{pid}")
     } else {
         let pane = pane
-            .parse::<libtmux::PaneId>()
+            .parse::<libtmux_tokio::PaneId>()
             .map_err(|_| unusable_context("TMUX_PANE does not name a pane"))?;
         // A target tmux cannot resolve is not a refusal: it answers with the
         // fields it could fill and leaves the rest empty, so the pane's own
@@ -1611,7 +1615,7 @@ async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result
 /// reported rather than restarted by a client that was only meant to attach.
 fn handoff_command(
     server: &Server,
-    version: &libtmux::TmuxVersion,
+    version: &libtmux_tokio::TmuxVersion,
     session: String,
     inside_tmux: bool,
 ) -> tokio::process::Command {
@@ -1650,12 +1654,12 @@ mod handoff_tests {
 
     #[test]
     fn the_handoff_never_lets_the_client_start_a_daemon() {
-        let server = libtmux::Server::builder()
+        let server = libtmux_tokio::Server::builder()
             .socket_path("/tmp/libtmux-handoff-test")
             .tmux_executable("tmux")
             .build()
             .expect("client configured");
-        let version = libtmux::TmuxVersion::parse_output(b"tmux 3.3a\n").expect("parses");
+        let version = libtmux_tokio::TmuxVersion::parse_output(b"tmux 3.3a\n").expect("parses");
         let command = handoff_command(&server, &version, "$1".to_owned(), false);
         let args: Vec<_> = command
             .as_std()

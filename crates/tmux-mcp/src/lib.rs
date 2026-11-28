@@ -71,7 +71,7 @@ pub use views::*;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use libtmux::Server;
+use libtmux_tokio::Server;
 use rmcp::model::{ErrorData, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool_handler};
 

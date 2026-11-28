@@ -25,7 +25,7 @@ windows:
       - htop
 ```
 
-The Rust examples use `libtmux::test::TestServer` to own and clean up their
+The Rust examples use `libtmux_tokio::test::TestServer` to own and clean up their
 daemon. Add `libtmux` with `test-support` alongside this crate and Tokio, as
 shown under [Install](#install). An application connecting to an existing
 server can omit that feature and the guard's shutdown call.
@@ -33,14 +33,14 @@ server can omit that feature and the guard's shutdown call.
 Freeze a session someone built by hand back into one:
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{freeze, Workspace};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Runs for real, against an isolated tmux under `/tmp/libtmux-rs-test/`.
     // Your own code reaches a session someone left running through
-    // `libtmux::Server::new()?`.
+    // `libtmux_tokio::Server::new()?`.
     let guard = TestServer::new().await?;
     let session = guard.server().new_session("dev").await?;
 
@@ -63,14 +63,14 @@ running, not the command someone typed to start it.
 Build it:
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{Workspace, WorkspaceBuilder};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Runs for real, against an isolated tmux under `/tmp/libtmux-rs-test/`.
     // Your own code reads the file, so a `./` start directory is the file's,
-    // and uses `libtmux::Server::new()?`:
+    // and uses `libtmux_tokio::Server::new()?`:
     //   let workspace = Workspace::from_file("dev.yaml")?;
     let source = "
 session_name: dev
@@ -107,7 +107,7 @@ plan's steps, build, and freeze the result back to YAML.
 count it, or decide against it:
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{Workspace, WorkspaceBuilder};
 
 #[tokio::main]
@@ -154,7 +154,7 @@ where tmuxp's behaviour is surprising:
   so the next one is typed onto the same line. A pane's `enter: false` covers
   its `shell_command_before` commands, which are typed first.
 - `sleep_before` and `sleep_after` hold the same way, and are waited for in
-  tmux: each is a `libtmux::plan::Pause` between the commands it separates.
+  tmux: each is a `libtmux_tokio::plan::Pause` between the commands it separates.
 - `~` and `$NAME` or `${NAME}` expand from the loading process's environment
   in names, start directories, and `environment` and option values. An unset
   variable stays as written, and there is no escape: a frozen name holding

@@ -2,8 +2,8 @@
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use libtmux::test::TestServer;
-use libtmux::{SplitDirection, SplitOptions};
+use libtmux_tokio::test::TestServer;
+use libtmux_tokio::{SplitDirection, SplitOptions};
 use rmcp::model::ErrorCode;
 use serde_json::Value;
 
@@ -125,7 +125,7 @@ async fn capture_can_include_scrollback() {
         })))
         .await
         .expect("input is sent");
-    libtmux::test::retry_until(std::time::Duration::from_secs(2), async || {
+    libtmux_tokio::test::retry_until(std::time::Duration::from_secs(2), async || {
         tools
             .capture_pane(args(serde_json::json!({"pane": pane, "history": true})))
             .await

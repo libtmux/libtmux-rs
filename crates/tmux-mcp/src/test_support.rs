@@ -1,7 +1,7 @@
 //! Native eligibility for tests that acquire a control observer.
 
-use libtmux::TmuxVersion;
-use libtmux::test::TestServer;
+use libtmux_tokio::TmuxVersion;
+use libtmux_tokio::test::TestServer;
 
 pub(crate) async fn control_fixture(guard: TestServer) -> Option<TestServer> {
     let report = guard
@@ -12,7 +12,7 @@ pub(crate) async fn control_fixture(guard: TestServer) -> Option<TestServer> {
     let mut report = report.as_bytes().to_vec();
     report.push(b'\n');
     let version = TmuxVersion::parse_output(&report).expect("daemon release parses");
-    if version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
+    if version.has_behavior(&libtmux_tokio::since::CONTROL_ACQUISITION) {
         Some(guard)
     } else {
         guard

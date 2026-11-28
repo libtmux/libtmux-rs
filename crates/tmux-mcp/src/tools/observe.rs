@@ -21,10 +21,10 @@ struct RunRoute {
     executable: PathBuf,
     endpoint: PathBuf,
     pane: String,
-    generation: libtmux::ServerGeneration,
+    generation: libtmux_tokio::ServerGeneration,
 }
 
-fn known_posix_shell(command: &libtmux::TmuxText) -> bool {
+fn known_posix_shell(command: &libtmux_tokio::TmuxText) -> bool {
     let basename = command
         .as_bytes()
         .rsplit(|byte| *byte == b'/')
@@ -48,7 +48,7 @@ fn known_posix_shell(command: &libtmux::TmuxText) -> bool {
 fn require_known_shell(
     plan: &PaneInputPlan,
     checkpoint: &str,
-) -> Result<libtmux::TmuxText, ToolError> {
+) -> Result<libtmux_tokio::TmuxText, ToolError> {
     let pane = plan.target.id();
     let Some(command) = plan
         .target
@@ -62,7 +62,7 @@ fn require_known_shell(
     Ok(command.clone())
 }
 
-fn resolved_executable(server: &libtmux::Server) -> Result<PathBuf, ToolError> {
+fn resolved_executable(server: &libtmux_tokio::Server) -> Result<PathBuf, ToolError> {
     server.resolved_tmux_executable().ok_or_else(|| {
         ErrorData::internal_error(
             "the configured tmux executable cannot be resolved from its captured launch context"
@@ -77,7 +77,7 @@ fn resolved_executable(server: &libtmux::Server) -> Result<PathBuf, ToolError> {
     })
 }
 
-fn run_route(server: &libtmux::Server, plan: &PaneInputPlan) -> Result<RunRoute, ToolError> {
+fn run_route(server: &libtmux_tokio::Server, plan: &PaneInputPlan) -> Result<RunRoute, ToolError> {
     let executable = resolved_executable(server)?;
     if !exec::route_is_terminal_safe(executable.as_os_str(), &plan.endpoint) {
         return Err(run_error(run_request::RunError::Frame));
@@ -194,7 +194,7 @@ fn tail_error(error: TailError) -> ToolError {
     }
 }
 
-fn tail_snapshot_error(error: libtmux::Error, opened: bool) -> ToolError {
+fn tail_snapshot_error(error: libtmux_tokio::Error, opened: bool) -> ToolError {
     let mut boundary = EffectBoundary::new("capture_since");
     if opened {
         boundary.mark();
@@ -517,8 +517,8 @@ impl TmuxTools {
             .wait_for_channel(channel.as_str(), Self::budget(seconds))
             .await
         {
-            Ok(libtmux::ChannelWait::Signalled) => "signalled",
-            Ok(libtmux::ChannelWait::TimedOut) => "deadline",
+            Ok(libtmux_tokio::ChannelWait::Signalled) => "signalled",
+            Ok(libtmux_tokio::ChannelWait::TimedOut) => "deadline",
             // The schema promises one of those two words. `ChannelWait` may
             // grow a third, and answering with the nearest existing label
             // would report something that did not happen.
@@ -543,12 +543,12 @@ impl TmuxTools {
 mod tests {
     use std::time::Duration;
 
-    use libtmux::test::TestServer;
+    use libtmux_tokio::test::TestServer;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
 
-    async fn client_count(server: &libtmux::Server) -> usize {
+    async fn client_count(server: &libtmux_tokio::Server) -> usize {
         server.clients().await.map_or(0, |clients| clients.len())
     }
 
@@ -568,22 +568,22 @@ mod tests {
             "-zsh",
         ] {
             assert!(
-                known_posix_shell(&libtmux::TmuxText::from(shell)),
+                known_posix_shell(&libtmux_tokio::TmuxText::from(shell)),
                 "{shell}"
             );
         }
         for program in ["", "cat", "fish", "nu", "pwsh", "BASH"] {
             assert!(
-                !known_posix_shell(&libtmux::TmuxText::from(program)),
+                !known_posix_shell(&libtmux_tokio::TmuxText::from(program)),
                 "{program}"
             );
         }
-        assert!(!known_posix_shell(&libtmux::TmuxText::from_bytes([
+        assert!(!known_posix_shell(&libtmux_tokio::TmuxText::from_bytes([
             b'b', 0xff
         ])));
     }
 
-    async fn configure_dead_transition(pane: &libtmux::Pane) {
+    async fn configure_dead_transition(pane: &libtmux_tokio::Pane) {
         pane.set_option("remain-on-exit", "on")
             .await
             .expect("fixture retains a dead pane");
@@ -593,11 +593,11 @@ mod tests {
     }
 
     async fn caller_peer_identity(
-        pane: &libtmux::Pane,
-        server: &libtmux::Server,
+        pane: &libtmux_tokio::Pane,
+        server: &libtmux_tokio::Server,
     ) -> crate::CallerIdentity {
         let peer = pane
-            .split(libtmux::SplitOptions::new(libtmux::SplitDirection::Below))
+            .split(libtmux_tokio::SplitOptions::new(libtmux_tokio::SplitDirection::Below))
             .await
             .expect("caller peer is created");
         let generation = server.generation().await.expect("server generation");
@@ -622,11 +622,11 @@ mod tests {
 
     async fn transition_then_preflight(
         transition: &str,
-        pane: &mut libtmux::Pane,
-        server: &libtmux::Server,
+        pane: &mut libtmux_tokio::Pane,
+        server: &libtmux_tokio::Server,
         tools: &TmuxTools,
         source: &str,
-        foreground: &libtmux::TmuxText,
+        foreground: &libtmux_tokio::TmuxText,
         lease: &run_request::PaneReservation,
     ) -> Result<(), ToolError> {
         if transition == "caller" {
@@ -645,7 +645,7 @@ mod tests {
                 "exec sleep 30"
             };
             let pane_id = pane.id().clone();
-            pane.respawn(Some(command), libtmux::Respawn::Replacing)
+            pane.respawn(Some(command), libtmux_tokio::Respawn::Replacing)
                 .await
                 .expect("pane begins its final transition");
             if transition == "dead" {
@@ -654,10 +654,10 @@ mod tests {
                         .wait_for_channel("mcp-final-pane-died", Duration::from_secs(2))
                         .await
                         .expect("pane-died notification answers"),
-                    libtmux::ChannelWait::Signalled
+                    libtmux_tokio::ChannelWait::Signalled
                 );
             } else {
-                libtmux::test::retry_until(Duration::from_secs(2), async || {
+                libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
                     server
                         .pane_by_id(&pane_id)
                         .await
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn an_uncertain_start_names_safe_recovery_without_an_unreachable_handle() {
-        let source = libtmux::Server::builder()
+        let source = libtmux_tokio::Server::builder()
             .socket_name("conflicting")
             .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
             .build()
@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn a_failed_baseline_after_opening_reports_a_partial_effect() {
         let configuration_error = || {
-            libtmux::Server::builder()
+            libtmux_tokio::Server::builder()
                 .socket_name("conflicting")
                 .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
                 .build()

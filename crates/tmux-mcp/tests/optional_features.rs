@@ -2,8 +2,8 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use libtmux::NewSession;
-use libtmux::test::TestServer;
+use libtmux_tokio::NewSession;
+use libtmux_tokio::test::TestServer;
 
 mod support;
 use support::{args, bare_tools, json, prompt_ready};

@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use libtmux::test::TestServer;
-use libtmux::{Command, ReleaseVersion, Server, TmuxVersion};
+use libtmux_tokio::test::TestServer;
+use libtmux_tokio::{Command, ReleaseVersion, Server, TmuxVersion};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::{ServiceExt as _, serve_server};
@@ -119,7 +119,7 @@ pub(crate) async fn supports(server: &Server, needs: &ReleaseVersion) -> bool {
 pub(crate) async fn supports_control(server: &Server) -> bool {
     daemon_version(server)
         .await
-        .has_behavior(&libtmux::since::CONTROL_ACQUISITION)
+        .has_behavior(&libtmux_tokio::since::CONTROL_ACQUISITION)
 }
 
 pub(crate) async fn feature_fixture(

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use libtmux::{CaptureOptions, Error, Pane, Server, ServerGeneration};
+use libtmux_tokio::{CaptureOptions, Error, Pane, Server, ServerGeneration};
 
 use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
@@ -34,7 +34,7 @@ tokio::task_local! {
 
 /// A pane stream and the sentinels for one command.
 pub(crate) struct Run {
-    output: libtmux::control::PaneOutput,
+    output: libtmux_tokio::control::PaneOutput,
     scanner: Scanner,
     pane: Pane,
 }

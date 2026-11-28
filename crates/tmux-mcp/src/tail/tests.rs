@@ -331,8 +331,8 @@ async fn a_cancelled_baseline_is_skipped_before_capture() {
 
 #[tokio::test]
 async fn opening_is_fail_fast_and_a_failed_replacement_preserves_tails() {
-    use libtmux::ControlClientLimits;
-    use libtmux::test::TestServer;
+    use libtmux_tokio::ControlClientLimits;
+    use libtmux_tokio::test::TestServer;
 
     let guard = TestServer::builder()
         .control_client_limits(

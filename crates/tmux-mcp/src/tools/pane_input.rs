@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use libtmux::{Command, ServerGeneration};
+use libtmux_tokio::{Command, ServerGeneration};
 use rmcp::model::ErrorData;
 
 use crate::TmuxTools;
@@ -24,7 +24,7 @@ pub(crate) enum MissingSource {
 }
 
 pub(crate) struct PaneInputPlan {
-    pub(crate) target: libtmux::Pane,
+    pub(crate) target: libtmux_tokio::Pane,
     pub(crate) configured: Vec<String>,
     pub(crate) endpoint: PathBuf,
     pub(crate) generation: ServerGeneration,
@@ -91,7 +91,7 @@ struct PaneInputSignature {
 }
 
 struct PaneSnapshot {
-    handles: BTreeMap<String, libtmux::Pane>,
+    handles: BTreeMap<String, libtmux_tokio::Pane>,
     members: BTreeMap<String, PaneMember>,
 }
 
@@ -234,10 +234,10 @@ fn parse_client_attention(
         if control {
             continue;
         }
-        let session = parse_id::<libtmux::SessionId>(session)?;
-        let window = parse_id::<libtmux::WindowId>(window)?;
+        let session = parse_id::<libtmux_tokio::SessionId>(session)?;
+        let window = parse_id::<libtmux_tokio::WindowId>(window)?;
         let window_index = parse_window_index(window_index)?;
-        let active = parse_id::<libtmux::PaneId>(pane)?;
+        let active = parse_id::<libtmux_tokio::PaneId>(pane)?;
         let zoomed = parse_flag(zoomed)?;
         let Some(member) = members.get(&active) else {
             return Err("a terminal client pane was absent from the pane snapshot");
@@ -324,7 +324,7 @@ fn validate_link_rectangles(members: &BTreeMap<String, PaneMember>) -> Result<()
     Ok(())
 }
 
-fn pane_snapshot(panes: &[libtmux::Pane]) -> Result<PaneSnapshot, &'static str> {
+fn pane_snapshot(panes: &[libtmux_tokio::Pane]) -> Result<PaneSnapshot, &'static str> {
     let mut handles = BTreeMap::new();
     let mut members = BTreeMap::new();
     for pane in panes {
@@ -608,7 +608,7 @@ mod tests {
         let socket = std::path::PathBuf::from(std::ffi::OsString::from_vec(
             b"/tmp/libtmux-rs-test/no-daemon-\xfe".to_vec(),
         ));
-        let server = libtmux::Server::builder()
+        let server = libtmux_tokio::Server::builder()
             .socket_path(&socket)
             .build()
             .expect("a route builds without a daemon");
@@ -626,13 +626,13 @@ mod tests {
     }
 
     async fn caller_identity(
-        server: &libtmux::Server,
+        server: &libtmux_tokio::Server,
         session: &str,
         pane: &str,
     ) -> CallerIdentity {
         let socket = server
             .cmd(
-                libtmux::Command::new("display-message")
+                libtmux_tokio::Command::new("display-message")
                     .arg("-p")
                     .arg("#{socket_path}"),
             )
@@ -743,7 +743,7 @@ mod tests {
 
     #[tokio::test]
     async fn linked_placement_changes_the_transition_signature() {
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");
@@ -789,7 +789,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_session_can_link_the_same_window_at_multiple_indexes() {
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");
@@ -824,7 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn caller_classification_is_part_of_the_transition_signature() {
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");
@@ -866,7 +866,7 @@ mod tests {
 
     #[tokio::test]
     async fn caller_resolves_through_a_linked_session_placement() {
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");

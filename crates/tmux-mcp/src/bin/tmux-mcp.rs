@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use libtmux::{ControlClientLimits, DispatchLimits, OutputLimits, Server};
+use libtmux_tokio::{ControlClientLimits, DispatchLimits, OutputLimits, Server};
 use rmcp::model::{ErrorData, JsonRpcMessage};
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport, stdio};
@@ -166,7 +166,7 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 
     let existing = match server.check_alive().await {
         Ok(()) => true,
-        Err(libtmux::Error::ServerGone { .. }) => false,
+        Err(libtmux_tokio::Error::ServerGone { .. }) => false,
         Err(error) => {
             return Err(format!("cannot inspect selected tmux daemon: {error}").into());
         }

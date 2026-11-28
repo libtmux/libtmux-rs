@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use libtmux::ServerGeneration;
+use libtmux_tokio::ServerGeneration;
 
 use crate::run_request::{EndpointIdentity, endpoint_identity};
 
@@ -482,7 +482,7 @@ mod tests {
     /// budget despite exercising the table at its cap.
     #[tokio::test]
     async fn a_killed_panes_record_does_not_outlive_the_table_cap() {
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");

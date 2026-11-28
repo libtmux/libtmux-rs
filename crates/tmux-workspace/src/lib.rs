@@ -9,11 +9,11 @@ pub use freeze::freeze;
 
 use std::path::Path;
 
-use libtmux::plan::{
+use libtmux_core::plan::{
     KillWindow, NewSession, NewWindow, PaneSlot, Pause, Plan, Planner, SelectLayout, SelectPane,
     SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow, WindowSlot,
 };
-use libtmux::{Server, Session, SessionId};
+use libtmux_tokio::{Server, Session, SessionId};
 
 /// A failure while building a workspace.
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +25,7 @@ pub enum BuildError {
 
     /// tmux refused an operation, or could not be reached.
     #[error(transparent)]
-    Tmux(#[from] libtmux::Error),
+    Tmux(#[from] libtmux_tokio::Error),
 
     /// tmux created a session without the window it always creates.
     ///
@@ -93,7 +93,7 @@ impl<'server> WorkspaceBuilder<'server> {
     /// ",
     /// )?;
     ///
-    /// let server = libtmux::Server::builder()
+    /// let server = libtmux_tokio::Server::builder()
     ///     .socket_path("/tmp/libtmux-rs-test/plan-example.sock")
     ///     .build()?;
     /// let plan = WorkspaceBuilder::new(&server).plan(&workspace);
@@ -253,7 +253,7 @@ impl<'server> WorkspaceBuilder<'server> {
         let plan = self.plan(workspace);
         // Marked, because a workspace is mostly a creation followed by the
         // typing that decorates it, which is the shape the fold is for.
-        let result = plan.run(self.server, Planner::Marked).await?;
+        let result = self.server.run_plan(&plan, Planner::Marked).await?;
         if !result.is_complete() {
             // Asked after the fact rather than checked before: a name can be
             // taken between a check and a create, so tmux refusing is the only
@@ -261,8 +261,11 @@ impl<'server> WorkspaceBuilder<'server> {
             let refusal = result
                 .steps()
                 .iter()
-                .find_map(libtmux::plan::StepOutcome::refusal);
-            if matches!(refusal.as_ref(), Some(libtmux::Error::SessionExists { .. })) {
+                .find_map(libtmux_tokio::plan::StepOutcome::refusal);
+            if matches!(
+                refusal.as_ref(),
+                Some(libtmux_tokio::Error::SessionExists { .. })
+            ) {
                 return Err(BuildError::SessionExists {
                     name: workspace.session_name.clone(),
                 });

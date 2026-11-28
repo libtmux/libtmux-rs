@@ -8,7 +8,7 @@
 //! $ cargo run --example build
 //! ```
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{Workspace, WorkspaceBuilder, freeze};
 
 const WORKSPACE: &str = "

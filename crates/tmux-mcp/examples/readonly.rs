@@ -11,7 +11,7 @@
 //!
 //! Then talk MCP to it on stdin and stdout.
 
-use libtmux::Server;
+use libtmux_tokio::Server;
 use rmcp::ServiceExt as _;
 use rmcp::transport::stdio;
 use tmux_mcp::{Selection, TmuxTools};
