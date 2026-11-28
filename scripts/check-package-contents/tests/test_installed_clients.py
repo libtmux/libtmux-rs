@@ -28,9 +28,9 @@ def test_blocking_reader_uses_the_archive_readme_bytes(tmp_path: Path) -> None:
         + "```\n\n<!-- /blocking-example -->\n"
     )
     (tmp_path / "README.md").write_text(readme)
-    assert clients.blocking_readme_program(tmp_path) == program
+    assert clients.readme_program(tmp_path, "blocking") == program
     (tmp_path / "README.md").write_text(readme.replace("README reader", "changed reader"))
-    assert clients.blocking_readme_program(tmp_path) == program.replace(
+    assert clients.readme_program(tmp_path, "blocking") == program.replace(
         "README reader", "changed reader"
     )
 
@@ -49,7 +49,7 @@ def test_blocking_reader_refuses_an_ambiguous_readme_program(tmp_path: Path, dam
         readme = readme.replace("\n```\n", "\n")
     (tmp_path / "README.md").write_text(readme)
     with pytest.raises(ValueError, match="blocking README program"):
-        clients.blocking_readme_program(tmp_path)
+        clients.readme_program(tmp_path, "blocking")
 
 
 def test_archived_guides_preserve_reader_setup_and_source(tmp_path: Path) -> None:
@@ -93,6 +93,21 @@ def test_native_dependency_identity_requires_the_selected_archive(tmp_path: Path
         clients.check_dependency_tree([], staged, expect_tokio=False)
     with pytest.raises(ValueError, match="Tokio"):
         clients.check_dependency_tree([row, "tokio v1.52.0"], staged, expect_tokio=False)
+
+
+@pytest.mark.parametrize("owner", ["libtmux", "libtmux-tokio"])
+def test_public_reader_features_exclude_the_external_fixture(owner: str) -> None:
+    rows = [
+        "libtmux-core v0.1.2 (/staged/core)\t",
+        "libtmux v0.1.2 (/staged/facade)\tblocking,tokio",
+        "libtmux-tokio v0.1.2 (/staged/tokio)\tquery",
+    ]
+    enabled = clients.check_reader_features(rows)
+    assert enabled["libtmux"] == ["blocking", "tokio"]
+    assert enabled["libtmux-tokio"] == ["query"]
+    mutated = [row + ",test-support" if row.startswith(owner + " v") else row for row in rows]
+    with pytest.raises(ValueError, match="fixture feature"):
+        clients.check_reader_features(mutated)
 
 
 def test_cargo_tree_output_survives_colored_ci_logs(tmp_path: Path, monkeypatch) -> None:

@@ -37,21 +37,6 @@ FIXTURES = Path("/tmp/libtmux-rs-test")
 RECORDER_REVISION = "f2e7244263b4e7ee2185b46dc91e43416625a9a1"
 STREAM_LIMIT = 8 * 1024 * 1024
 
-TOKIO_PROGRAM = """\
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let socket = std::env::args_os().nth(1).ok_or("missing private socket")?;
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(async {
-        let client = libtmux::tokio::Server::builder().socket_path(socket).config_file("/dev/null").build()?;
-        let receipt = client.new_session(libtmux::NewSession::new("reader").command("sleep 30")).await?;
-        let observed = client.observe_pane(receipt.pane().id()).await;
-        client.kill_created_session(&receipt).await?;
-        assert_eq!(&observed?, receipt.pane());
-        Ok::<_, Box<dyn std::error::Error>>(())
-    })
-}
-"""
-
 FIXTURE_PROGRAM = """\
 use std::io::{self, Write};
 use libtmux::tokio::test::TestServer;
@@ -141,6 +126,25 @@ def check_dependency_tree(
     if any(row.startswith("tokio v") for row in rows) != expect_tokio:
         raise ValueError("consumer resolved an unexpected Tokio dependency")
     return native
+
+
+def check_reader_features(rows: Sequence[str]) -> dict[str, list[str]]:
+    """Keep fixture features out of the reader's resolved native dependencies."""
+    selected = {}
+    for row in rows:
+        identity, separator, features = row.removesuffix(" (*)").rpartition("\t")
+        package = identity.split(" ", 1)[0]
+        if package not in LIBRARIES:
+            continue
+        if not separator:
+            raise ValueError("reader feature tree omitted resolved features")
+        enabled = sorted({feature.strip() for feature in features.split(",") if feature.strip()})
+        if "test-support" in enabled:
+            raise ValueError(f"reader enabled the fixture feature in {package}")
+        selected[package] = enabled
+    if "libtmux-core" not in selected:
+        raise ValueError("reader feature tree omitted the shared core")
+    return dict(sorted(selected.items()))
 
 
 def check_record(record: dict, output: Path, expected: bytes, *, require_capture: bool) -> dict:
@@ -319,6 +323,25 @@ class Cargo:
             .splitlines()
         )
 
+    def features(self, cwd: Path) -> list[str]:
+        return (
+            self.run(
+                cwd,
+                "tree",
+                "--locked",
+                "--color",
+                "never",
+                "-e",
+                "normal",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}\t{f}",
+            )
+            .decode()
+            .splitlines()
+        )
+
 
 def stage_archives(
     cargo: Cargo, directory: Path, output: Path, source_revision: str
@@ -402,16 +425,16 @@ def registry_patches(staged: Mapping[str, Path]) -> str:
     )
 
 
-def blocking_readme_program(crate: Path) -> str:
-    """Run the displayed blocking program from the staged facade README."""
+def readme_program(crate: Path, client: str) -> str:
+    """Copy a complete reader from its staged crate README."""
     blocks = re.findall(
-        r"<!-- blocking-example -->\s*```rust,no_run\n(.*?)\n```\s*"
-        r"<!-- /blocking-example -->",
+        rf"<!-- {re.escape(client)}-example -->\s*```rust,no_run\n(.*?)\n```\s*"
+        rf"<!-- /{re.escape(client)}-example -->",
         (crate / "README.md").read_text(),
         re.DOTALL,
     )
     if len(blocks) != 1:
-        raise ValueError("expected one complete blocking README program")
+        raise ValueError(f"expected one complete {client} README program")
     return (
         "\n".join(
             line for line in blocks[0].splitlines() if line != "#" and not line.startswith("# ")
@@ -475,6 +498,28 @@ def run_guide_examples(
     return records
 
 
+def build_fixture(
+    cargo: Cargo,
+    directory: Path,
+    staged: Mapping[str, Path],
+    versions: Mapping[str, str],
+    extras: str,
+) -> Path:
+    """Build the external test fixture in a separate Cargo feature graph."""
+    project = directory / "fixture-only"
+    (project / "src").mkdir(parents=True)
+    (project / "Cargo.toml").write_text(
+        '[package]\nname = "installed-fixture"\nversion = "0.0.0"\nedition = "2024"\n'
+        "[dependencies]\n"
+        f'libtmux = {{ version = "={versions["libtmux"]}", default-features = false, features = ["tokio", "test-support"] }}\n'
+        f"{extras}\n{registry_patches(staged)}"
+    )
+    (project / "src/main.rs").write_text(FIXTURE_PROGRAM)
+    check_dependency_tree(cargo.tree(project), staged, expect_tokio=True)
+    cargo.run(project, "build", "--locked", "--quiet")
+    return cargo.target / "debug/installed-fixture"
+
+
 def consume(
     cargo: Cargo,
     directory: Path,
@@ -486,7 +531,7 @@ def consume(
     """Build and execute pure, blocking, Tokio and mixed external programs."""
     patches = registry_patches(staged)
     facade = staged["libtmux"]
-    blocking = blocking_readme_program(facade)
+    blocking = readme_program(facade, "blocking")
     mixed = tomllib.loads((facade / "examples/api/consumer.toml").read_text())["dependencies"]
     extras = "\n".join(
         f"{name} = {{ version = {json.dumps(spec['version'])}, features = {json.dumps(spec['features'])} }}"
@@ -502,7 +547,7 @@ def consume(
         ),
         ("blocking", "libtmux", [], blocking),
         ("blocking-control", "libtmux", ["blocking", "control-mode"], blocking),
-        ("tokio", "libtmux", ["tokio"], TOKIO_PROGRAM),
+        ("tokio", "libtmux-tokio", [], readme_program(staged["libtmux-tokio"], "tokio")),
         (
             "mixed",
             "libtmux",
@@ -512,31 +557,29 @@ def consume(
     ]
     consumers = []
     mixed_record = {}
-    fixture_binary = cargo.target / "debug/installed-fixture"
+    fixture_binary = build_fixture(cargo, directory, staged, versions, extras)
     for lane, package, features, source in lanes:
         project = directory / f"reader-{lane}"
         (project / "src").mkdir(parents=True)
         (project / "Cargo.toml").write_text(
             f'[package]\nname = "reader-{lane}"\nversion = "0.0.0"\nedition = "2024"\n'
-            f'[dependencies]\n{package} = {{ version = "={versions[package]}", default-features = {str(lane == "blocking").lower()}, features = {json.dumps(features)} }}\n'
+            f'[dependencies]\n{package} = {{ version = "={versions[package]}", default-features = {str(lane in {"blocking", "tokio"}).lower()}, features = {json.dumps(features)} }}\n'
             f"{extras if lane in {'tokio', 'mixed'} else ''}\n{patches}"
         )
         (project / "src/main.rs").write_text(source)
         selected = check_dependency_tree(
             cargo.tree(project), staged, expect_tokio=lane in {"tokio", "mixed"}
         )
-        if lane == "mixed":
-            (project / "src/bin").mkdir()
-            (project / "src/bin/installed-fixture.rs").write_text(FIXTURE_PROGRAM)
-            cargo.run(project, "build", "--locked", "--quiet", "--bins")
-        else:
-            cargo.run(project, "build", "--locked", "--quiet")
+        reader_features = check_reader_features(cargo.features(project))
+        cargo.run(project, "build", "--locked", "--quiet")
         binary = cargo.target / f"debug/reader-{lane}"
         expected = (
             b"created and cleaned one session\n"
             if lane.startswith("blocking")
             else b"mixed runtime\n"
             if lane == "mixed"
+            else b"installed-keeper\n"
+            if lane == "tokio"
             else b""
         )
         if lane == "core":
@@ -546,25 +589,85 @@ def consume(
             if actual != expected:
                 raise ValueError("pure consumer emitted unexpected stdout")
         else:
-            FIXTURES.mkdir(mode=0o700, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix="installed-reader-", dir=FIXTURES) as fixture:
-                command = [str(binary), f"{fixture}/s"] if lane != "mixed" else [str(binary)]
+            if lane in {"tokio", "mixed"}:
+                driver = directory / f"driver-{lane}"
+                command = [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--drive-reader",
+                    "--reader-binary",
+                    str(binary),
+                    "--fixture-binary",
+                    str(fixture_binary),
+                    "--output-dir",
+                    str(driver),
+                ]
                 observed = record(
                     recorder, output / lane, command, "--require-capture" if lane == "mixed" else ""
                 )
-                check_record(observed, output / lane, expected, require_capture=lane == "mixed")
+            else:
+                FIXTURES.mkdir(mode=0o700, exist_ok=True)
+                with tempfile.TemporaryDirectory(
+                    prefix="installed-reader-", dir=FIXTURES
+                ) as fixture:
+                    observed = record(recorder, output / lane, [str(binary), f"{fixture}/s"], "")
+            check_record(observed, output / lane, expected, require_capture=lane == "mixed")
             if lane == "mixed":
+                failures = []
+                for scenario in (
+                    "name-conflict",
+                    "creation-followup",
+                    "read-failure",
+                    "read-and-cleanup-failure",
+                ):
+                    driver = directory / f"driver-{lane}-{scenario}"
+                    target = output / "mixed-failures" / scenario
+                    failure = record(
+                        recorder,
+                        target,
+                        [
+                            sys.executable,
+                            str(Path(__file__).resolve()),
+                            "--drive-reader",
+                            "--reader-binary",
+                            str(binary),
+                            "--fixture-binary",
+                            str(fixture_binary),
+                            "--reader-case",
+                            scenario,
+                            "--output-dir",
+                            str(driver),
+                        ],
+                        "",
+                    )
+                    check_record(failure, target, b"", require_capture=False)
+                    failures.append(
+                        {
+                            **json.loads((driver / "reader.json").read_bytes()),
+                            "cleanup": failure["cleanup"],
+                        }
+                    )
                 mixed_record = {
                     "programSha256": sha256(project / "src/main.rs"),
                     "stdoutHex": observed["stdoutHex"],
                     "native": observed["native"],
                     "cleanup": observed["cleanup"],
                     "profile": "raw-stdout-native-capture",
+                    "fixtureOutsideReader": True,
+                    "normalNativeFeatures": reader_features,
+                    "fixtureProgramSha256": hashlib.sha256(FIXTURE_PROGRAM.encode()).hexdigest(),
+                    "runCommandSha256": hashlib.sha256(
+                        json.loads((facade / "examples/api/manifest.json").read_bytes())[
+                            "runCommand"
+                        ].encode()
+                    ).hexdigest(),
+                    "failureCases": failures,
                 }
         consumers.append(
             {
                 "name": lane,
                 "normalNativeDependencies": selected,
+                "normalNativeFeatures": reader_features,
                 "programSha256": sha256(project / "src/main.rs"),
                 "stdoutHex": expected.hex(),
             }
@@ -690,6 +793,101 @@ def close_child(process: subprocess.Popen) -> None:
         raise
     if status:
         raise ValueError(f"installed command exited with status {status}")
+
+
+def drive_reader(reader: Path, fixture_binary: Path, output: Path, scenario: str) -> None:
+    """Borrow an external fixture and check the reader preserved its prior sessions."""
+    output.mkdir()
+    with (output / "fixture.stderr").open("wb") as errors:
+        host = subprocess.Popen(
+            [str(fixture_binary)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors
+        )
+        try:
+            assert host.stdout is not None
+            stream = JsonLines(host.stdout)
+            socket = stream.line().decode().strip()
+            pane = stream.line().decode().strip()
+            if not Path(socket).resolve().is_relative_to(FIXTURES.resolve()) or not re.fullmatch(
+                r"%[0-9]+", pane
+            ):
+                raise ValueError("fixture did not report a private endpoint and exact pane")
+
+            def tmux(*arguments: str) -> bytes:
+                return subprocess.run(
+                    ["tmux", "-N", "-S", socket, *arguments],
+                    capture_output=True,
+                    check=True,
+                    timeout=10,
+                ).stdout
+
+            if scenario == "name-conflict":
+                tmux("new-session", "-d", "-s", "work")
+            if scenario == "read-failure":
+                tmux("set-hook", "-g", "after-list-panes", "select-pane -t %4294967295")
+            if scenario == "read-and-cleanup-failure":
+                tmux(
+                    "set-hook",
+                    "-g",
+                    "after-list-panes",
+                    "kill-session -t work ; select-pane -t %4294967295",
+                )
+            if scenario == "creation-followup":
+                tmux("set-hook", "-g", "after-new-session", "select-pane -t %4294967295")
+            projection = "#{pid},#{start_time},#{session_id},#{session_name},#{session_windows}"
+            before = tmux("list-sessions", "-F", projection)
+            result = subprocess.run(
+                [str(reader), socket], capture_output=True, check=False, timeout=30
+            )
+            after = tmux("list-sessions", "-F", projection)
+            (output / "reader.stdout").write_bytes(result.stdout)
+            (output / "reader.stderr").write_bytes(result.stderr)
+            if len(result.stdout) + len(result.stderr) > STREAM_LIMIT:
+                raise ValueError("reader stdio exceeded its proof limit")
+            if scenario == "success" and result.returncode == 0:
+                sys.stdout.buffer.write(result.stdout)
+                sys.stdout.buffer.flush()
+            if before != after:
+                raise ValueError("reader changed or leaked a session outside its returned receipt")
+            if (result.returncode == 0) != (scenario == "success"):
+                raise ValueError("reader did not report the expected operation outcome")
+            if scenario == "creation-followup" and not (
+                b"CreationFollowup" in result.stderr and b"receipt: Some(" in result.stderr
+            ):
+                raise ValueError("reader omitted its verified partial creation receipt")
+            if scenario == "read-and-cleanup-failure" and not all(
+                field in result.stderr
+                for field in (b"OperationAndCleanup", b"primary:", b"cleanup:")
+            ):
+                raise ValueError("reader did not retain operation and cleanup failures together")
+            if scenario != "success" and result.stdout:
+                raise ValueError("a failed reader exposed pane bytes")
+            sys.stderr.buffer.write(result.stderr)
+            sys.stderr.buffer.flush()
+            (output / "reader.json").write_text(
+                json.dumps(
+                    {
+                        "scenario": scenario,
+                        "readerStatus": result.returncode,
+                        "stdoutHex": result.stdout.hex(),
+                        "stderrSha256": hashlib.sha256(result.stderr).hexdigest(),
+                        "beforeHex": before.hex(),
+                        "afterHex": after.hex(),
+                        "borrowedSessionsPreserved": True,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+        except Exception as failure:
+            try:
+                close_child(host)
+            except (OSError, subprocess.SubprocessError, ValueError) as cleanup:
+                raise ExceptionGroup(
+                    "reader and fixture cleanup failed", [failure, cleanup]
+                ) from None
+            raise
+        else:
+            close_child(host)
 
 
 def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> None:
@@ -1055,8 +1253,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--drive-applications", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--installed-bin", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--fixture-binary", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--drive-reader", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--reader-binary", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--reader-case",
+        default="success",
+        choices=[
+            "success",
+            "name-conflict",
+            "creation-followup",
+            "read-failure",
+            "read-and-cleanup-failure",
+        ],
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
-    if args.drive_applications:
+    if args.drive_reader:
+        if args.reader_binary is None or args.fixture_binary is None:
+            parser.error("the reader driver requires its binary and external fixture")
+        drive_reader(
+            args.reader_binary.resolve(),
+            args.fixture_binary.resolve(),
+            args.output_dir.resolve(),
+            args.reader_case,
+        )
+    elif args.drive_applications:
         if args.installed_bin is None or args.fixture_binary is None:
             parser.error("the app driver requires installed binaries and its fixture")
         drive_applications(
