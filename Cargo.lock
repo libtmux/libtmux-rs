@@ -901,8 +901,12 @@ dependencies = [
 name = "libtmux-core"
 version = "0.1.2"
 dependencies = [
+ "caseless",
+ "libtmux-macros",
+ "regex",
  "schemars",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

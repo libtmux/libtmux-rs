@@ -67,21 +67,19 @@ fn resolve_core_path(override_path: Option<Path>, span: Span) -> syn::Result<Tok
     if let Some(path) = override_path {
         return Ok(quote!(#path));
     }
-    match crate_name("libtmux") {
-        // `Itself`: compiling `libtmux` itself, not an integration test.
-        // `extern crate self as libtmux` is what makes `::libtmux` resolve here too.
-        Ok(FoundCrate::Itself) => Ok(quote!(::libtmux)),
-        Ok(FoundCrate::Name(name)) => {
-            let ident = Ident::new(&name.replace('-', "_"), Span::call_site());
-            Ok(quote!(::#ident))
-        }
-        // No UI test reaches this: trybuild builds each case with this
-        // crate's dev-dependencies, and one of them is `libtmux`.
-        Err(_) => Err(syn::Error::new(
-            span,
-            "could not locate the `libtmux` package; use `#[filterable(crate = \"path::to::libtmux\")]` to provide it explicitly",
-        )),
+    for package in ["libtmux-core", "libtmux-tokio", "libtmux"] {
+        let name = match crate_name(package) {
+            Ok(FoundCrate::Itself) => package.to_owned(),
+            Ok(FoundCrate::Name(name)) => name,
+            Err(_) => continue,
+        };
+        let ident = Ident::new(&name.replace('-', "_"), Span::call_site());
+        return Ok(quote!(::#ident));
     }
+    Err(syn::Error::new(
+        span,
+        "could not locate a libtmux query API; set #[filterable(crate = \"path::to::libtmux\")]",
+    ))
 }
 
 // One expansion block keeps the companion and trait implementation on the

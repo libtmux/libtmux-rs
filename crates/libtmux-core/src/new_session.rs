@@ -121,11 +121,8 @@ impl NewSession {
             operands.push(Operand::plain(height.to_string()));
         }
         for (name, value) in &self.environment {
-            let mut assignment = name.clone();
-            assignment.push("=");
-            assignment.push(value);
             operands.push(Operand::flag("-e"));
-            operands.push(Operand::sensitive(assignment));
+            operands.push(Operand::sensitive(crate::assignment(name, value)));
         }
         if let Some(command) = &self.command {
             operands.push(Operand::flag("--"));

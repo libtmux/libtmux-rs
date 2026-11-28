@@ -14,10 +14,17 @@ categories = ["api-bindings"]
 
 [features]
 default = []
+plan = []
+query = ["dep:caseless", "dep:regex"]
+derive = ["dep:libtmux-macros", "query"]
 serde = ["dep:serde"]
-schema = ["dep:schemars", "serde"]
+schema = ["dep:schemars", "dep:serde_json", "serde"]
 
 [dependencies]
+caseless = { version = "0.2", optional = true }
+libtmux-macros = { workspace = true, optional = true }
+regex = { version = "1.13", optional = true }
+serde_json = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
