@@ -2047,6 +2047,12 @@ impl Server {
                 crate::internal::operation::OperationContext::observation(deadline),
             )
             .await?;
+        if !late {
+            if let Some(error @ Error::ServerGone { .. }) = result.refusal_for("server generation")
+            {
+                return Err(error);
+            }
+        }
         probe
             .decode(result.exit_code(), result.stdout(), result.stderr(), late)
             .map_err(Into::into)

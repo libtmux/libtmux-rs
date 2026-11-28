@@ -175,24 +175,54 @@ async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
     .await
     .expect("the daemon exits");
 
-    let error = guard
-        .server()
-        .sessions()
-        .await
-        .expect_err("there is no server to list");
-    assert_eq!(
-        error.kind(),
-        ErrorKind::ServerGone,
-        "tmux 'no server running' is recognized: {error}",
-    );
-    assert!(
-        matches!(&error, crate::Error::ServerGone { kind, .. } if *kind == ServerGoneKind::NotRunning),
-        "the absence is named: {error:?}",
-    );
-    assert!(
-        !error.is_object_gone(),
-        "an absent server is not a missing object: {error}",
-    );
+    for (operation, error) in [
+        (
+            "generation",
+            guard
+                .server()
+                .generation()
+                .await
+                .expect_err("there is no daemon"),
+        ),
+        (
+            "sessions",
+            guard
+                .server()
+                .sessions()
+                .await
+                .expect_err("there are no sessions to list"),
+        ),
+        (
+            "windows",
+            guard
+                .server()
+                .windows()
+                .await
+                .expect_err("there are no windows to list"),
+        ),
+        (
+            "panes",
+            guard
+                .server()
+                .panes()
+                .await
+                .expect_err("there are no panes to list"),
+        ),
+    ] {
+        assert_eq!(
+            error.kind(),
+            ErrorKind::ServerGone,
+            "{operation}: tmux 'no server running' is recognized: {error}",
+        );
+        assert!(
+            matches!(&error, crate::Error::ServerGone { kind, .. } if *kind == ServerGoneKind::NotRunning),
+            "{operation}: the absence is named: {error:?}",
+        );
+        assert!(
+            !error.is_object_gone(),
+            "{operation}: an absent server is not a missing object: {error}",
+        );
+    }
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
