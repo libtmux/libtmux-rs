@@ -74,7 +74,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use libtmux_tokio::Server;
-use rmcp::model::{ErrorData, ServerCapabilities, ServerConfig};
+use rmcp::model::{ErrorData, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool_handler};
 
 use tail::Tails;
@@ -225,9 +225,10 @@ impl ServerHandler for TmuxTools {
     }
 
     fn get_info(&self) -> ServerConfig {
-        // ServerConfig is #[non_exhaustive], so it is built from the default
-        // rather than named field by field.
-        let mut info = ServerConfig::default();
+        let mut info = ServerConfig::default().with_server_info(Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ));
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_resources()

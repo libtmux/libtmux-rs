@@ -58,6 +58,10 @@ async fn client_sees_the_exact_cross_port_inventory() {
         .selection(selection("inspect,manage,execute,teardown"))
         .build();
     let wire = Wire::connect(tools).await;
+    let peer = wire.client.peer_info().expect("server initialized");
+    let identity = peer.server_info.as_ref().expect("server identifies itself");
+    assert_eq!(identity.name, env!("CARGO_PKG_NAME"));
+    assert_eq!(identity.version, env!("CARGO_PKG_VERSION"));
     let actual: BTreeSet<_> = wire
         .client
         .list_all_tools()
