@@ -105,12 +105,11 @@ fn probe_report<'a>(stderr: &'a [u8], marker: &str) -> Option<&'a str> {
 /// ```
 /// use libtmux_core::{CreationNonce, OrdinaryPaneProbe};
 ///
-/// # fn example(nonce: CreationNonce) -> Result<(), libtmux_core::IdParseError> {
+/// let nonce = CreationNonce::from_bytes([0x42; 16]);
 /// let probe = OrdinaryPaneProbe::new("%7".parse()?, nonce);
 /// let arguments = probe.arguments();
 /// assert_eq!(arguments[1], "run-shell");
-/// # Ok(())
-/// # }
+/// # Ok::<(), libtmux_core::IdParseError>(())
 /// ```
 pub struct OrdinaryPaneProbe {
     pane: PaneId,
@@ -214,12 +213,15 @@ impl OrdinaryPaneProbe {
 /// # Examples
 ///
 /// ```
-/// use libtmux_core::OrdinaryPaneObservation;
+/// use libtmux_core::{CreationNonce, OrdinaryPaneProbe};
+/// use std::path::Path;
 ///
-/// # fn example(observed: &OrdinaryPaneObservation) {
-/// let pane = observed.key().id();
-/// # let _ = pane;
-/// # }
+/// let probe = OrdinaryPaneProbe::new("%7".parse()?, CreationNonce::from_bytes([0; 16]));
+/// let report = b"unknown command: libtmux-pane:00000000000000000000000000000000:123,456,%7,24,3.4\n";
+/// let observed = probe.decode(Path::new("/tmp/recorded.sock"), Some(1), b"", report, false)?;
+/// assert_eq!(observed.key().id().as_ref(), "%7");
+/// assert_eq!(observed.key().generation().pid(), 123);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct OrdinaryPaneObservation {

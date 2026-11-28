@@ -50,11 +50,19 @@ its session exits, compare successive listings, or read the original bytes
 of a session name without contacting tmux.
 
 ```rust
-use libtmux_core::SessionSnapshot;
+use libtmux_core::{CreationNonce, SessionSnapshot, SnapshotList, TmuxVersion};
 
-fn names(sessions: &[SessionSnapshot]) -> impl Iterator<Item = &[u8]> {
-    sessions.iter().map(|session| session.session_name().as_bytes())
-}
+let version = TmuxVersion::parse_output(b"tmux 3.4\n")?;
+let nonce = CreationNonce::from_bytes([0; 16]);
+let listing = SnapshotList::<SessionSnapshot>::new(&version, nonce);
+let recording = concat!(
+    "libtmux-row:00000000000000000000000000000000:",
+    r#"\$0=1795880365=1=1795880365=1795880365=0=work=/tmp=1="#,
+    "\n",
+);
+let rows = listing.decode(Some(0), recording.as_bytes(), 0, false)?;
+assert_eq!(rows[0].session_name().as_bytes(), b"work");
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 [Changelog](CHANGELOG.md)

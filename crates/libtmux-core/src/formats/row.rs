@@ -372,7 +372,21 @@ pub enum FormatCodecPhase {
     Decode,
 }
 
-/// Payload-free diagnostic metadata for a private format codec failure.
+/// Coordinates of a field or row that failed to decode. The diagnostic omits the input bytes.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::{CreationNonce, Error, SessionSnapshot, SnapshotList, TmuxVersion};
+///
+/// let version = TmuxVersion::parse_output(b"tmux 3.4\n")?;
+/// let request = SnapshotList::<SessionSnapshot>::new(&version, CreationNonce::from_bytes([0; 16]));
+/// let error = request.decode(Some(0), b"unrelated output\n", 0, false).unwrap_err();
+/// let Error::SnapshotRow(detail) = error else { panic!("expected a malformed row") };
+/// assert_eq!(detail.row(), Some(0));
+/// assert!(!detail.to_string().contains("unrelated output"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormatCodecError {
     /// Stable error category.

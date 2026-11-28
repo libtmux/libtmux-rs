@@ -83,11 +83,11 @@ snapshot!(ClientSnapshot, Clients, ListClients, hydrate_client_info);
 /// ```
 /// use libtmux_core::{CreationNonce, SessionSnapshot, SnapshotList, TmuxVersion};
 ///
-/// # fn example(bytes_from_rng: [u8; 16]) -> Result<(), Box<dyn std::error::Error>> {
+/// let recorded_nonce = [0x42; 16];
 /// let version = TmuxVersion::parse_output(b"tmux 3.4\n")?;
-/// let request = SnapshotList::<SessionSnapshot>::new(&version, CreationNonce::from_bytes(bytes_from_rng));
+/// let request = SnapshotList::<SessionSnapshot>::new(&version, CreationNonce::from_bytes(recorded_nonce));
 /// assert!(request.decode(Some(0), b"", 0, false)?.is_empty());
-/// # Ok(()) }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct SnapshotList<S> {
     version: TmuxVersion,

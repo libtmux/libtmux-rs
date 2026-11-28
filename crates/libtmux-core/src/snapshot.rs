@@ -1134,13 +1134,14 @@ macro_rules! match_stored {
 
 macro_rules! define_snapshot_info {
     (
-        $info:ident, $fields:ident, $handle:ident, $hydrate:ident, $hydrate_inner:ident, $target:literal,
+        $info:ident, $fields:ident, $handle:ident, $hydrate:ident, $hydrate_inner:ident, $target:literal, $example:literal,
         $placement:ident,
         ($baseline_static:ident, $baseline_field:ident, $baseline_name:literal, $baseline_owner:ident, $baseline_context:ident, $baseline_profiles:ident, $baseline_floor:ident, $baseline_decoder:ident, $baseline_empty:ident),
         [$(($static:ident, $field:ident, $name:literal, $owner:ident, $context:ident, $profiles:ident, $floor:ident, $decoder:ident, $empty:ident)),* $(,)?]
     ) => {
         #[derive(Clone, Debug, Eq, PartialEq)]
         #[doc = concat!("The values from one tmux ", $target, " listing row.")]
+        #[doc = include_str!($example)]
         pub struct $info {
             $baseline_field: snapshot_type!($baseline_decoder),
             $($field: stored_type!($decoder, $floor, $empty)),*
@@ -1412,6 +1413,7 @@ macro_rules! define_snapshots {
             hydrate_session_info,
             decode_session_info_inner,
             $session_target,
+            "../docs/snapshots/session.md",
             SessionInfo,
             $session_baseline,
             [$($session_supplements),*]
@@ -1423,6 +1425,7 @@ macro_rules! define_snapshots {
             hydrate_window_info,
             decode_window_info_inner,
             $window_target,
+            "../docs/snapshots/window.md",
             WindowInfo,
             $window_baseline,
             [$($window_supplements),*]
@@ -1434,6 +1437,7 @@ macro_rules! define_snapshots {
             hydrate_pane_info,
             decode_pane_info_inner,
             $pane_target,
+            "../docs/snapshots/pane.md",
             PaneInfo,
             $pane_baseline,
             [$($pane_supplements),*]
@@ -1445,6 +1449,7 @@ macro_rules! define_snapshots {
             hydrate_client_info,
             decode_client_info_inner,
             $client_target,
+            "../docs/snapshots/client.md",
             ClientInfo,
             $client_baseline,
             [$($client_supplements),*]
