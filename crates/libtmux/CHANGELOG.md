@@ -18,6 +18,11 @@ which a published crate cannot link by a relative path.
 
 ### Changed
 
+- **Breaking.** `libtmux::blocking::Server` is the default client. Enable
+  `tokio` for `libtmux::tokio::Server`. The former root `Server` and
+  `blocking::Runtime` imports have been removed. A session creation returns a
+  receipt that can be inspected by either driver. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - **Behaviour change.** `Server::save_buffer` creates a missing file with mode
   `0600`, where tmux created it with the mode its own umask left, `0644` under
   the usual `022`, so a buffer holding a pane's text or a secret was readable by
