@@ -1233,8 +1233,7 @@ async fn a_version_probe_timeout_preserves_its_child_cleanup_outcome() {
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn a_binary_probe_timeout_preserves_its_child_cleanup_outcome() {
-    let cases =
-        r#"*' run-shell '*) echo 'no server running on /socket' >&2; exit 1 ;; *' -V '*) ;;"#;
+    let cases = "*' run-shell '*) echo 'no server running on /socket' >&2; exit 1 ;; *' -V '*) ;;";
     check_probe_timeout(cases, 3).await;
 }
 
