@@ -34,6 +34,10 @@ $ uv run --project scripts pytest scripts/check-package-contents
 archives. It requires exact sibling versions and checks that every native
 dependency resolves to its extracted archive. The pure, blocking,
 blocking-control, Tokio and mixed configurations each run separately.
+The blocking configurations compile and run the complete displayed program
+from the staged facade README, with its default features in the blocking
+lane. The report retains the program's digest and checks its stdout and
+owned-endpoint cleanup.
 
 Seven Tokio programs use the guide's consumer manifest and the sources in the
 Tokio archive. The proof records each program's digest, stdout bytes and

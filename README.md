@@ -61,6 +61,51 @@ next to the `libtmux-rs` directory, add the default blocking client:
 $ cargo add libtmux --path ../libtmux-rs/crates/libtmux
 ```
 
+Save this as `src/main.rs`. [`blocking::Server::at`][blocking-server-at] selects
+the socket. The program creates a session, observes its pane key and kills
+the session:
+
+[blocking-server-at]: https://libtmux.org/en/rs/latest/reference/libtmux_blocking-server-at/
+
+<!-- blocking-example -->
+
+```rust,no_run
+use libtmux::{NewSession, blocking::Server};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let socket = std::env::args_os().nth(1).ok_or("pass an absolute socket path")?;
+    let server = Server::at(socket)?;
+    let created = server.new_session(NewSession::new("readme").command("sleep 30"))?;
+    let observed = server.observe_pane(created.pane().id());
+    server.kill_created_session(&created)?;
+    assert_eq!(&observed?, created.pane());
+    println!("created and cleaned one session");
+    Ok(())
+}
+```
+
+<!-- /blocking-example -->
+
+Pass an absolute socket path in a private directory you own. These commands
+choose a separate endpoint for this program:
+
+```console
+$ mkdir -p /tmp/libtmux-rs-dev
+```
+
+```console
+$ directory=$(mktemp -d /tmp/libtmux-rs-dev/readme.XXXXXX)
+```
+
+```console
+$ cargo run -- "$directory/socket"
+```
+
+It prints `created and cleaned one session`. The program kills the session it
+created even if observing its pane fails.
+
+### Use the Tokio client
+
 To run the async examples, enable the Tokio client and its private test fixture:
 
 ```console
@@ -104,8 +149,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-- **Throwaway tmux.** Every example on this page runs on a socket of its own,
-  not yours.
+- **Throwaway tmux.** The quick start names its private socket explicitly.
+  The Tokio examples use an owned test server.
 - **Your own server.** Use `libtmux::tokio::Server::new()?` in place of the guard, and
   omit `guard.shutdown()`. It needs no `test-support` feature.
 - **Which server.** With neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET`

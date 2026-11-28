@@ -30,6 +30,60 @@ to use `libtmux::tokio::Server`. Both clients use the same types for tmux IDs,
 creation requests and receipts. With default features disabled the facade
 exports the shared domain types alone.
 
+## Create and clean a session
+
+From a binary project next to this checkout, add the default blocking client:
+
+```console
+$ cargo add libtmux --path ../libtmux-rs/crates/libtmux
+```
+
+[`blocking::Server::at`][server-at] binds the client to your socket. Save this
+as `src/main.rs`; it creates a detached session, observes its pane key and
+kills the session. The reader code and its normal dependencies need no Tokio.
+
+[server-at]: https://libtmux.org/en/rs/latest/reference/libtmux_blocking-server-at/
+
+<!-- blocking-example -->
+
+```rust,no_run
+use libtmux::{NewSession, blocking::Server};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let socket = std::env::args_os().nth(1).ok_or("pass an absolute socket path")?;
+    let server = Server::at(socket)?;
+    let created = server.new_session(NewSession::new("readme").command("sleep 30"))?;
+    let observed = server.observe_pane(created.pane().id());
+    server.kill_created_session(&created)?;
+    assert_eq!(&observed?, created.pane());
+    println!("created and cleaned one session");
+    Ok(())
+}
+```
+
+<!-- /blocking-example -->
+
+Pass an absolute socket path in a private directory you own. These commands
+choose a separate endpoint for this program:
+
+```console
+$ mkdir -p /tmp/libtmux-rs-dev
+```
+
+```console
+$ directory=$(mktemp -d /tmp/libtmux-rs-dev/readme.XXXXXX)
+```
+
+```console
+$ cargo run -- "$directory/socket"
+```
+
+It prints `created and cleaned one session`. The program kills the session it
+created even if observing its pane fails.
+
+The [mixed-client program](examples/api_mixed.rs) passes the same pane key
+to a Tokio capture. Enable `tokio` when you need that client.
+
 ## Describe a session
 
 `NewSession` describes what to create. Constructing it performs no I/O.

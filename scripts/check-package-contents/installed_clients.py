@@ -37,18 +37,6 @@ FIXTURES = Path("/tmp/libtmux-rs-test")
 RECORDER_REVISION = "112e36a381353ad5b73f95eb17e3ea39306aaee7"
 STREAM_LIMIT = 8 * 1024 * 1024
 
-BLOCKING_PROGRAM = """\
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let socket = std::env::args_os().nth(1).ok_or("missing private socket")?;
-    let client = libtmux::blocking::Server::at(socket)?;
-    let receipt = client.new_session(libtmux::NewSession::new("reader").command("sleep 30"))?;
-    let observed = client.observe_pane(receipt.pane().id());
-    client.kill_created_session(&receipt)?;
-    assert_eq!(&observed?, receipt.pane());
-    Ok(())
-}
-"""
-
 TOKIO_PROGRAM = """\
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket = std::env::args_os().nth(1).ok_or("missing private socket")?;
@@ -414,6 +402,24 @@ def registry_patches(staged: Mapping[str, Path]) -> str:
     )
 
 
+def blocking_readme_program(crate: Path) -> str:
+    """Run the displayed blocking program from the staged facade README."""
+    blocks = re.findall(
+        r"<!-- blocking-example -->\s*```rust,no_run\n(.*?)\n```\s*"
+        r"<!-- /blocking-example -->",
+        (crate / "README.md").read_text(),
+        re.DOTALL,
+    )
+    if len(blocks) != 1:
+        raise ValueError("expected one complete blocking README program")
+    return (
+        "\n".join(
+            line for line in blocks[0].splitlines() if line != "#" and not line.startswith("# ")
+        )
+        + "\n"
+    )
+
+
 def prepare_guide_readers(
     project: Path, staged: Mapping[str, Path]
 ) -> dict[str, tuple[Path, dict]]:
@@ -480,6 +486,7 @@ def consume(
     """Build and execute pure, blocking, Tokio and mixed external programs."""
     patches = registry_patches(staged)
     facade = staged["libtmux"]
+    blocking = blocking_readme_program(facade)
     mixed = tomllib.loads((facade / "examples/api/consumer.toml").read_text())["dependencies"]
     extras = "\n".join(
         f"{name} = {{ version = {json.dumps(spec['version'])}, features = {json.dumps(spec['features'])} }}"
@@ -493,8 +500,8 @@ def consume(
             [],
             'fn main() { let _ = libtmux_core::NewSession::new("work"); }\n',
         ),
-        ("blocking", "libtmux", [], BLOCKING_PROGRAM),
-        ("blocking-control", "libtmux", ["blocking", "control-mode"], BLOCKING_PROGRAM),
+        ("blocking", "libtmux", [], blocking),
+        ("blocking-control", "libtmux", ["blocking", "control-mode"], blocking),
         ("tokio", "libtmux", ["tokio"], TOKIO_PROGRAM),
         (
             "mixed",
@@ -525,7 +532,13 @@ def consume(
         else:
             cargo.run(project, "build", "--locked", "--quiet")
         binary = cargo.target / f"debug/reader-{lane}"
-        expected = b"mixed runtime\n" if lane == "mixed" else b""
+        expected = (
+            b"created and cleaned one session\n"
+            if lane.startswith("blocking")
+            else b"mixed runtime\n"
+            if lane == "mixed"
+            else b""
+        )
         if lane == "core":
             actual = subprocess.run(
                 [str(binary)], capture_output=True, check=True, timeout=30
@@ -549,7 +562,12 @@ def consume(
                     "profile": "raw-stdout-native-capture",
                 }
         consumers.append(
-            {"name": lane, "normalNativeDependencies": selected, "stdoutHex": expected.hex()}
+            {
+                "name": lane,
+                "normalNativeDependencies": selected,
+                "programSha256": sha256(project / "src/main.rs"),
+                "stdoutHex": expected.hex(),
+            }
         )
     return consumers, mixed_record, fixture_binary
 

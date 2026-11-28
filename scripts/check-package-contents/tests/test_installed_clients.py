@@ -14,6 +14,44 @@ import pytest
 import yaml
 
 
+def test_blocking_reader_uses_the_archive_readme_bytes(tmp_path: Path) -> None:
+    program = 'use libtmux::blocking::Server;\n\nfn main() { println!("README reader"); }\n'
+    hidden = (
+        '# #[cfg(feature = "blocking")]\n'
+        + program
+        + '# #[cfg(not(feature = "blocking"))]\n# fn main() {}\n'
+    )
+    readme = (
+        "An unrelated example.\n\n```rust\nlet offline = 1;\n```\n\n"
+        "<!-- blocking-example -->\n\n```rust,no_run\n"
+        + hidden
+        + "```\n\n<!-- /blocking-example -->\n"
+    )
+    (tmp_path / "README.md").write_text(readme)
+    assert clients.blocking_readme_program(tmp_path) == program
+    (tmp_path / "README.md").write_text(readme.replace("README reader", "changed reader"))
+    assert clients.blocking_readme_program(tmp_path) == program.replace(
+        "README reader", "changed reader"
+    )
+
+
+@pytest.mark.parametrize("damage", ["missing", "duplicate", "unclosed"])
+def test_blocking_reader_refuses_an_ambiguous_readme_program(tmp_path: Path, damage: str) -> None:
+    readme = (
+        "<!-- blocking-example -->\n\n```rust,no_run\nfn main() {}\n```\n\n"
+        "<!-- /blocking-example -->\n"
+    )
+    if damage == "missing":
+        readme = readme.replace("<!-- blocking-example -->", "")
+    elif damage == "duplicate":
+        readme += readme
+    else:
+        readme = readme.replace("\n```\n", "\n")
+    (tmp_path / "README.md").write_text(readme)
+    with pytest.raises(ValueError, match="blocking README program"):
+        clients.blocking_readme_program(tmp_path)
+
+
 def test_archived_guides_preserve_reader_setup_and_source(tmp_path: Path) -> None:
     crate = tmp_path / "archive"
     examples = crate / "examples"
