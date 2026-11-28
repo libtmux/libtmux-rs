@@ -1069,13 +1069,6 @@ async fn a_whole_hook_write_preserves_the_bytes_native_tmux_accepts() {
             .kill_on_drop(true);
         command
     };
-    let input = b"set-environment -g MARK a\xffb";
-    let native_write = native()
-        .args(["set-hook", "-g", "alert-bell[0]"])
-        .arg(OsStr::from_bytes(input))
-        .output()
-        .await
-        .unwrap();
     let read_slot = || async {
         native()
             .args(["show-options", "-gqv", "alert-bell[0]"])
@@ -1083,6 +1076,15 @@ async fn a_whole_hook_write_preserves_the_bytes_native_tmux_accepts() {
             .await
             .unwrap()
     };
+    let baseline = read_slot().await;
+    assert!(baseline.status.success());
+    let input = b"set-environment -g MARK a\xffb";
+    let native_write = native()
+        .args(["set-hook", "-g", "alert-bell[0]"])
+        .arg(OsStr::from_bytes(input))
+        .output()
+        .await
+        .unwrap();
     let reference = read_slot().await;
     assert!(reference.status.success());
     let clear = native()
@@ -1092,7 +1094,14 @@ async fn a_whole_hook_write_preserves_the_bytes_native_tmux_accepts() {
         .unwrap();
     assert!(clear.status.success());
     let empty = read_slot().await;
-    assert!(empty.status.success() && empty.stdout.is_empty());
+    assert!(empty.status.success());
+    assert_eq!(empty.stdout, baseline.stdout);
+    if native_write.status.success() {
+        assert_ne!(
+            reference.stdout, baseline.stdout,
+            "the native write changed the slot"
+        );
+    }
 
     let hooks = IndexedHooks::from(BTreeMap::from([(0, TmuxText::from(input.to_vec()))]));
     let written = server
