@@ -38,6 +38,10 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- If a subprocess call and its cleanup both fail, `Error::OperationAndCleanup`
+  retains the command error and the failed cleanup stage.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - Generation discovery and session, window or pane listings report
   `Error::ServerGone` when the daemon has stopped, instead of a decode error.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
