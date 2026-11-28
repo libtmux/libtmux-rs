@@ -1286,6 +1286,18 @@ impl Server {
         }
     }
 
+    fn for_peer(&self, peer: Option<&Core>, operation: &'static str) -> Result<Self, Error> {
+        let Some(peer) = peer else {
+            return Ok(self.clone());
+        };
+        self.core
+            .require_same_server(peer.configuration().identity(), operation)?;
+        let generation = peer
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        self.bound_to(generation)
+    }
+
     pub(crate) fn bound_to(&self, generation: ServerGeneration) -> Result<Self, Error> {
         Ok(Self::from_core(Arc::new(self.core.bound_to(generation)?)))
     }
@@ -1637,14 +1649,13 @@ impl Server {
     /// Returns [`Error::ServerMismatch`] when the pane belongs to another
     /// server, or an error when tmux rejects the format or the pane is gone.
     pub async fn format(&self, pane: Option<&Pane>, format: &str) -> Result<TmuxText, Error> {
+        let server = self.for_peer(pane.map(|pane| pane.core.as_ref()), "display-message")?;
         let mut command = Command::new("display-message").arg("-p");
         if let Some(pane) = pane {
-            self.core
-                .require_same_server(pane.server_identity(), "display-message")?;
             command = command.arg("-t").arg(pane.id().to_string());
         }
 
-        let result = self
+        let result = server
             .cmd(command.arg("--").arg(OsString::from(format)))
             .await?;
         if !result.success() {

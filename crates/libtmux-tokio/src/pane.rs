@@ -15,7 +15,7 @@ use crate::session::Session;
 use crate::snapshot::PaneProjection;
 #[cfg(feature = "query")]
 use crate::snapshot::{Availability, FieldRef, PaneFields, PaneInfo};
-use crate::target::{PaneId, ServerIdentity, SessionId, WindowId};
+use crate::target::{PaneId, SessionId, WindowId};
 use crate::version::TmuxVersion;
 use crate::window::Respawn;
 use crate::window::Window;
@@ -267,7 +267,8 @@ const fn pane_mode_is_active(count: u32) -> bool {
 /// ```
 #[derive(Clone)]
 pub struct Pane {
-    core: Arc<Core>,
+    pub(crate) core: Arc<Core>,
+    key: crate::PaneKey,
     projection: PaneProjection,
 }
 
@@ -289,8 +290,19 @@ impl Pane {
     }
 
     /// Build a handle from a hydrated projection.
-    pub(crate) const fn new(core: Arc<Core>, projection: PaneProjection) -> Self {
-        Self { core, projection }
+    pub(crate) fn new(core: Arc<Core>, projection: PaneProjection) -> Result<Self, Error> {
+        let key = core.observed_key(projection.pane().pane_id().clone())?;
+        Ok(Self {
+            core,
+            key,
+            projection,
+        })
+    }
+
+    /// The endpoint, daemon generation and ID that identify this pane.
+    #[must_use]
+    pub const fn key(&self) -> &crate::PaneKey {
+        &self.key
     }
 
     /// Find the pane this process is running in.
@@ -596,11 +608,6 @@ impl Pane {
         pane_mode_is_active(*self.projection.pane().pane_in_mode())
     }
 
-    /// Return the identity of the server this pane belongs to.
-    pub(crate) fn server_identity(&self) -> &ServerIdentity {
-        self.core.configuration().identity()
-    }
-
     /// Replace this handle's snapshot with the pane's current state.
     ///
     /// # Errors
@@ -679,10 +686,11 @@ impl Pane {
     pub async fn session(&self) -> Result<Option<Session>, Error> {
         let infos = listing::sessions(&self.core, None).await?;
 
-        Ok(infos
+        infos
             .into_iter()
             .find(|info| info.session_id() == self.session_id())
-            .map(|info| Session::new(Arc::clone(&self.core), info)))
+            .map(|info| Session::new(Arc::clone(&self.core), info))
+            .transpose()
     }
 
     /// Split this pane, putting a new one beside it.
@@ -731,7 +739,7 @@ impl Pane {
         let projection =
             listing::create_pane(&self.core, |format| options.into_command(&pane, format)).await?;
 
-        Ok(Self::new(Arc::clone(&self.core), projection))
+        Self::new(Arc::clone(&self.core), projection)
     }
 
     /// Move one edge of the pane by a number of cells.
@@ -1228,8 +1236,7 @@ impl Pane {
     /// Returns [`Error::ServerMismatch`] when `other` belongs to another
     /// server, or an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
-        self.core
-            .require_same_server(other.server_identity(), "swap-pane")?;
+        self.core.require_same_instance(&other.core, "swap-pane")?;
         listing::mutate(
             &self.core,
             "swap-pane",
@@ -1355,8 +1362,7 @@ impl Pane {
         beside: &Self,
         options: crate::JoinOptions,
     ) -> Result<Self, Error> {
-        self.core
-            .require_same_server(beside.server_identity(), "join-pane")?;
+        self.core.require_same_instance(&beside.core, "join-pane")?;
         let command = options.apply(
             Command::new("join-pane")
                 .arg("-d")
@@ -1447,14 +1453,10 @@ impl Pane {
     }
 }
 
-/// Panes compare by server endpoint and pane id.
-///
-/// Unlike [`Window`](crate::Window), the discovery link is not part of pane
-/// identity: a pane exists in exactly one window, so two handles with the same
-/// pane id name the same pane however they were reached.
+/// Panes compare by endpoint, daemon generation and pane ID.
 impl PartialEq for Pane {
     fn eq(&self, other: &Self) -> bool {
-        self.server_identity() == other.server_identity() && self.id() == other.id()
+        self.key == other.key
     }
 }
 
@@ -1462,8 +1464,7 @@ impl Eq for Pane {}
 
 impl Hash for Pane {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.server_identity().hash(state);
-        self.id().hash(state);
+        self.key.hash(state);
     }
 }
 

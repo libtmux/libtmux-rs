@@ -462,6 +462,36 @@ impl Core {
         self.generation
     }
 
+    pub(crate) fn observed_key<I>(&self, id: I) -> Result<libtmux_core::ObjectKey<I>, Error> {
+        let generation = self
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        Ok(libtmux_core::ObjectKey::new(
+            self.configuration().identity().clone(),
+            generation,
+            id,
+        ))
+    }
+
+    pub(crate) fn require_same_instance(
+        &self,
+        peer: &Self,
+        operation: &'static str,
+    ) -> Result<(), Error> {
+        self.require_same_server(peer.configuration().identity(), operation)?;
+        let expected = self
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        let found = peer
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        if expected == found {
+            Ok(())
+        } else {
+            Err(Error::ServerGenerationChanged { expected, found })
+        }
+    }
+
     /// Bind derived handles to the daemon that supplied their IDs.
     pub(crate) fn bound_to(&self, expected: crate::ServerGeneration) -> Result<Self, Error> {
         if let Some(found) = self.generation {
