@@ -390,8 +390,8 @@ A qualified control sender can execute the same plan with `sender.run_plan(&plan
 
 Control mode keeps one tmux client attached. It needs the `control-mode`
 feature and tmux 3.7 or newer. [`ControlSender::subscribe`] has tmux watch a
-format and report each change, so nothing polls, and
-[`Server::over_control_mode`] sends every typed call down the same connection:
+numeric or ID projection. [`Server::over_control_mode`] lets a typed handle
+share the connection. The example waits for tmux to report the window count.
 
 ```rust
 # // `control` is behind `control-mode`, so the example is compiled only when

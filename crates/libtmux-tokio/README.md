@@ -560,11 +560,11 @@ Reproduce the table with
 | Never folding across your own work | `plan` | `Planner::steps_bounded(&plan, &boundaries)` |
 | Per-command answers over one connection | `plan`, `control-mode` | `sender.run_plan(&plan).await?` |
 
-### [`Server::over_control_mode`]: send every typed call down one connection
+### [`Server::over_control_mode`] shares an attached control client
 
-Control mode is never the default: until you attach, every command is one
-process. [`Server::over_control_mode`] returns a handle whose typed calls
-travel down the connection, and handles reached through it inherit the route:
+The handle selects a transport before it submits a command. Numeric
+projections and input commands can share the control client. Reading pane
+contents or waiting on a channel uses an ordinary client on the same daemon.
 
 ```rust
 # // `over_control_mode` is behind `control-mode`, so the example is compiled
@@ -592,7 +592,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .split();
     let routed = guard.server().over_control_mode(&commands).await?;
 
-    // One connection, no processes: the whole typed API, not a plan's worth of it.
     for pane in routed.panes().await? {
         pane.send_line("echo hello").await?;
     }
@@ -603,11 +602,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Keep the original server for what a connection is wrong for:
-
-- A command that parks the client's queue, such as `wait-for` or a foreground
-  `run-shell`.
-- Arguments that are not valid UTF-8, which a text protocol cannot carry.
+An entire chain uses the ordinary route when any member can park the client,
+return ambiguous text or require bytes outside a control line. Give it an
+explicit target when it depends on the selected session or pane.
 
 ## Cancellation and shutdown
 

@@ -41,8 +41,8 @@ run with tmux's own semantics.
 
 [`Server::capabilities`] reports the configured executable and caches that
 result, including versions below the floor. Standalone [`Server::cmd`] calls
-with `-V` or `-h` also retain native executable diagnostics. Client flags have
-no representation over an open control connection.
+with `-V` or `-h` invoke the configured executable directly, including on
+a handle that shares an attached control connection.
 
 Async operations need an entered Tokio runtime. The default executable is
 `tmux`, resolved through the `PATH` captured when the [`Server`] is built. Use
