@@ -135,7 +135,7 @@ example-coverage-check: (_example-coverage "libtmux-core" "--require-all") (_exa
 [private]
 _runtime-json crate:
     cargo +nightly rustdoc --locked --package {{ crate }} --all-features --lib \
-        -- -Zunstable-options --output-format json
+        -- -Zunstable-options --output-format json --document-hidden-items
 
 [private]
 _example-coverage crate strict="": (_runtime-json crate)

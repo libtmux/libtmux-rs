@@ -10,13 +10,17 @@ fails on a gap in `libtmux-core`, `libtmux-blocking`, `libtmux-tokio` or
 `libtmux`. The `public API surface` CI job runs the check. Both read rustdoc's
 JSON, which needs a nightly toolchain.
 
+Hidden modules remain in the JSON so their visible root re-exports are counted.
+A type with its own `#[doc(hidden)]` attribute is excluded.
+
 ```console
 $ cargo +nightly rustdoc \
     --package libtmux \
     --all-features \
     -- \
     -Zunstable-options \
-    --output-format json
+    --output-format json \
+    --document-hidden-items
 ```
 
 ```console

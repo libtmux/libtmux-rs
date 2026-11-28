@@ -240,3 +240,82 @@ def test_records_external_globs_and_module_aliases(tmp_path: pathlib.Path) -> No
     assert result.returncode == 0, result.stdout + result.stderr
     assert "module libtmux::tokio = libtmux_tokio" in result.stdout.splitlines()
     assert "use libtmux::* = libtmux_core::*" in result.stdout.splitlines()
+
+
+def test_hidden_json_records_visible_alias_and_signature_types_without_helpers(
+    tmp_path: pathlib.Path,
+) -> None:
+    doc = fixture()
+    doc["index"]["0"]["inner"]["module"]["items"] = [20, 21]
+    doc["index"]["20"] = {
+        "id": 20,
+        "name": "implementation",
+        "visibility": "public",
+        "attrs": [{"other": "#[doc(hidden)]"}],
+        "inner": {"module": {"items": [1, 22, 23]}},
+    }
+    doc["index"]["21"] = {
+        "id": 21,
+        "visibility": "public",
+        "inner": {"use": {"id": 1, "name": "Visible", "is_glob": False}},
+    }
+    for identifier, name in [(22, "HiddenOnlyHelper"), (23, "ReturnValue")]:
+        doc["index"][str(identifier)] = {
+            "id": identifier,
+            "name": name,
+            "visibility": "public",
+            "inner": {
+                "struct": {"kind": "unit", "generics": {"params": [], "where_predicates": []}}
+            },
+        }
+        doc["paths"][str(identifier)] = {
+            "crate_id": 0,
+            "kind": "struct",
+            "path": ["libtmux", "implementation", name],
+        }
+    doc["index"]["4"]["inner"]["function"]["sig"]["output"] = {
+        "resolved_path": {"id": 23, "path": "ReturnValue", "args": None},
+    }
+    doc["index"]["24"] = {
+        **doc["index"]["4"],
+        "id": 24,
+        "name": "internal_method",
+        "attrs": ["#[doc(hidden)]"],
+    }
+    doc["index"]["3"]["inner"]["impl"]["items"].append(24)
+    doc["index"]["25"] = {
+        "id": 25,
+        "inner": {
+            "impl": {
+                "for": {
+                    "resolved_path": {
+                        "id": 22,
+                        "path": "HiddenOnlyHelper",
+                        "args": {
+                            "angle_bracketed": {
+                                "args": [{"type": {"resolved_path": {"id": 1, "path": "Widget"}}}],
+                                "constraints": [],
+                            }
+                        },
+                    }
+                },
+                "trait": {"id": 9, "path": "From"},
+                "items": [],
+                "is_synthetic": False,
+                "blanket_impl": None,
+            }
+        },
+    }
+    source = tmp_path / "hidden.json"
+    source.write_text(json.dumps(doc), encoding="utf-8")
+    result = run(str(source))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "struct libtmux::Visible" in result.stdout.splitlines()
+    assert "struct libtmux::implementation::ReturnValue" in result.stdout.splitlines()
+    assert (
+        "function libtmux::Visible::get: fn(&self) -> libtmux::implementation::ReturnValue"
+        in result.stdout.splitlines()
+    )
+    assert "HiddenOnlyHelper" not in result.stdout
+    assert "internal_method" not in result.stdout
+    assert "module libtmux::implementation" not in result.stdout.splitlines()

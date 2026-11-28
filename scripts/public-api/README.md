@@ -14,13 +14,18 @@ External re-exports record their source crate and path, including facade
 globs and module aliases. The defining crate's inventory records its members
 and signatures.
 
+JSON includes hidden modules so visible root re-exports retain their native
+declarations. The ledger follows visible exports and types used by their public
+signatures. Hidden helpers and explicitly hidden items are excluded.
+
 ```console
 $ cargo +nightly rustdoc \
     --package libtmux \
     --all-features \
     -- \
     -Zunstable-options \
-    --output-format json
+    --output-format json \
+    --document-hidden-items
 ```
 
 ```console
