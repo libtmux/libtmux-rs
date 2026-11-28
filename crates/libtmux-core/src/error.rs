@@ -19,6 +19,10 @@ pub enum CommandKind {
     ListPanes,
     /// Capture bytes from a generation-checked pane.
     CapturePane,
+    /// Kill the session bound to a creation receipt.
+    KillSession,
+    /// Remove one observed session placement of a window.
+    UnlinkWindow,
 }
 
 impl fmt::Display for CommandKind {
@@ -27,6 +31,8 @@ impl fmt::Display for CommandKind {
             Self::NewSession => "new-session",
             Self::ListPanes => "list-panes",
             Self::CapturePane => "capture-pane",
+            Self::KillSession => "kill-session",
+            Self::UnlinkWindow => "unlink-window",
         })
     }
 }

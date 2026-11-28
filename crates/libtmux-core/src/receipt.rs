@@ -180,6 +180,19 @@ impl CreatedSession {
         &self.pane
     }
 
+    /// Prepare removal of this session on the daemon that created it.
+    ///
+    /// Both drivers run this queue with a non-starting client at the receipt's
+    /// endpoint. If a new daemon reuses the socket and session ID, the guard
+    /// stops the queue before tmux reaches `kill-session`.
+    pub fn kill_session_command(&self) -> crate::CommandChain {
+        crate::CommandChain::new(self.generation().queue_guard()).then(
+            crate::Command::new("kill-session")
+                .arg("-t")
+                .arg(self.session.as_ref()),
+        )
+    }
+
     /// The daemon generation reported by the creation action.
     #[must_use]
     pub const fn generation(&self) -> ServerGeneration {

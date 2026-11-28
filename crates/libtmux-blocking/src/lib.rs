@@ -17,6 +17,7 @@ use libtmux_core::{
     OrdinaryPaneProbe, OrdinaryVersionProbe, PaneId, PaneKey, Reply, TmuxVersion, VersionError,
 };
 
+mod mutations;
 mod supervisor;
 
 /// A cancellation signal shared by the caller and its native subprocess.

@@ -9,14 +9,14 @@ use libtmux_core::{CommandKind, Error, NewSession, PaneKey};
 
 use crate::{RequestOptions, Server};
 
-struct Fixture {
+pub(super) struct Fixture {
     root: tempfile::TempDir,
     executable: OsString,
-    server: Server,
+    pub(super) server: Server,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let fixture = Self::empty();
         fixture.start();
         fixture.checked(["set-option", "-g", "status", "off"]);
@@ -58,7 +58,7 @@ impl Fixture {
         command
     }
 
-    fn checked(&self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Output {
+    pub(super) fn checked(&self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Output {
         let output = self.command().args(args).output().unwrap();
         assert!(
             output.status.success(),
@@ -358,4 +358,45 @@ fn a_parked_creation_hook_preserves_the_real_ordinary_receipt() {
         fixture.server.observe_pane(receipt.pane().id()).unwrap(),
         *receipt.pane()
     );
+}
+
+#[test]
+fn cleanup_cannot_kill_a_replacement_session_with_the_same_id() {
+    let fixture = Fixture::new();
+    let original = fixture
+        .server
+        .new_session(NewSession::new("original"))
+        .unwrap();
+    fixture.checked(["kill-server"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let probe = fixture.command().arg("list-sessions").output().unwrap();
+        let diagnostic = String::from_utf8_lossy(&probe.stderr);
+        if diagnostic.contains("no server running") || diagnostic.contains("error connecting") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "original server still reachable");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    fixture.start();
+    let replacement = fixture
+        .server
+        .new_session(NewSession::new("replacement"))
+        .unwrap();
+    assert_eq!(original.session(), replacement.session());
+    assert_ne!(original.generation(), replacement.generation());
+    assert!(fixture.server.kill_created_session(&original).is_err());
+    assert_eq!(
+        fixture
+            .checked([
+                "display-message",
+                "-p",
+                "-t",
+                replacement.session().as_ref(),
+                "#{session_name}"
+            ])
+            .stdout,
+        b"replacement\n"
+    );
+    fixture.server.kill_created_session(&replacement).unwrap();
 }

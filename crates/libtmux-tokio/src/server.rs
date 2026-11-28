@@ -1233,14 +1233,19 @@ impl Server {
         self.core
             .require_same_server(receipt.pane().server_identity(), "kill-session")?;
         let server = self.bound_to(receipt.generation())?;
-        listing::mutate(
-            &server.core,
-            "kill-session",
-            Command::new("kill-session")
-                .arg("-t")
-                .arg(receipt.session().as_ref()),
-        )
-        .await
+        let result = server
+            .core
+            .execute_chain(receipt.kill_session_command())
+            .await?;
+        if result.success() {
+            Ok(())
+        } else {
+            Err(Error::from_refused_result(
+                "kill-session",
+                &result,
+                Some(OsStr::new(receipt.session().as_ref())),
+            ))
+        }
     }
 
     pub(crate) fn bound_to(&self, generation: ServerGeneration) -> Result<Self, Error> {
