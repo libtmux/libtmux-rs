@@ -357,6 +357,24 @@ fn is_cold(stderr: &[u8]) -> bool {
 mod tests {
     use super::{is_cold, is_pre_probe_usage};
 
+    #[cfg(feature = "test-support")]
+    fn fixture_configuration(
+        server: &crate::Server,
+        timeout: std::time::Duration,
+    ) -> crate::internal::core::CoreConfiguration {
+        use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
+
+        CoreConfiguration::resolve(
+            &SocketSelection::Path(server.socket_path().to_owned()),
+            None,
+            None,
+            server.tmux_executable().to_os_string(),
+            timeout,
+            BuildContext::capture(),
+        )
+        .expect("private endpoint configuration")
+    }
+
     #[cfg(all(feature = "control-mode", feature = "test-support"))]
     #[tokio::test]
     async fn a_control_gate_uses_its_challenged_version_after_native_cache_changes() {
@@ -366,7 +384,6 @@ mod tests {
         use crate::command::{CommandRequest, RequestId};
         use crate::control::ControlMode;
         use crate::internal::control_executor::ControlModeExecutor;
-        use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
         use crate::internal::executor::Executor;
         use crate::test::TestServer;
         use crate::{Command, OutputLimits, ReleaseSuffix, ReleaseVersion, TmuxVersion};
@@ -390,15 +407,7 @@ mod tests {
         let checked = sender.version().clone();
         let executor: Arc<dyn Executor> =
             Arc::new(ControlModeExecutor::new(sender, OutputLimits::default()));
-        let configuration = CoreConfiguration::resolve(
-            &SocketSelection::Path(server.socket_path().to_owned()),
-            None,
-            None,
-            server.tmux_executable().to_os_string(),
-            server.default_timeout(),
-            BuildContext::capture(),
-        )
-        .expect("endpoint configuration");
+        let configuration = fixture_configuration(server, server.default_timeout());
         let versions = Arc::new(VersionCache::default());
         let stale =
             TmuxVersion::parse_output(b"tmux 99.0\n").expect("synthetic replacement report");
@@ -480,7 +489,6 @@ mod tests {
 
         use super::{VersionCache, dispatch};
         use crate::command::{CommandRequest, RequestId};
-        use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
         use crate::internal::executor::Executor as _;
         use crate::internal::operation::{OperationContext, nonce};
         use crate::internal::subprocess::SubprocessExecutor;
@@ -491,15 +499,7 @@ mod tests {
         let server = fixture.server();
         let name = unique_name("unreplayed-stale-fence");
         let timeout = scaled(Duration::from_secs(5));
-        let configuration = CoreConfiguration::resolve(
-            &SocketSelection::Path(server.socket_path().to_owned()),
-            None,
-            None,
-            server.tmux_executable().to_os_string(),
-            timeout,
-            BuildContext::capture(),
-        )
-        .expect("private endpoint configuration");
+        let configuration = fixture_configuration(server, timeout);
         let executor = Arc::new(SubprocessExecutor::new(server.tmux_executable(), timeout));
         let versions = Arc::new(VersionCache::default());
         versions.remember(

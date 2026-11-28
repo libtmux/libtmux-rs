@@ -13,6 +13,7 @@ mod versions;
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use libtmux_tokio::control::ControlMode;
 use libtmux_tokio::test::TestServer;
@@ -262,7 +263,6 @@ async fn an_attached_client_can_signal_while_its_ordinary_client_waits() {
         .await
         .expect("the connection reaches the same server");
 
-    use std::time::Duration;
     assert_eq!(
         routed
             .wait_for_channel("handoff", Duration::from_millis(100))

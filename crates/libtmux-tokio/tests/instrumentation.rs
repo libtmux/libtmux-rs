@@ -185,7 +185,14 @@ async fn each_dispatch_runs_in_one_span_on_either_transport() {
     }
     guard.shutdown().await.expect("tmux fixture shuts down");
 
-    let recorded = collector.0.lock().unwrap();
+    assert_dispatch_spans(&collector.0.lock().unwrap(), process_kind, control_kind);
+}
+
+fn assert_dispatch_spans(
+    recorded: &Recorded,
+    process_kind: ErrorKind,
+    control_kind: Option<ErrorKind>,
+) {
     let observed: Vec<_> = recorded
         .dispatches
         .iter()
