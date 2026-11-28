@@ -15,6 +15,11 @@ Notable changes to `libtmux-tokio`.
 
 ### Changed
 
+- The Tokio option API uses the same value and schema types as
+  `libtmux_core::options`. Pure option lookup and validation are available
+  to callers without a Tokio dependency.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - **Behaviour change.** Creation replies without verified identities remain
   uncertain rather than reporting an acknowledged partial effect. Raw
   `Error::SessionExists` describes a diagnostic, not proof that nothing ran.
@@ -53,8 +58,10 @@ Notable changes to `libtmux-tokio`.
   attached session loses access to the watched pane. A subsequent attachment
   starts a new stream.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
-- A timed-out ordinary subprocess request reports a second cleanup failure
-  even when the request first had to qualify the daemon version.
+- A request whose version probe times out preserves any failure cleaning up
+  the probe child. The error identifies the user command as awaiting dispatch.
+  After ordinary callers cancel or time out, `Server::shutdown` reports the
+  first child-cleanup failure on each call once reaping finishes.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 - `Pane::capture_with`, `Pane::capture_lines` and polling waits isolate pane
