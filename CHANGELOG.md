@@ -26,6 +26,9 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- `libtmux_blocking::Server::capture` includes a complete program that reads
+  an existing pane and writes its exact bytes without Tokio. The blocking
+  README links the example and shows its socket and pane arguments.
 - The root README puts ordinary Tokio use before fixture examples and names
   the blocking client's current typed operations. The Tokio README uses
   sibling checkout dependencies for its unpublished API and distinguishes
