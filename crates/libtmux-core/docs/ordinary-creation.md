@@ -84,8 +84,8 @@ mutation removing duplicate-nonce rejection made
 `duplicate_nonce_is_ambiguous_even_after_a_well_formed_receipt` fail by
 returning a receipt instead of an unconfirmed effect.
 
-[new-33]: https://github.com/tmux/tmux/blob/3.3a/cmd-new-session.c#L324-L338
-[new-34]: https://github.com/tmux/tmux/blob/3.4/cmd-new-session.c#L317-L332
-[new-37]: https://github.com/tmux/tmux/blob/3.7/cmd-new-session.c#L328-L343
-[cfg]: https://github.com/tmux/tmux/blob/3.4/cfg.c#L59-L86
-[print]: https://github.com/tmux/tmux/blob/3.4/server-client.c#L3139-L3175
+[new-33]: https://github.com/tmux/tmux/blob/0b355ae8114511e1ff6359272b164f1cdf718e80/cmd-new-session.c#L343-L358
+[new-34]: https://github.com/tmux/tmux/blob/9ae69c3795ab5ef6b4d760f6398cd9281151f632/cmd-new-session.c#L336-L351
+[new-37]: https://github.com/tmux/tmux/blob/81f88f8517c9fc5371b56cf117530c6b477c96ac/cmd-new-session.c#L347-L362
+[cfg]: https://github.com/tmux/tmux/blob/9ae69c3795ab5ef6b4d760f6398cd9281151f632/cfg.c#L64-L94
+[print]: https://github.com/tmux/tmux/blob/9ae69c3795ab5ef6b4d760f6398cd9281151f632/server-client.c#L3274-L3305
