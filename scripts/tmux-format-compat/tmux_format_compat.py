@@ -402,7 +402,15 @@ class Harness:
             raise CompatFailure(f"command-local PATH did not select tmux {tag}")
 
         run(
-            ["cargo", "test", "--locked", "--workspace", "--all-targets", "--all-features"],
+            [
+                "cargo",
+                "test",
+                "--locked",
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--no-fail-fast",
+            ],
             cwd=ROOT,
             env={
                 **LOCALE,

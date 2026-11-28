@@ -283,7 +283,7 @@ def test_a_whole_run_builds_a_pinned_commit_and_tests_it_under_the_supervisor(
     assert "tmux next-9.9" in result.stdout
     calls = [line for line in log.read_text().splitlines() if line.startswith("cargo")]
     assert calls == [
-        "cargo test --locked --workspace --all-targets --all-features",
+        "cargo test --locked --workspace --all-targets --all-features --no-fail-fast",
         "cargo test --locked --package libtmux-tokio --lib --all-features real_tmux_compat_ -- --test-threads=1 --list",
         "cargo test --locked --package libtmux-tokio --lib --all-features real_tmux_compat_ -- --test-threads=1",
     ]
