@@ -461,7 +461,7 @@ enum Disposition {
     /// Build, but leave the client where it is.
     Detached,
     /// Append into the answering prompt's own `AppendTarget`.
-    Append(AppendTarget),
+    Append(Box<AppendTarget>),
     /// The session already exists and the answer was no: change nothing.
     Decline,
 }
@@ -502,7 +502,7 @@ async fn prompt_disposition(
     )?;
     Ok(match answer {
         'n' => Disposition::Detached,
-        'a' => Disposition::Append(append_target(server).await?),
+        'a' => Disposition::Append(Box::new(append_target(server).await?)),
         _ => Disposition::Switch,
     })
 }
@@ -640,7 +640,7 @@ async fn load_one(
         None => (inherited, context.attach),
         Some(Disposition::Switch) => (inherited, true),
         Some(Disposition::Detached | Disposition::Decline) => (inherited, false),
-        Some(Disposition::Append(target)) => (Some(target), false),
+        Some(Disposition::Append(target)) => (Some(target.as_ref()), false),
     };
     if let Some(progress) = &mut report.progress {
         progress.start(workspace)?;
