@@ -2,7 +2,7 @@
 //!
 //! tmux runs its format machinery over a name, a title and a start directory
 //! before it uses them, so `#(command)` in caller text runs a shell. Each test
-//! below asks for a value holding one and asserts tmux stored what was asked.
+//! below asks for a value holding one and checks the stored text or child cwd.
 //! The substitution runs `echo`, so an unescaped pass is visible in the stored
 //! value rather than only in a side effect: tmux runs `#()` asynchronously, so
 //! a marker file checked straight after the call reads absent whether or not
@@ -11,12 +11,26 @@
 #![cfg(feature = "test-support")]
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use libtmux_tokio::test::TestServer;
+use std::path::Path;
+use std::time::Duration;
+
+use libtmux_tokio::test::{TestServer, retry_until};
 use libtmux_tokio::{NewSession, NewWindowOptions, SplitDirection, SplitOptions};
 use tempfile::TempDir;
 
 /// Holds a `#()` substitution, and is a legal tmux name.
 const HOSTILE: &str = "evil#(echo pwned)";
+
+async fn child_current_path(report: &Path) -> Vec<u8> {
+    retry_until(Duration::from_secs(5), async || {
+        std::fs::read(report).is_ok_and(|bytes| bytes.ends_with(b"\n"))
+    })
+    .await
+    .expect("the child reports its working directory");
+    let mut bytes = std::fs::read(report).expect("the working directory report reads");
+    assert_eq!(bytes.pop(), Some(b'\n'));
+    bytes
+}
 
 #[tokio::test]
 async fn a_session_name_reaches_tmux_literally() {
@@ -130,31 +144,26 @@ async fn a_start_directory_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let session = guard.session("work").await.expect("the session is created");
 
-    // A directory that really holds a `#`, which is also what an unescaped
-    // pass would mangle. tmux reports the path it started in.
     let scratch = TempDir::new().expect("a scratch directory");
     let directory = scratch.path().join("dir#(echo pwned)");
+    let report = scratch.path().join("cwd");
     std::fs::create_dir_all(&directory).expect("the directory is created");
 
-    let window = session
-        .new_window(NewWindowOptions::new("cwd").start_directory(&directory))
+    session
+        .new_window(
+            NewWindowOptions::new("cwd")
+                .start_directory(&directory)
+                .environment("LIBTMUX_CWD_REPORT", &report)
+                .command("pwd -P > \"$LIBTMUX_CWD_REPORT\"; exec sleep 300"),
+        )
         .await
         .expect("the window is created");
-    let pane = window
-        .active_pane()
-        .await
-        .expect("the pane is read")
-        .expect("a window has a pane");
 
-    // tmux reports the directory the pane resolved to. On macOS the
-    // temporary root arrives as `/var/...` and resolves to
-    // `/private/var/...`, so the expectation has to be canonical too or
-    // it is only testing Linux.
+    // The creation row can precede process startup, so the child reports its cwd.
     let expected = directory.canonicalize().expect("the directory resolves");
-
     assert_eq!(
-        pane.current_path().map(|path| path.to_string_lossy()),
-        Some(expected.to_string_lossy()),
+        child_current_path(&report).await,
+        expected.as_os_str().as_encoded_bytes(),
     );
 
     guard.shutdown().await.expect("the fixture shuts down");
@@ -168,25 +177,23 @@ async fn a_split_start_directory_reaches_tmux_literally() {
 
     let scratch = TempDir::new().expect("a scratch directory");
     let directory = scratch.path().join("split#(echo pwned)");
+    let report = scratch.path().join("cwd");
     std::fs::create_dir_all(&directory).expect("the directory is created");
 
-    let split = pane
-        .split(SplitOptions::new(SplitDirection::Below).start_directory(&directory))
-        .await
-        .expect("the pane splits")
-        .refreshed()
-        .await
-        .expect("the pane is read back");
+    pane.split(
+        SplitOptions::new(SplitDirection::Below)
+            .start_directory(&directory)
+            .environment("LIBTMUX_CWD_REPORT", &report)
+            .command("pwd -P > \"$LIBTMUX_CWD_REPORT\"; exec sleep 300"),
+    )
+    .await
+    .expect("the pane splits");
 
-    // tmux reports the directory the pane resolved to. On macOS the
-    // temporary root arrives as `/var/...` and resolves to
-    // `/private/var/...`, so the expectation has to be canonical too or
-    // it is only testing Linux.
+    // Canonical paths account for macOS resolving `/var` through `/private/var`.
     let expected = directory.canonicalize().expect("the directory resolves");
-
     assert_eq!(
-        split.current_path().map(|path| path.to_string_lossy()),
-        Some(expected.to_string_lossy()),
+        child_current_path(&report).await,
+        expected.as_os_str().as_encoded_bytes(),
     );
 
     guard.shutdown().await.expect("the fixture shuts down");
