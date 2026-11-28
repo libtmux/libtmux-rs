@@ -558,7 +558,7 @@ fn documents() -> TestResult<Vec<(&'static str, String)>> {
     if manifest.join("../../Cargo.toml").is_file() {
         for name in [
             "../../README.md",
-            "../libtmux/README.md",
+            "../libtmux-tokio/README.md",
             "../tmux-workspace/README.md",
         ] {
             documents.push((name, std::fs::read_to_string(manifest.join(name))?));
