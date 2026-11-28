@@ -1,6 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +13,6 @@ use std::process::Stdio;
 use std::sync::{Mutex, MutexGuard};
 
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
-use tokio::process::Command as TokioCommand;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
@@ -67,9 +67,9 @@ impl LaunchContext {
         self
     }
 
-    pub(crate) fn command(&self, arguments: &[OsString]) -> TokioCommand {
-        let mut command = TokioCommand::new(&self.executable);
-        command.args(arguments).kill_on_drop(true).process_group(0);
+    pub(crate) fn command(&self, arguments: &[OsString]) -> std::process::Command {
+        let mut command = std::process::Command::new(&self.executable);
+        command.args(arguments).process_group(0);
         if let Some(current_dir) = &self.current_dir {
             command.current_dir(current_dir);
         }
@@ -492,7 +492,7 @@ impl PersistentChild {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null());
             let mut child = super::subprocess::NativeChild::spawn(
-                command.as_std_mut(),
+                &mut command,
                 Box::new(reservation.registration),
             )
             .map_err(Error::control_mode)?;

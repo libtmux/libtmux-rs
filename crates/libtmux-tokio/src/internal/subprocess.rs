@@ -398,7 +398,7 @@ impl Executor for SubprocessExecutor {
     reason = "startup transfers the existing registry, admission and result owner together"
 )]
 async fn spawn_and_supervise(
-    process: tokio::process::Command,
+    process: std::process::Command,
     stdout_discarded: bool,
     configuration: Arc<Configuration>,
     permit: Option<OwnedSemaphorePermit>,
@@ -498,7 +498,7 @@ async fn await_result(
     reason = "child ownership must cover pipe registration and startup cleanup"
 )]
 fn start_native_child(
-    mut process: tokio::process::Command,
+    mut process: std::process::Command,
     stdout_discarded: bool,
     configuration: &Configuration,
     reservation: Reservation,
@@ -539,7 +539,7 @@ fn start_native_child(
             context.timeout,
         )));
     }
-    let child = process.as_std_mut().spawn().map_err(|source| {
+    let child = process.spawn().map_err(|source| {
         let executable_not_found = (source.kind() == io::ErrorKind::NotFound
             && configuration
                 .launch
