@@ -1,0 +1,23 @@
+function libtmux_blocking::CancellationToken::cancel: fn(&self)
+function libtmux_blocking::CancellationToken::is_cancelled: fn(&self) -> bool
+function libtmux_blocking::Server::at: fn(socket: impl AsRef<Path>) -> Result<Self, std::io::Error>
+function libtmux_blocking::Server::capture: fn(&self, pane: &PaneKey) -> Result<Vec<u8>, Error>
+function libtmux_blocking::Server::capture_with: fn(&self, pane: &PaneKey, options: libtmux_blocking::RequestOptions) -> Result<Vec<u8>, Error>
+function libtmux_blocking::Server::new_session: fn(&self, request: NewSession) -> Result<CreatedSession, Error>
+function libtmux_blocking::Server::new_session_with: fn(&self, request: NewSession, options: libtmux_blocking::RequestOptions) -> Result<CreatedSession, Error>
+function libtmux_blocking::Server::observe_pane: fn(&self, pane: PaneId) -> Result<PaneKey, Error>
+function libtmux_blocking::Server::observe_pane_with: fn(&self, pane: PaneId, options: libtmux_blocking::RequestOptions) -> Result<PaneKey, Error>
+function libtmux_blocking::Server::with_executable: fn(self, executable: impl Into<OsString>) -> Self
+impl Clone for libtmux_blocking::CancellationToken
+impl Clone for libtmux_blocking::RequestOptions
+impl Clone for libtmux_blocking::Server
+impl Debug for libtmux_blocking::CancellationToken
+impl Debug for libtmux_blocking::RequestOptions
+impl Debug for libtmux_blocking::Server
+impl Default for libtmux_blocking::CancellationToken
+impl Default for libtmux_blocking::RequestOptions
+struct libtmux_blocking::CancellationToken
+struct libtmux_blocking::RequestOptions
+struct libtmux_blocking::Server
+struct_field libtmux_blocking::RequestOptions::budget: libtmux_core::supervision::Budget
+struct_field libtmux_blocking::RequestOptions::cancellation: libtmux_blocking::CancellationToken

@@ -1,14 +1,18 @@
 # public-api
 
-Prints the public API surface of `libtmux` from rustdoc's JSON, one record per
+Prints a crate's public API surface from rustdoc's JSON, one record per
 line, sorted so the output diffs. Item signatures and non-blanket trait
 implementations appear in it, so a change a caller can see changes the file.
 It is not a semver check: it says what moved.
 
-`just api` writes `crates/libtmux/docs/public-api.txt` with it, and `just
-api-check`, in the `public API surface` CI job, runs it with `--check` and fails
-with a diff when the committed file differs. Both need a nightly toolchain for
-rustdoc's JSON output.
+`just api` records `docs/public-api.txt` in `libtmux-core`, `libtmux-blocking`,
+`libtmux-tokio` and `libtmux`. `just api-check`, in the `public API surface` CI
+job, checks all four and fails with a diff when a committed file differs.
+Both need a nightly toolchain for rustdoc's JSON output.
+
+External re-exports record their source crate and path, including facade
+globs and module aliases. The defining crate's inventory records its members
+and signatures.
 
 ```console
 $ cargo +nightly rustdoc \

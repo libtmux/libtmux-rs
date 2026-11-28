@@ -31,22 +31,65 @@ pub struct ObjectKey<I> {
 }
 
 /// A session observed on one daemon generation.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::{NewSession, SessionKey};
+///
+/// let created = NewSession::new("work")
+///     .decode("/example/socket".as_ref(), b"123 456 %7 $8 @9\n")?;
+/// let session: SessionKey = created.session_key();
+/// assert_eq!(session.id().to_string(), "$8");
+/// # Ok::<(), libtmux_core::Error>(())
+/// ```
 pub type SessionKey = ObjectKey<SessionId>;
 /// A window observed on one daemon, independent of its links into sessions.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::{NewSession, WindowKey};
+///
+/// let created = NewSession::new("work")
+///     .decode("/example/socket".as_ref(), b"123 456 %7 $8 @9\n")?;
+/// let window: WindowKey = created.window_key();
+/// assert_eq!(window.id().to_string(), "@9");
+/// # Ok::<(), libtmux_core::Error>(())
+/// ```
 pub type WindowKey = ObjectKey<WindowId>;
 /// A pane observed on one daemon generation.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::{NewSession, PaneKey};
+///
+/// let created = NewSession::new("work")
+///     .decode("/example/socket".as_ref(), b"123 456 %7 $8 @9\n")?;
+/// let pane: &PaneKey = created.pane();
+/// assert_eq!(pane.id().to_string(), "%7");
+/// # Ok::<(), libtmux_core::Error>(())
+/// ```
 pub type PaneKey = ObjectKey<PaneId>;
 
 impl<I> ObjectKey<I> {
     /// Restore an identity from an observation on the named daemon.
     #[must_use]
     pub const fn new(server: ServerIdentity, generation: ServerGeneration, id: I) -> Self {
-        Self { server, generation, id }
+        Self {
+            server,
+            generation,
+            id,
+        }
     }
 
     /// The object's tmux ID.
     #[must_use]
-    pub fn id(&self) -> I where I: Clone {
+    pub fn id(&self) -> I
+    where
+        I: Clone,
+    {
         self.id.clone()
     }
 

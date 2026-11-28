@@ -56,7 +56,8 @@
       "cargoExample": "api_creation",
       "targets": [
         "libtmux_tokio::Server::new_session",
-        "libtmux_tokio::NewSession",
+        "libtmux_tokio::Server::inspect_session",
+        "libtmux_core::NewSession",
         "libtmux_tokio::Session::new_window",
         "libtmux_tokio::NewWindowOptions",
         "libtmux_tokio::Window::split",
@@ -72,8 +73,8 @@
       "sourceFile": "crates/libtmux-tokio/examples/api_query.rs",
       "cargoExample": "api_query",
       "targets": [
-        "libtmux_tokio::query::Filterable",
-        "libtmux_tokio::query::QueryIteratorExt::matching"
+        "libtmux_core::query::Filterable",
+        "libtmux_core::query::QueryIteratorExt::matching"
       ],
       "expectedOutput": "query: prod-api"
     },
@@ -84,10 +85,10 @@
       "sourceFile": "crates/libtmux-tokio/examples/api_cardinality.rs",
       "cargoExample": "api_cardinality",
       "targets": [
-        "libtmux_tokio::query::QueryIteratorExt::exactly_one",
-        "libtmux_tokio::query::QueryIteratorExt::one_or_none",
-        "libtmux_tokio::query::ExactlyOneError",
-        "libtmux_tokio::query::MultipleItemsError"
+        "libtmux_core::query::QueryIteratorExt::exactly_one",
+        "libtmux_core::query::QueryIteratorExt::one_or_none",
+        "libtmux_core::query::ExactlyOneError",
+        "libtmux_core::query::MultipleItemsError"
       ],
       "expectedOutput": "cardinality: none, one, multiple"
     },

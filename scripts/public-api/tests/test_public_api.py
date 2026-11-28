@@ -190,3 +190,53 @@ def test_check_fails_and_shows_the_difference_when_the_surface_moved(
     assert result.returncode == 1
     assert "+struct_field libtmux::Widget::value: u64" in result.stdout
     assert "Run `just api`" in result.stderr
+
+
+def test_records_external_reexports_even_when_the_definition_is_not_in_the_index(
+    tmp_path: pathlib.Path,
+) -> None:
+    doc = fixture()
+    doc["index"]["0"]["inner"]["module"]["items"].append(20)
+    doc["index"]["20"] = {
+        "id": 20,
+        "visibility": "public",
+        "inner": {"use": {"id": 21, "name": "NewSession", "is_glob": False}},
+    }
+    doc["paths"]["21"] = {
+        "crate_id": 2,
+        "path": ["libtmux_core", "new_session", "NewSession"],
+        "kind": "struct",
+    }
+    source = tmp_path / "rustdoc.json"
+    source.write_text(json.dumps(doc), encoding="utf-8")
+    result = run(str(source))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "struct libtmux::NewSession = libtmux_core::new_session::NewSession"
+        in result.stdout.splitlines()
+    )
+
+
+def test_records_external_globs_and_module_aliases(tmp_path: pathlib.Path) -> None:
+    doc = fixture()
+    for identifier, source_name, exported, glob in (
+        (20, "libtmux_core", "libtmux_core", True),
+        (22, "libtmux_tokio", "tokio", False),
+    ):
+        doc["index"]["0"]["inner"]["module"]["items"].append(identifier)
+        doc["index"][str(identifier)] = {
+            "id": identifier,
+            "visibility": "public",
+            "inner": {"use": {"id": identifier + 1, "name": exported, "is_glob": glob}},
+        }
+        doc["paths"][str(identifier + 1)] = {
+            "crate_id": 2,
+            "path": [source_name],
+            "kind": "module",
+        }
+    source = tmp_path / "rustdoc.json"
+    source.write_text(json.dumps(doc), encoding="utf-8")
+    result = run(str(source))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "module libtmux::tokio = libtmux_tokio" in result.stdout.splitlines()
+    assert "use libtmux::* = libtmux_core::*" in result.stdout.splitlines()

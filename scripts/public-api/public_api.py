@@ -29,8 +29,7 @@ import difflib
 import json
 import sys
 
-# Item kinds that are part of the surface. Modules only contribute paths;
-# trait implementation headers are recorded separately.
+# Trait implementation headers and external re-exports are recorded separately.
 KINDS = {
     "struct",
     "enum",
@@ -453,6 +452,8 @@ def public_paths(index: dict, root, crate: str) -> dict:
                     # A glob puts the module's contents at this path rather
                     # than the module itself.
                     if used.get("is_glob"):
+                        if lookup(index, target) is None:
+                            best.setdefault(str(child_id), f"{prefix}::*")
                         following.append((target, prefix))
                         continue
                     here = f"{prefix}::{used.get('name')}"
@@ -555,6 +556,28 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
     return owner, implemented
 
 
+def external_reexports(index: dict, paths: dict, reachable: dict) -> set[str]:
+    """Record external aliases whose declarations rustdoc leaves out of its index."""
+    lines = set()
+    for identifier, name in reachable.items():
+        item = lookup(index, identifier)
+        used = (item or {}).get("inner", {}).get("use")
+        if used and used.get("is_glob"):
+            summary = lookup(paths, used.get("id")) or {}
+            if summary.get("path"):
+                source = "::".join(summary["path"])
+                lines.add(f"use {name} = {source}::*")
+            continue
+        if item is not None:
+            continue
+        summary = lookup(paths, identifier) or {}
+        kind = summary.get("kind")
+        if kind in KINDS | {"module"} and summary.get("path"):
+            source = "::".join(summary["path"])
+            lines.add(f"{kind} {name} = {source}")
+    return lines
+
+
 def surface(path: str) -> list[str]:
     """The sorted records of the public surface in a rustdoc JSON file."""
     with open(path, encoding="utf-8") as handle:
@@ -574,6 +597,11 @@ def surface(path: str) -> list[str]:
             continue
         inner = item.get("inner") or {}
         kind = next(iter(inner), None)
+        if kind == "module":
+            name = reachable.get(str(item.get("id")))
+            if name is not None:
+                lines.add(f"module {name}")
+            continue
         if kind not in KINDS:
             continue
 
@@ -600,6 +628,7 @@ def surface(path: str) -> list[str]:
         lines.add(f"{kind} {name}{item_suffix(kind, inner[kind], paths, reachable)}")
 
     lines.update(explicit_impls(index, paths, reachable))
+    lines.update(external_reexports(index, paths, reachable))
     return sorted(lines)
 
 
