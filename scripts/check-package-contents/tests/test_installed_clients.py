@@ -152,6 +152,49 @@ def test_archived_guides_preserve_reader_setup_and_source(tmp_path: Path) -> Non
         clients.prepare_guide_readers(tmp_path / "duplicate", staged)
 
 
+@pytest.mark.parametrize(
+    ("document", "program_count", "fixtures"),
+    [("README.md", 1, False), ("docs/library.md", 3, True)],
+)
+def test_workspace_readers_use_the_dependencies_declared_on_their_page(
+    tmp_path: Path, document: str, program_count: int, *, fixtures: bool
+) -> None:
+    staged = {name: clients.ROOT / "crates" / name for name in clients.PACKAGES}
+    project = tmp_path / "consumer"
+    programs = clients.prepare_workspace_readers(project, staged, document)
+    package = tomllib.loads((project / "Cargo.toml").read_text())
+    declared = package["dependencies"]
+    assert set(declared) == {"tmux-workspace", "libtmux-tokio"} | ({"tokio"} if fixtures else set())
+    assert declared["tmux-workspace"] == {
+        "path": str(staged["tmux-workspace"]),
+        "default-features": False,
+    }
+    assert declared["libtmux-tokio"] == {
+        "path": str(staged["libtmux-tokio"]),
+        **({"features": ["test-support"]} if fixtures else {}),
+    }
+    assert len(programs) == program_count
+    for source, provenance in programs.values():
+        assert provenance["sourceFile"] == f"crates/tmux-workspace/{document}"
+        assert provenance["sourceSha256"] == clients.sha256(staged["tmux-workspace"] / document)
+        assert source.read_text().startswith("use ")
+        assert "fn main()" in source.read_text()
+
+
+def test_workspace_reader_preparation_preserves_missing_dependencies(tmp_path: Path) -> None:
+    crate = tmp_path / "archive"
+    crate.mkdir()
+    (crate / "README.md").write_text(
+        "```toml\n[dependencies]\ntmux-workspace = { path = "
+        '"../libtmux-rs/crates/tmux-workspace", default-features = false }\n```\n'
+        "```rust\nuse libtmux_tokio::test::TestServer;\nfn main() {}\n```\n"
+    )
+    project = tmp_path / "consumer"
+    clients.prepare_workspace_readers(project, {"tmux-workspace": crate}, "README.md")
+    declared = tomllib.loads((project / "Cargo.toml").read_text())["dependencies"]
+    assert set(declared) == {"tmux-workspace"}, "the proof must not repair the reader's setup"
+
+
 def test_native_dependency_identity_requires_the_selected_archive(tmp_path: Path) -> None:
     staged = {"libtmux-core": tmp_path / "libtmux-core-0.1.2"}
     row = f"libtmux-core v0.1.2 ({staged['libtmux-core']})"

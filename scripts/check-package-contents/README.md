@@ -49,6 +49,15 @@ Tokio archive. The proof records each program's digest, stdout bytes and
 cleanup result so the docs job can compare them with the examples copied
 from its HTML and Markdown.
 
+The workspace README and library guide each supply their own dependency
+block. Their four complete programs compile in separate consumer projects
+using those literal blocks, with only checkout paths rebound to the staged
+archives. The production preview rejects fixture features and runs with the
+shared recorder's profile that refuses any tmux invocation. The library
+examples declare `test-support` explicitly and must retire their owned
+daemons. The report retains stdout, cleanup, page, manifest and program
+digests beside the declared dependencies.
+
 The mixed program is copied from the facade archive. The pinned bare
 recorder from `libtmux/docs` verifies its raw stdout against native captures
 of the same pane and generation. The caller creates and retires the fixture;

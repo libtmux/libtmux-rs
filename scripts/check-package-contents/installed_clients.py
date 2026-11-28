@@ -523,6 +523,118 @@ def run_guide_examples(
     return records
 
 
+def prepare_workspace_readers(
+    project: Path, staged: Mapping[str, Path], document: str
+) -> dict[str, tuple[Path, dict]]:
+    """Copy complete programs and the dependency block their page tells readers to use."""
+    page = staged["tmux-workspace"] / document
+    markdown = page.read_text()
+    manifests = re.findall(r"```toml\n(.*?)\n```", markdown, re.DOTALL)
+    if len(manifests) != 1:
+        raise ValueError(f"workspace {document} must show one dependency manifest")
+    original = manifests[0] + "\n"
+    declared = tomllib.loads(original)["dependencies"]
+    manifest = original
+    for package, spec in declared.items():
+        if package in staged:
+            expected = f"../libtmux-rs/crates/{package}"
+            if not isinstance(spec, dict) or spec.get("path") != expected:
+                raise ValueError(f"workspace {document} does not name the {package} checkout path")
+            manifest = manifest.replace(json.dumps(expected), json.dumps(str(staged[package])))
+    stem = f"workspace_{Path(document).stem.lower()}"
+    binaries = project / "src/bin"
+    binaries.mkdir(parents=True)
+    (project / "Cargo.toml").write_text(
+        f'[package]\nname = "{stem.replace("_", "-")}"\nversion = "0.0.0"\nedition = "2024"\n'
+        + manifest
+        + "\n"
+        + registry_patches(staged)
+    )
+    programs = {}
+    for index, block in enumerate(
+        re.findall(r"```rust(?:,no_run)?\n(.*?)\n```", markdown, re.DOTALL), start=1
+    ):
+        name = f"{stem}_{index}"
+        source = binaries / f"{name}.rs"
+        source.write_text(block + "\n")
+        programs[name] = (
+            source,
+            {
+                "sourceFile": f"crates/tmux-workspace/{document}",
+                "sourceSha256": sha256(page),
+                "dependencyManifestSha256": hashlib.sha256(original.encode()).hexdigest(),
+                "declaredDependencies": declared,
+            },
+        )
+    if not programs:
+        raise ValueError(f"workspace {document} has no complete Rust reader programs")
+    return programs
+
+
+def record_workspace_preview(recorder: Path, output: Path, command: Sequence[str]) -> dict:
+    """Run the inert preview with the shared profile that refuses tmux."""
+    output.mkdir(parents=True)
+    env = dict(os.environ)
+    for name in ("TMUX", "TMUX_PANE"):
+        env.pop(name, None)
+    sandbox = runpy.run_path(str(recorder))["ExampleTmuxSandbox"](
+        output, env, forbid_tmux=True, explicit_socket=True
+    )
+    try:
+        result = subprocess.run(
+            command, env=sandbox.env, capture_output=True, check=False, timeout=30
+        )
+    finally:
+        cleanup = sandbox.finish(False)
+    (output / "stdout.bin").write_bytes(result.stdout)
+    (output / "stderr.bin").write_bytes(result.stderr)
+    observed = {
+        "profile": "pure-values",
+        "recorderSha256": sha256(recorder),
+        "status": result.returncode,
+        "stdoutHex": result.stdout.hex(),
+        "cleanup": cleanup,
+        "passed": result.returncode == 0 and not result.stdout and cleanup["passed"],
+    }
+    (output / "result.json").write_text(json.dumps(observed, indent=2) + "\n")
+    if not observed["passed"]:
+        raise ValueError("workspace preview failed or invoked tmux")
+    return observed
+
+
+def run_workspace_examples(
+    cargo: Cargo, directory: Path, staged: Mapping[str, Path], recorder: Path, output: Path
+) -> list[dict]:
+    """Compile each workspace page with only its declared dependencies, then run its readers."""
+    records = []
+    for document in ("README.md", "docs/library.md"):
+        project = directory / f"workspace-{Path(document).stem.lower()}"
+        programs = prepare_workspace_readers(project, staged, document)
+        check_dependency_tree(cargo.tree(project), staged, expect_tokio=True)
+        if document == "README.md":
+            check_reader_features(cargo.features(project))
+        cargo.run(project, "build", "--locked", "--quiet", "--bins")
+        for name, (source, provenance) in programs.items():
+            target = output / "workspace-readers" / name
+            command = [str(cargo.target / "debug" / name)]
+            if document == "README.md":
+                observed = record_workspace_preview(recorder, target, command)
+            else:
+                observed = record(recorder, target, command, "")
+                check_record(observed, target, b"", require_capture=False)
+            records.append(
+                {
+                    **provenance,
+                    "program": name,
+                    "programSha256": sha256(source),
+                    "profile": observed["profile"],
+                    "stdoutHex": observed["stdoutHex"],
+                    "cleanup": observed["cleanup"],
+                }
+            )
+    return records
+
+
 def build_fixture(
     cargo: Cargo,
     directory: Path,
@@ -1210,6 +1322,7 @@ def check_consumers(directory: Path, recorder: Path, output: Path) -> None:
     consumers, mixed, fixture_binary = consume(cargo, directory, staged, versions, recorder, output)
     mixed["recorderSha256"] = recorder_provenance["sha256"]
     guides = run_guide_examples(cargo, directory, staged, recorder, output)
+    workspace_examples = run_workspace_examples(cargo, directory, staged, recorder, output)
     binaries, apps = install_apps(cargo, directory, staged)
     app_output = output / "application-stdio"
     driver_output = directory / "application-driver"
@@ -1258,6 +1371,7 @@ def check_consumers(directory: Path, recorder: Path, output: Path) -> None:
         "consumers": consumers,
         "mixed": mixed,
         "guideExamples": guides,
+        "workspaceExamples": workspace_examples,
         "applications": {
             "installed": apps,
             "stdio": stdio,

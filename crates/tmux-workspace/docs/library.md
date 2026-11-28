@@ -26,7 +26,7 @@ windows:
 ```
 
 The Rust examples use `libtmux_tokio::test::TestServer` to own and clean up their
-daemon. Add `libtmux` with `test-support` alongside this crate and Tokio, as
+daemon. Add `libtmux-tokio` with `test-support` alongside this crate and Tokio, as
 shown under [Install](#install). An application connecting to an existing
 server can omit that feature and the guard's shutdown call.
 
@@ -218,21 +218,23 @@ document the same way, tmuxp's; the last section of
 
 ## Install
 
-The command is a default feature; a library dependent leaves it, and clap
-with it, out:
+The native driver crates are unpublished. Start a binary project beside a
+`libtmux-rs` checkout:
 
 ```console
-$ cargo add tmux-workspace --no-default-features
+$ cargo new workspace-example
+$ cd workspace-example
 ```
 
-<details>
-<summary>Cargo.toml</summary>
+Set its `Cargo.toml` dependencies to:
 
 ```toml
 [dependencies]
-tmux-workspace = { version = "0.1.2", default-features = false }
-libtmux = { version = "0.1.2", features = ["test-support"] }
+tmux-workspace = { path = "../libtmux-rs/crates/tmux-workspace", default-features = false }
+libtmux-tokio = { path = "../libtmux-rs/crates/libtmux-tokio", features = ["test-support"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
-</details>
+`default-features = false` leaves the command and its dependencies out. Save
+any complete Rust example from this page as `src/main.rs`, then run
+`cargo run --quiet`. Each example owns a private daemon through `TestServer`.
