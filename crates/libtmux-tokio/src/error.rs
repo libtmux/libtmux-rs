@@ -846,15 +846,15 @@ pub enum Error {
         kind: io::ErrorKind,
     },
 
-    /// The direct tmux child could not be awaited.
+    /// Observing the tmux child or cleaning up its process group failed.
     #[non_exhaustive]
-    #[error("failed to wait for tmux request {request_id} ({command})")]
+    #[error("child supervision failed for tmux request {request_id} ({command})")]
     WaitChild {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
         /// The sanitized logical command.
         command: CommandSummary,
-        /// The operating-system wait error.
+        /// The operating-system error or the failed signal and wait stages.
         #[source]
         source: io::Error,
     },
