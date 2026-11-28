@@ -258,21 +258,9 @@ async fn child_event(
     signal: &mut tokio::signal::unix::Signal,
     terminal: bool,
 ) -> Result<ChildEvent> {
-    use rustix::process::{WaitId, WaitIdOptions, waitid};
-    let mut options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-    if terminal {
-        options |= WaitIdOptions::STOPPED;
-    }
     loop {
-        match waitid(WaitId::Pid(pid), options) {
-            Ok(Some(status)) => {
-                if let Some(stopped) = status.stopping_signal() {
-                    return Ok(ChildEvent::Stopped(stopped));
-                }
-                return Ok(ChildEvent::Exited(status.exit_status().unwrap_or_else(
-                    || 128 + status.terminating_signal().unwrap_or(1),
-                )));
-            }
+        match poll_child(pid, terminal) {
+            Ok(Some(event)) => return Ok(event),
             Ok(None) => {}
             Err(rustix::io::Errno::INTR) => continue,
             Err(error) => return Err(io::Error::from(error).into()),
@@ -284,9 +272,76 @@ async fn child_event(
     }
 }
 
+fn poll_child(pid: rustix::process::Pid, terminal: bool) -> rustix::io::Result<Option<ChildEvent>> {
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+
+    // Keep the exited leader waitable while its process group and pipes drain.
+    let exit = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+    if let Some(status) = waitid(WaitId::Pid(pid), exit)? {
+        let code = status
+            .exit_status()
+            .unwrap_or_else(|| 128 + status.terminating_signal().unwrap_or(1));
+        return Ok(Some(ChildEvent::Exited(code)));
+    }
+    // Consume each stop once. Repeating an old stop can suspend the CLI
+    // again after the shell has already returned the terminal to it.
+    if terminal {
+        let stopped = waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::STOPPED | WaitIdOptions::NOHANG,
+        )?;
+        return Ok(stopped
+            .and_then(|status| status.stopping_signal())
+            .map(ChildEvent::Stopped));
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CAPTURE_LIMIT, decode, retain};
+
+    #[tokio::test]
+    async fn a_job_stop_is_consumed_while_the_exit_stays_waitable() {
+        use rustix::process::{Pid, Signal, kill_process};
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        let mut notices =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()).unwrap();
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "kill -STOP $$; exit 23"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()).unwrap();
+        let first = timeout(
+            Duration::from_secs(2),
+            super::child_event(pid, &mut notices, true),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let repeat = timeout(
+            Duration::from_millis(30),
+            super::child_event(pid, &mut notices, true),
+        )
+        .await;
+        kill_process(pid, Signal::CONT).unwrap();
+        assert!(matches!(first, super::ChildEvent::Stopped(s) if s == Signal::STOP.as_raw()));
+        assert!(repeat.is_err(), "the same job stop was delivered twice");
+        assert!(matches!(
+            timeout(
+                Duration::from_secs(2),
+                super::child_event(pid, &mut notices, true)
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            super::ChildEvent::Exited(23)
+        ));
+        assert_eq!(child.wait().await.unwrap().code(), Some(23));
+    }
 
     #[test]
     fn a_truncated_capture_stops_appending_rather_than_splicing() {
