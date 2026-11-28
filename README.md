@@ -54,8 +54,12 @@ Protocol.
 
 ## Quick start
 
-The native drivers are available from this checkout. With a binary project
-next to the `libtmux-rs` directory, add the default blocking client:
+The native drivers are unpublished and available from this checkout.
+Published `libtmux` 0.1.2 has the earlier root async API and a Tokio-backed
+blocking bridge; its [released guide][released-guide] covers that API.
+
+With a binary project next to the `libtmux-rs` directory, add the default
+blocking client:
 
 ```console
 $ cargo add libtmux --path ../libtmux-rs/crates/libtmux
@@ -106,7 +110,21 @@ created even if observing its pane fails.
 
 ### Use the Tokio client
 
-To run the async examples, enable the Tokio client and its private test fixture:
+The [complete Tokio quick start](crates/libtmux-tokio/README.md#quick-start)
+lists session names from an absolute socket path you supply and shuts down
+its client. It borrows the daemon and preserves its sessions.
+
+Follow its checkout dependency setup and save the program as `src/main.rs`.
+Pass the socket of an existing server with `cargo run -- /absolute/path/to/socket`.
+The program needs no fixture feature.
+
+The [mixed-client example](crates/libtmux/examples/api_mixed.rs) creates a
+session outside the runtime, then passes the new pane's key to a Tokio capture.
+
+### Run the isolated examples
+
+The Tokio examples below create private test servers. For those examples,
+enable the fixture and the capabilities they use:
 
 ```console
 $ cargo add libtmux --path ../libtmux-rs/crates/libtmux --features tokio,test-support,plan,query,control-mode
@@ -115,11 +133,6 @@ $ cargo add libtmux --path ../libtmux-rs/crates/libtmux --features tokio,test-su
 ```console
 $ cargo add tokio --features rt-multi-thread,macros
 ```
-
-The [mixed-client example](crates/libtmux/examples/api_mixed.rs) creates a
-session outside the runtime, then passes the new pane's key to a Tokio capture.
-The [published 0.1.2 guide](https://github.com/libtmux/libtmux-rs/blob/1027012583abdc8b07ea0fd071e0c6cacb051278/README.md)
-documents the crate available from the registry.
 
 Create a session and a window, type into the pane, and check what tmux holds:
 
@@ -161,15 +174,25 @@ an existing creation receipt without another round trip.
 
 ## Is this for you?
 
+The blocking typed API provides `new_session`, `generation`, `snapshots`,
+`observe_pane`, `capture`, `kill_created_session` and `unlink_window`.
+Its `control-mode` feature adds an explicit checked raw command connection.
+
+Tokio adds live session, window and pane handles, typed queries, plan
+execution and fallible output streams. The examples below use that client.
+
 | You want to | Use |
 | --- | --- |
-| Script tmux from Rust, blocking or async | [`libtmux`](crates/libtmux) |
-| Ask "which pane/window/session matches X?" | [`libtmux`](crates/libtmux) query layer, below |
+| Use the blocking operations above without Tokio | [`libtmux-blocking`](crates/libtmux-blocking), or [`libtmux`](crates/libtmux) with its default features |
+| Drive live session, window and pane handles asynchronously | [`libtmux-tokio`](crates/libtmux-tokio), or the facade's `tokio` feature |
+| Ask "which pane/window/session matches X?" | The Tokio query layer, below |
 | Let an AI agent read and drive tmux | [`tmux-mcp`](crates/tmux-mcp) |
 | Filter your own structs with the same grammar | [`libtmux-macros`](crates/libtmux-macros) |
 | Load tmuxp workspaces from the command line, or build them from Rust | [`tmux-workspace`](crates/tmux-workspace) |
 
 Not for you if you need Windows without WSL, because tmux does not run there.
+
+[released-guide]: https://github.com/libtmux/libtmux-rs/blob/1027012583abdc8b07ea0fd071e0c6cacb051278/README.md
 
 ## Work in panes
 

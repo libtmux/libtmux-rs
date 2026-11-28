@@ -39,10 +39,16 @@ tmux, and agents that share a terminal.
 > not settled: any release may change or remove exported identifiers, and the
 > changelog marks each break. Pin an exact version to avoid one.
 
-See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
+`libtmux-tokio` is unpublished. Use this checkout for the API below.
+Published `libtmux` 0.1.2 has the earlier root async API and Tokio-backed
+blocking bridge; its [released guide][released-guide] covers that API.
+
+See the [migration notes](docs/migration.md) for the native driver split.
 [`libtmux-macros`][pkg-macros], [`tmux-workspace`][pkg-workspace] and
-[`tmux-mcp`][pkg-mcp] are published beside this crate, under
+[`tmux-mcp`][pkg-mcp] are also in the workspace, under
 [Packages](#packages).
+
+[released-guide]: https://github.com/libtmux/libtmux-rs/blob/1027012583abdc8b07ea0fd071e0c6cacb051278/README.md
 
 **Contents** — [Quick start](#quick-start) ·
 [Where to start](#where-to-start) ·
@@ -61,12 +67,12 @@ See the [migration notes](docs/migration.md) when upgrading from an earlier alph
 
 ## Quick start
 
-Connect to a running tmux server by passing its absolute socket path. Add the
-client and Tokio:
+Connect to a running tmux server by passing its absolute socket path. From a
+binary project next to the `libtmux-rs` checkout, add the client and Tokio:
 
 ```toml
 [dependencies]
-libtmux-tokio = "0.1.2"
+libtmux-tokio = { path = "../libtmux-rs/crates/libtmux-tokio" }
 tokio = { version = "1", features = ["rt", "time"] }
 ```
 
@@ -106,7 +112,7 @@ The program creates no daemon or session and needs no `test-support` feature.
 
 ```toml
 [dependencies]
-libtmux-tokio = { version = "0.1.2", features = ["test-support"] }
+libtmux-tokio = { path = "../libtmux-rs/crates/libtmux-tokio", features = ["test-support"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -783,11 +789,11 @@ assert_eq!(text.to_string_lossy(), "editor");
 ### [`TestServer`]: a private tmux per test
 
 `test-support` exports [`libtmux_tokio::test::TestServer`], the same guard this
-crate's own suite uses:
+crate's own suite uses. For a test project next to the checkout:
 
 ```toml
 [dev-dependencies]
-libtmux-tokio = { version = "0.1.2", features = ["test-support"] }
+libtmux-tokio = { path = "../libtmux-rs/crates/libtmux-tokio", features = ["test-support"] }
 ```
 
 Each guard owns a tmux child on a private socket with an empty config, so tests
