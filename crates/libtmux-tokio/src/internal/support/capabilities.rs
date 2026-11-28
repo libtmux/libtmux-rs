@@ -75,11 +75,11 @@ pub(crate) struct Workaround {
 const BREAK_BROKEN: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 const BREAK_FIXED: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::PATCH_A);
 
-const UNSUPPORTED: &str = "error.Error.UnsupportedCapability";
+const UNSUPPORTED: &str = "libtmux_tokio.Error.UnsupportedCapability";
 
 /// Dispatch of an arbitrary command: the checks run on every command a
 /// caller builds, not on one named method.
-const COMMAND_PATHS: &[&str] = &["command.Command", "plan.Plan.run"];
+const COMMAND_PATHS: &[&str] = &["libtmux_core.Command", "libtmux_tokio.Server.run_plan"];
 
 pub(crate) const CONTROL_MODE: Capability = Capability {
     id: "control-mode",
@@ -89,10 +89,10 @@ pub(crate) const CONTROL_MODE: Capability = Capability {
     handling: Handling::Refuse,
     error: UNSUPPORTED,
     apis: &[
-        "control.ControlMode.attach",
-        "control.ControlMode.attach_with_limits",
-        "server.Server.over_control_mode",
-        "plan.Plan.run_over_control_mode",
+        "libtmux_tokio.control.ControlMode.attach",
+        "libtmux_tokio.control.ControlMode.attach_with_limits",
+        "libtmux_tokio.Server.over_control_mode",
+        "libtmux_tokio.control.ControlSender.run_plan",
     ],
     commands: &[("attach-session", &[])],
 };
@@ -104,7 +104,7 @@ pub(crate) const CONTROL_PANE_OFF: Capability = Capability {
     since: since::CONTROL_PANE_OFF,
     handling: Handling::Fallback,
     error: UNSUPPORTED,
-    apis: &["control.ControlSender.mute_pane"],
+    apis: &["libtmux_tokio.control.ControlSender.mute_pane"],
     commands: &[("refresh-client", &["-A"])],
 };
 
@@ -115,7 +115,7 @@ pub(crate) const BUFFER_DELETE_NAMED: Capability = Capability {
     since: since::NAMED_BUFFER_IDENTITY,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
-    apis: &["server.Server.delete_buffer"],
+    apis: &["libtmux_tokio.Server.delete_buffer"],
     commands: &[("delete-buffer", &["-b"])],
 };
 
@@ -126,7 +126,7 @@ pub(crate) const BUFFER_RENAME: Capability = Capability {
     since: since::NAMED_BUFFER_IDENTITY,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
-    apis: &["server.Server.set_buffer"],
+    apis: &["libtmux_tokio.Server.set_buffer"],
     commands: &[("set-buffer", &["-b", "-n"])],
 };
 
@@ -136,8 +136,8 @@ pub(crate) const LAYOUT_WITHOUT_CHECKSUM: Capability = Capability {
     summary: "Apply a layout string or a named layout that tmux validates before use. Nested, an invalid string without a checksum ends the server on 3.3 and 3.3a.",
     since: ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL),
     handling: Handling::Refuse,
-    error: "error.Error.InvalidLayout",
-    apis: &["window.Window.select_layout"],
+    error: "libtmux_tokio.Error.InvalidLayout",
+    apis: &["libtmux_tokio.Window.select_layout"],
     commands: &[("select-layout", &[])],
 };
 
@@ -149,9 +149,9 @@ pub(crate) const LAYOUT_MIRRORED_MAIN: Capability = Capability {
     handling: Handling::Refuse,
     error: UNSUPPORTED,
     apis: &[
-        "window.Window.select_layout",
-        "window.Layout.MainHorizontalMirrored",
-        "window.Layout.MainVerticalMirrored",
+        "libtmux_tokio.Window.select_layout",
+        "libtmux_tokio.Layout.MainHorizontalMirrored",
+        "libtmux_tokio.Layout.MainVerticalMirrored",
     ],
     commands: &[("select-layout", &[])],
 };
@@ -163,7 +163,10 @@ pub(crate) const LAYOUT_JSON: Capability = Capability {
     since: since::JSON_LAYOUTS,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
-    apis: &["window.Window.select_layout", "window.LayoutSpec.Saved"],
+    apis: &[
+        "libtmux_tokio.Window.select_layout",
+        "libtmux_tokio.LayoutSpec.Saved",
+    ],
     commands: &[("select-layout", &[])],
 };
 
@@ -175,8 +178,8 @@ pub(crate) const CAPTURE_TRIM_BLANK_CELLS: Capability = Capability {
     handling: Handling::Refuse,
     error: UNSUPPORTED,
     apis: &[
-        "pane.CaptureOptions.trim_blank_cells",
-        "pane.Pane.capture_with",
+        "libtmux_tokio.CaptureOptions.trim_blank_cells",
+        "libtmux_tokio.Pane.capture_with",
     ],
     commands: &[("capture-pane", &["-T"])],
 };
@@ -188,7 +191,7 @@ pub(crate) const CAPTURE_LINE_FLAGS: Capability = Capability {
     since: since::CAPTURE_LINE_FLAGS,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
-    apis: &["pane.Pane.capture_lines"],
+    apis: &["libtmux_tokio.Pane.capture_lines"],
     commands: &[("capture-pane", &["-F"])],
 };
 
@@ -199,7 +202,7 @@ pub(crate) const LIST_KEYS_FORMAT: Capability = Capability {
     since: since::LIST_KEYS_FORMAT,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
-    apis: &["server.Server.typed_key_bindings"],
+    apis: &["libtmux_tokio.Server.typed_key_bindings"],
     commands: &[("list-keys", &["-F"])],
 };
 
@@ -210,7 +213,7 @@ pub(crate) const PANE_BORDER_STYLE_PER_PANE: Capability = Capability {
     since: since::PANE_BORDER_STYLE_PER_PANE,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
-    apis: &["options.OptionSchema.accepts"],
+    apis: &["libtmux_tokio.OptionSchema.accepts"],
     commands: &[("set-option", &["-p"])],
 };
 
@@ -246,7 +249,7 @@ pub(crate) const BREAK_PANE_MISNAMES_WINDOWS: Workaround = Workaround {
     summary: "break-pane gets the new window wrong on exactly tmux 3.7; libtmux refuses it. Nested without -n, it ends the server there; name it with -n or use 3.7a.",
     broken_in: BREAK_BROKEN,
     fixed_in: BREAK_FIXED,
-    apis: &["pane.Pane.break_out"],
+    apis: &["libtmux_tokio.Pane.break_out"],
     commands: &[("break-pane", &[])],
 };
 
@@ -267,10 +270,10 @@ pub(crate) const NAME_SEPARATORS_REJECTED: Workaround = Workaround {
     broken_in: BREAK_BROKEN,
     fixed_in: BREAK_FIXED,
     apis: &[
-        "server.Server.new_session",
-        "session.Session.new_window",
-        "session.Session.rename",
-        "window.Window.rename",
+        "libtmux_tokio.Server.new_session",
+        "libtmux_tokio.Session.new_window",
+        "libtmux_tokio.Session.rename",
+        "libtmux_tokio.Window.rename",
     ],
     commands: &[
         ("new-session", &["-s"]),
@@ -286,7 +289,7 @@ pub(crate) const RUN_SHELL_OUTPUT_IN_COPY_MODE: Workaround = Workaround {
     summary: "tmux 3.3 through 3.4 send run-shell output to a pane's copy-mode buffer and exit zero; libtmux refuses it.",
     broken_in: ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL),
     fixed_in: ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
-    apis: &["server.Server.run_shell"],
+    apis: &["libtmux_tokio.Server.run_shell"],
     commands: &[("run-shell", &[])],
 };
 
