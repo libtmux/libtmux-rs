@@ -221,10 +221,10 @@ impl StepOutcome {
     /// Why tmux refused this invocation, in the crate's error vocabulary.
     ///
     /// A refusal is data rather than an error here, because a plan may expect
-    /// one. Without sensitive input, this classifies it the same way a direct
-    /// call would, so a caller can match on [`Error::SessionExists`] rather
-    /// than racing another session creation. A sensitive invocation reports
-    /// [`Error::CommandFailed`] and withholds tmux output.
+    /// one. Diagnostic variants describe the collected text; they do not prove
+    /// that an operation never ran. Typed session creation instead carries its
+    /// verified receipt or unknown effect through the plan error. A sensitive
+    /// invocation reports [`Error::CommandFailed`] and withholds tmux output.
     ///
     /// `None` when the invocation succeeded.
     #[must_use]

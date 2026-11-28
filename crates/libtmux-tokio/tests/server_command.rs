@@ -383,14 +383,14 @@ async fn public_capability_raw_command_and_shutdown_boundary_is_usable() {
 /// never one a `-S` path names, and it answers three different ways:
 /// 3.2a exits **0** saying nothing at all, 3.3a through 3.7c exit **0** after
 /// printing `error creating <path> (No such file or directory)` on stderr, and
-/// next-3.9 prints that and exits **1**. Nothing is created in any of them, so
-/// none may read as a partial effect, and tmux's own reason -- when it gave one
-/// -- must not be replaced by a generic message or a `Debug`-formatted exit
-/// code.
+/// next-3.9 prints that and exits **1**. Neither status nor an uncorrelated
+/// diagnostic proves submission; the absent receipt leaves creation unknown.
 #[tokio::test]
-async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+async fn a_missing_socket_directory_without_a_receipt_leaves_creation_unknown() {
+    fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned directory");
     let server = Server::builder()
+        .tmux_executable(std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into()))
         .socket_path(directory.path().join("missing-parent").join("sock"))
         .build()
         .expect("a socket under a missing directory is valid setup");
@@ -403,12 +403,19 @@ async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
     assert_ne!(
         error.kind(),
         libtmux_tokio::ErrorKind::PartialEffect,
-        "nothing was created, so this is not a partial effect: {error:?}",
+        "a missing receipt supplies no acknowledged partial effect: {error:?}",
     );
+    assert_eq!(
+        error.operation_effect(),
+        Some(libtmux_core::Effect::Unknown)
+    );
+    assert!(error.creation_receipt().is_none());
+    assert!(!error.is_transient());
+    assert!(!directory.path().join("missing-parent").exists());
     let message = error.to_string();
     assert!(
-        message.contains("error creating") || message.contains("gave no reason"),
-        "tmux's own reason survives, or the message says there was none: {message}",
+        message.contains("not acknowledged") && message.contains("inspect the server"),
+        "missing receipt uncertainty is actionable: {message}",
     );
     assert!(
         !message.contains("Some(0)"),

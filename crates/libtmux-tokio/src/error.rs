@@ -657,15 +657,14 @@ pub enum Error {
         limit: usize,
     },
 
-    /// A session of this name already exists.
+    /// A command diagnostic reports a session name that is already taken.
     ///
-    /// Classified rather than left as a generic refusal because it is the one
-    /// creation failure a caller routinely expects and handles: it means "pick
-    /// another name", not "tmux is broken". Checking with `has-session` first
-    /// would race, since another process can take the name in between.
-    #[error("a session named {name} already exists")]
+    /// This preserves the diagnostic vocabulary at the raw command boundary.
+    /// It does not prove submission or effects. A typed creation without a
+    /// verified receipt instead preserves [`libtmux_core::Effect::Unknown`].
+    #[error("tmux reports that a session named {name} already exists")]
     SessionExists {
-        /// The name that was already taken.
+        /// The session name reported by the diagnostic.
         name: String,
     },
 

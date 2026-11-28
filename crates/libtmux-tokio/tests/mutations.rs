@@ -1389,30 +1389,34 @@ async fn a_name_with_ambiguous_separators_is_rejected_before_creation() {
 }
 
 #[tokio::test]
-async fn a_taken_session_name_is_classified_rather_than_a_bare_refusal() {
+async fn a_taken_name_does_not_prove_an_unacknowledged_creation_never_ran() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    server.new_session("taken").await.expect("first session");
+    let original = server.new_session("taken").await.expect("first session");
 
-    // "pick another name" is the one creation failure a caller routinely
-    // handles, so it arrives as its own variant rather than as text to
-    // match on. Checking with has-session first would race: another process
-    // can take the name between the check and the create.
     let error = guard
         .session("taken")
         .await
         .map(|_| ())
         .expect_err("tmux refuses a duplicate name");
 
-    assert!(
-        matches!(&error, libtmux_tokio::Error::SessionExists { name } if name == "taken"),
-        "the refusal names what was taken: {error:?}",
+    assert_eq!(
+        error.operation_effect(),
+        Some(libtmux_core::Effect::Unknown)
     );
-    assert_eq!(error.kind(), ErrorKind::Refused);
+    assert!(error.creation_receipt().is_none());
+    assert!(!error.is_transient());
+    assert!(error.to_string().contains("inspect the server"));
 
     // The first session is untouched by the refusal.
-    assert_eq!(server.sessions().await.expect("sessions").len(), 1);
+    let sessions = server.sessions().await.expect("sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id(), &original.session());
+    assert_eq!(
+        sessions[0].windows().await.expect("original windows").len(),
+        1
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

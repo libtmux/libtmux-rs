@@ -117,6 +117,59 @@ async fn a_failed_after_hook_preserves_the_created_identities() {
     guard.shutdown().await.expect("fixture shuts down");
 }
 
+#[tokio::test]
+async fn a_duplicate_diagnostic_cannot_refute_creation_after_its_receipt_is_lost() {
+    use libtmux_tokio::test::install_executable;
+
+    let guard = TestServer::new().await.expect("tmux starts");
+    let _keeper = guard.session("keeper").await.expect("warm daemon");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned directory");
+    let wrapper = directory.path().join("lost-receipt-tmux");
+    let submissions = directory.path().join("submissions");
+    let executable = guard
+        .server()
+        .resolved_tmux_executable()
+        .expect("fixture executable");
+    let quoted =
+        |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
+    install_executable(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\nfor arg do\n    if [ \"$arg\" = new-session ]; then\n        printf 'submitted\\n' >> {}\n        {} \"$@\" >/dev/null\n        printf 'duplicate session: private-refusal-sentinel\\n' >&2\n        exit 1\n    fi\ndone\nexec {} \"$@\"\n",
+            quoted(&submissions),
+            quoted(&executable),
+            quoted(&executable),
+        ),
+    )
+    .expect("wrapper is executable");
+    let server = Server::builder()
+        .socket_path(guard.server().socket_path())
+        .config_file("/dev/null")
+        .tmux_executable(&wrapper)
+        .build()
+        .expect("wrapper server");
+    let name = unique_name("lost-receipt");
+    let error = server
+        .new_session(NewSession::new(&name).command("exec sleep 30"))
+        .await
+        .expect_err("the creation receipt was discarded");
+    assert_eq!(error.operation_effect(), Some(Effect::Unknown));
+    assert!(error.creation_receipt().is_none());
+    assert!(!error.is_transient());
+    assert!(!format!("{error} {error:?}").contains("private-refusal-sentinel"));
+    assert_eq!(std::fs::read(&submissions).unwrap(), b"submitted\n");
+    assert!(
+        guard
+            .server()
+            .session(&name)
+            .await
+            .expect("inspect actual effects independently")
+            .is_some()
+    );
+    server.shutdown().await.expect("wrapper executor stops");
+    guard.shutdown().await.expect("fixture stops");
+}
+
 #[cfg(all(feature = "control-mode", feature = "plan"))]
 #[tokio::test]
 async fn a_control_creation_keeps_its_receipt_when_later_hook_blocks_fail() {

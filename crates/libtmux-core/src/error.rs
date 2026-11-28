@@ -51,8 +51,9 @@ impl fmt::Display for CommandKind {
 
 /// Evidence about the requested operation before a caller considers replay.
 ///
-/// Owner-configured tmux hooks can have additional effects. `Created` means
-/// that tmux acknowledged the requested creation even when a later step failed.
+/// Owner-configured tmux hooks can have additional effects. `Created` requires
+/// a verified identity receipt, even when a later step failed. A submitted
+/// creation without that receipt remains `Unknown`.
 ///
 /// # Examples
 ///
@@ -68,7 +69,7 @@ pub enum Effect {
     NotSubmitted,
     /// The requested operation only observed state.
     Observation,
-    /// tmux acknowledged creation; a retry could create another session.
+    /// A verified identity receipt acknowledges creation; replay may duplicate it.
     Created,
     /// A submitted mutation may or may not have taken effect.
     Unknown,
@@ -151,14 +152,22 @@ pub enum Error {
     /// The deadline elapsed after dispatch; a mutation may have run.
     #[error("deadline elapsed; a dispatched tmux command may have run")]
     Deadline,
-    /// Creation was acknowledged after the request deadline.
-    #[error("tmux acknowledged session creation after the deadline")]
+    /// The creation reply arrived after the request deadline.
+    #[error("{}", if receipt.is_some() {
+        "tmux acknowledged session creation after the deadline"
+    } else {
+        "the late creation reply had no verified receipt; creation may have run; inspect the server before repeating"
+    })]
     LateCreation {
         /// Object identities, when the receipt was readable.
         receipt: Option<Box<CreatedSession>>,
     },
-    /// Creation succeeded before a hook, client exit or trailing frame failed.
-    #[error("session created; follow-up failed or was incomplete (status {status:?}, late={late})")]
+    /// A creation frame preceded a failed hook, client exit or trailing frame.
+    #[error("{} ({}; late={late})", if receipt.is_some() {
+        "session created; follow-up failed or was incomplete"
+    } else {
+        "creation was not acknowledged; it may have run; inspect the server before repeating"
+    }, creation_status(*status))]
     CreationFollowup {
         /// Object identities, when the receipt was readable.
         receipt: Option<Box<CreatedSession>>,
@@ -177,7 +186,7 @@ pub enum Error {
         source: Box<Error>,
     },
     /// No complete, unambiguous initial action frame confirmed creation.
-    #[error("could not verify the session creation frame (status {status:?}, late={late})")]
+    #[error("session creation was not acknowledged ({}; late={late}); creation may have run; inspect the server before repeating", creation_status(*status))]
     UnconfirmedCreation {
         /// The client exit status, if one was observed.
         status: Option<i32>,
@@ -244,8 +253,10 @@ pub enum Error {
         /// Whether completion was observed after the deadline.
         late: bool,
     },
-    /// Creation was acknowledged, but its identity receipt was unreadable.
-    #[error("tmux acknowledged session creation, but its receipt could not be read")]
+    /// The creation reply had no readable identity receipt.
+    #[error(
+        "the creation reply had no verified receipt; creation may have run; inspect the server before repeating"
+    )]
     AfterCreate,
     /// An observation returned an unreadable or inconsistent pane key.
     #[error("tmux returned an unreadable pane key")]
@@ -264,7 +275,51 @@ pub enum Error {
     StalePane,
 }
 
+fn creation_status(status: Option<i32>) -> String {
+    status.map_or_else(
+        || "client exit status unavailable".to_owned(),
+        |status| format!("client exited with status {status}"),
+    )
+}
+
 impl Error {
+    /// Borrow a creation receipt verified before a later failure.
+    ///
+    /// Wrapping an error for admission, observation or child cleanup retains
+    /// its receipt. An unreadable identity receipt leaves the effect unknown.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_core::{Error, NewSession};
+    /// use std::path::Path;
+    ///
+    /// let receipt = NewSession::new("work")
+    ///     .decode(Path::new("/example/socket"), b"123 456 %7 $8 @9\n")?;
+    /// let error = Error::CleanupPending(Box::new(Error::LateCreation {
+    ///     receipt: Some(Box::new(receipt.clone())),
+    /// }));
+    /// assert_eq!(error.creation_receipt(), Some(&receipt));
+    /// assert!(Error::AfterCreate.creation_receipt().is_none());
+    /// # Ok::<(), libtmux_core::Error>(())
+    /// ```
+    #[must_use]
+    pub fn creation_receipt(&self) -> Option<&CreatedSession> {
+        match self {
+            Self::CreationInterrupted { receipt, .. } => Some(receipt),
+            Self::LateCreation { receipt } | Self::CreationFollowup { receipt, .. } => {
+                receipt.as_deref()
+            }
+            Self::Cleanup { primary, .. } | Self::CleanupPending(primary) => {
+                primary.creation_receipt()
+            }
+            Self::AdmissionFailed { source } | Self::ObservationFailed { source, .. } => {
+                source.creation_receipt()
+            }
+            _ => None,
+        }
+    }
+
     /// Classify a read failure while preserving pre-dispatch rejections.
     #[doc(hidden)]
     #[must_use]
@@ -294,10 +349,11 @@ impl Error {
             | Self::AdmissionFailed { .. }
             | Self::Spawn(_)
             | Self::WrongEndpoint => Effect::NotSubmitted,
-            Self::AfterCreate
-            | Self::CreationInterrupted { .. }
-            | Self::CreationFollowup { .. }
-            | Self::LateCreation { .. } => Effect::Created,
+            Self::CreationInterrupted { .. }
+            | Self::CreationFollowup {
+                receipt: Some(_), ..
+            }
+            | Self::LateCreation { receipt: Some(_) } => Effect::Created,
             Self::SnapshotRow(_)
             | Self::LateObservation { .. }
             | Self::ObservationFailed { .. }
@@ -315,6 +371,9 @@ impl Error {
                 ..
             } => Effect::Observation,
             Self::Command { .. }
+            | Self::AfterCreate
+            | Self::CreationFollowup { receipt: None, .. }
+            | Self::LateCreation { receipt: None }
             | Self::UncertainStart(_)
             | Self::UnconfirmedCreation { .. }
             | Self::Shutdown(_)
@@ -329,5 +388,100 @@ impl Error {
 impl From<crate::VersionError> for Error {
     fn from(error: crate::VersionError) -> Self {
         Self::Version(Box::new(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn missing_receipts_never_describe_creation_as_acknowledged() {
+        for status in [None, Some(0), Some(1)] {
+            for error in [
+                Error::UnconfirmedCreation {
+                    status,
+                    late: false,
+                },
+                Error::CreationFollowup {
+                    receipt: None,
+                    status,
+                    late: false,
+                },
+                Error::LateCreation { receipt: None },
+                Error::AfterCreate,
+            ] {
+                assert_eq!(error.effect(), Effect::Unknown);
+                let message = error.to_string();
+                assert!(message.contains("may have run"), "{message}");
+                assert!(!message.contains("session created"), "{message}");
+                assert!(
+                    !message.contains("acknowledged session creation"),
+                    "{message}"
+                );
+                assert!(!message.contains("Some("), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn verified_creation_receipts_survive_compound_errors() {
+        let receipt = crate::NewSession::new("work")
+            .decode(Path::new("/example/socket"), b"123 456 %7 $8 @9\n")
+            .unwrap();
+        for error in [
+            Error::LateCreation {
+                receipt: Some(Box::new(receipt.clone())),
+            },
+            Error::CreationFollowup {
+                receipt: Some(Box::new(receipt.clone())),
+                status: Some(1),
+                late: false,
+            },
+            Error::CreationInterrupted {
+                receipt: Box::new(receipt.clone()),
+                source: Box::new(Error::Cancelled),
+            },
+        ] {
+            assert_eq!(error.creation_receipt(), Some(&receipt));
+            let error = Error::Cleanup {
+                primary: Box::new(Error::CleanupPending(Box::new(Error::ObservationFailed {
+                    operation: CommandKind::CapturePane,
+                    source: Box::new(Error::AdmissionFailed {
+                        source: Box::new(error),
+                    }),
+                }))),
+                errors: crate::supervision::CleanupErrors {
+                    kill: Some(std::io::Error::other("signal failed")),
+                    reap: Some(std::io::Error::other("wait failed")),
+                },
+            };
+            assert_eq!(error.creation_receipt(), Some(&receipt));
+        }
+    }
+
+    #[test]
+    fn an_unidentified_creation_never_supplies_a_cleanup_receipt() {
+        for error in [
+            Error::AfterCreate,
+            Error::LateCreation { receipt: None },
+            Error::CreationFollowup {
+                receipt: None,
+                status: Some(1),
+                late: false,
+            },
+            Error::UnconfirmedCreation {
+                status: Some(1),
+                late: false,
+            },
+        ] {
+            assert!(error.creation_receipt().is_none());
+            assert!(
+                Error::CleanupPending(Box::new(error))
+                    .creation_receipt()
+                    .is_none()
+            );
+        }
     }
 }

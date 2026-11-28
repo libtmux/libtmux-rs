@@ -46,10 +46,17 @@ accepts entropy from the driver and performs no I/O itself.
 
 ## Failure evidence
 
-A complete, unique first record acknowledges creation. A nonzero or absent
-process status retains any decoded receipt in `CreationFollowup`; a reply
-observed after its deadline retains it in `LateCreation`. Receipt payloads
-which cannot be decoded do not enter diagnostics.
+A complete, unique first record acknowledges creation only after all identity
+fields decode. A nonzero or absent process status retains any decoded receipt
+in `CreationFollowup`; a reply observed after its deadline retains it in
+`LateCreation`. Receipt payloads which cannot be decoded do not enter
+diagnostics. Without a verified receipt, those errors and `AfterCreate` retain
+an `Unknown` effect, regardless of exit status or duplicate-name diagnostics.
+
+`Error::creation_receipt` borrows a verified receipt through cleanup wrappers.
+When it returns `None`, inspect the server before repeating a submitted
+creation. A diagnostic cannot prove that a mutation did not run: an alias or
+client wrapper can print the same words after creating a session.
 
 Interrupted collection is stricter: only a complete typed receipt upgrades
 the original failure to `CreationInterrupted`. Missing, malformed, prefaced or

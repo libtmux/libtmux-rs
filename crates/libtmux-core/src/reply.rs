@@ -82,9 +82,9 @@ impl Reply {
     ///
     /// # Errors
     ///
-    /// Returns an unconfirmed effect for ambiguous action framing, and a known
-    /// creation with any readable receipt when hooks, exit or deadline fail
-    /// after an acknowledged action. Malformed receipt payloads are discarded.
+    /// Returns an unknown effect for ambiguous action framing or malformed
+    /// identity fields. A verified receipt retains creation evidence when
+    /// hooks, exit or deadline fail. Unreadable payloads are discarded.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "the reply consumes the submitted operation together with its result"
@@ -133,9 +133,9 @@ impl Reply {
     ///
     /// # Errors
     ///
-    /// Returns an unconfirmed effect for absent, incomplete or ambiguous
-    /// markers. A verified acknowledgement retains any typed receipt across
-    /// process failure, a failed follow-up or a late reply.
+    /// Returns an unknown effect for absent, incomplete or ambiguous markers
+    /// or unreadable identity fields. A verified receipt retains creation
+    /// evidence across process failure, a failed follow-up or a late reply.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "the reply consumes the submitted operation together with its result"
@@ -263,7 +263,8 @@ mod tests {
         let malformed = b"%begin 1 2 0\nprivate-receipt\n%end 1 2 0\n%exit\n";
         let error = creation(Some(0), malformed, true).unwrap_err();
         assert!(matches!(error, Error::LateCreation { receipt: None }));
-        assert_eq!(error.effect(), Effect::Created);
+        assert_eq!(error.effect(), Effect::Unknown);
+        assert!(error.creation_receipt().is_none());
         assert_secret_absent(&error, "private-receipt");
     }
 
@@ -293,7 +294,15 @@ mod tests {
                 ]
                 .concat();
                 let error = creation(Some(1), &output, late).unwrap_err();
-                assert_eq!(error.effect(), Effect::Created);
+                assert_eq!(
+                    error.effect(),
+                    if has_ids {
+                        Effect::Created
+                    } else {
+                        Effect::Unknown
+                    }
+                );
+                assert_eq!(error.creation_receipt().is_some(), has_ids);
                 assert_secret_absent(&error, "private-hook");
                 assert!(matches!(
                     error,

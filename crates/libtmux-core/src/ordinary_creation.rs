@@ -243,14 +243,16 @@ mod tests {
     }
 
     #[test]
-    fn malformed_stamped_receipts_keep_acknowledgement_without_payload_bytes() {
+    fn malformed_stamped_receipts_leave_creation_unknown_without_payload_bytes() {
         let output = b"libtmux-create:abababababababababababababababab private-receipt :end\n";
         let error = creation(Some(0), output, false).unwrap_err();
         assert!(matches!(error, Error::AfterCreate));
-        assert_eq!(error.effect(), Effect::Created);
+        assert_eq!(error.effect(), Effect::Unknown);
+        assert!(error.creation_receipt().is_none());
         for (status, late) in [(Some(0), true), (Some(1), false)] {
             let error = creation(status, output, late).unwrap_err();
-            assert_eq!(error.effect(), Effect::Created);
+            assert_eq!(error.effect(), Effect::Unknown);
+            assert!(error.creation_receipt().is_none());
             assert!(!format!("{error} {error:?}").contains("private-receipt"));
         }
     }

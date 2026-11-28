@@ -3,6 +3,38 @@ use libtmux_core::{CreatedSession, Effect};
 use super::{Error, ErrorKind};
 
 impl Error {
+    /// Combine an operation result with its completed cleanup result.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failed operation or cleanup. If both failed,
+    /// [`Self::OperationAndCleanup`] retains both typed causes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_tokio::Error;
+    ///
+    /// let result = Error::after_cleanup::<()>(
+    ///     Err(Error::ShutdownPending),
+    ///     Err(Error::ShutdownPending),
+    /// );
+    /// assert!(matches!(result, Err(Error::OperationAndCleanup { .. })));
+    /// ```
+    pub fn after_cleanup<T>(
+        operation: Result<T, Self>,
+        cleanup: Result<(), Self>,
+    ) -> Result<T, Self> {
+        match (operation, cleanup) {
+            (result, Ok(())) => result,
+            (Ok(_), Err(error)) => Err(error),
+            (Err(primary), Err(cleanup)) => Err(Self::OperationAndCleanup {
+                primary: Box::new(primary),
+                cleanup: Box::new(cleanup),
+            }),
+        }
+    }
+
     /// Preserve the acknowledged IDs when a later step fails.
     #[must_use]
     pub fn after_creation(self, receipt: CreatedSession) -> Self {
@@ -17,8 +49,10 @@ impl Error {
     #[must_use]
     pub fn creation_receipt(&self) -> Option<&CreatedSession> {
         match self {
-            Self::CoreOperation { source } => core_receipt(source),
-            Self::OperationFailure { receipt, .. } => receipt.as_deref(),
+            Self::CoreOperation { source } => source.creation_receipt(),
+            Self::OperationFailure {
+                receipt, source, ..
+            } => receipt.as_deref().or_else(|| source.creation_receipt()),
             #[cfg(feature = "plan")]
             Self::PlanInterrupted { source, .. } => source.creation_receipt(),
             Self::OperationAndCleanup { primary, .. } => primary.creation_receipt(),
@@ -58,20 +92,6 @@ impl From<libtmux_core::Error> for Error {
     }
 }
 
-fn core_receipt(error: &libtmux_core::Error) -> Option<&CreatedSession> {
-    use libtmux_core::Error as CoreError;
-    match error {
-        CoreError::CreationInterrupted { receipt, .. } => Some(receipt.as_ref()),
-        CoreError::LateCreation { receipt } | CoreError::CreationFollowup { receipt, .. } => {
-            receipt.as_deref()
-        }
-        CoreError::Cleanup { primary, .. } | CoreError::CleanupPending(primary) => {
-            core_receipt(primary)
-        }
-        _ => None,
-    }
-}
-
 pub(super) fn core_version(error: &libtmux_core::Error) -> Option<&libtmux_core::VersionError> {
     use libtmux_core::Error as CoreError;
     match error {
@@ -97,12 +117,15 @@ pub(super) fn core_kind(error: &libtmux_core::Error) -> ErrorKind {
             _ => ErrorKind::UnsupportedVersion,
         },
         CoreError::Busy { .. } | CoreError::Command { .. } => ErrorKind::Refused,
-        CoreError::BeforeSpawn | CoreError::Deadline | CoreError::LateObservation { .. } => {
-            ErrorKind::Timeout
-        }
+        CoreError::BeforeSpawn
+        | CoreError::Deadline
+        | CoreError::LateObservation { .. }
+        | CoreError::LateCreation { receipt: None } => ErrorKind::Timeout,
         CoreError::UnsupportedVersion => ErrorKind::UnsupportedVersion,
         CoreError::Spawn(_) => ErrorKind::Unreachable,
         CoreError::SnapshotRow(_)
+        | CoreError::AfterCreate
+        | CoreError::CreationFollowup { receipt: None, .. }
         | CoreError::InvalidKey
         | CoreError::FramedRead
         | CoreError::UnconfirmedCreation { .. } => ErrorKind::Decode,
@@ -115,5 +138,68 @@ pub(super) fn core_kind(error: &libtmux_core::Error) -> ErrorKind {
             core_kind(primary)
         }
         _ => ErrorKind::Transport,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn unidentified_creation_never_becomes_a_partial_effect_or_transient_error() {
+        use libtmux_core::Error as CoreError;
+
+        for (source, kind) in [
+            (CoreError::AfterCreate, ErrorKind::Decode),
+            (
+                CoreError::CreationFollowup {
+                    receipt: None,
+                    status: Some(1),
+                    late: false,
+                },
+                ErrorKind::Decode,
+            ),
+            (
+                CoreError::LateCreation { receipt: None },
+                ErrorKind::Timeout,
+            ),
+        ] {
+            let error = Error::from(source);
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.operation_effect(), Some(Effect::Unknown));
+            assert!(error.creation_receipt().is_none());
+            assert!(!error.is_transient());
+        }
+    }
+
+    #[test]
+    fn completed_cleanup_retains_each_typed_failure_and_creation_receipt() {
+        assert_eq!(Error::after_cleanup(Ok(7), Ok(())).unwrap(), 7);
+        assert!(matches!(
+            Error::after_cleanup::<()>(Ok(()), Err(Error::ShutdownPending)),
+            Err(Error::ShutdownPending)
+        ));
+        let receipt = libtmux_core::NewSession::new("work")
+            .decode(Path::new("/example/socket"), b"123 456 %7 $8 @9\n")
+            .unwrap();
+        let primary = || {
+            Error::from(libtmux_core::Error::CreationFollowup {
+                receipt: Some(Box::new(receipt.clone())),
+                status: Some(1),
+                late: false,
+            })
+        };
+        let original = Error::after_cleanup::<()>(Err(primary()), Ok(())).unwrap_err();
+        assert_eq!(original.creation_receipt(), Some(&receipt));
+        assert!(matches!(original, Error::CoreOperation { .. }));
+        let combined =
+            Error::after_cleanup::<()>(Err(primary()), Err(Error::ShutdownPending)).unwrap_err();
+        assert_eq!(combined.creation_receipt(), Some(&receipt));
+        let Error::OperationAndCleanup { primary, cleanup } = combined else {
+            panic!("both failures must survive");
+        };
+        assert!(matches!(*primary, Error::CoreOperation { .. }));
+        assert!(matches!(*cleanup, Error::ShutdownPending));
     }
 }

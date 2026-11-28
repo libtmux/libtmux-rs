@@ -614,9 +614,11 @@ async fn a_dead_server_yields_empty_leniently_and_an_error_loudly() {
         .await
         .expect_err("a shut-down executor cannot list");
     assert!(
-        matches!(error, libtmux_tokio::Error::ExecutorShutdown { .. }),
+        matches!(&error, libtmux_tokio::Error::OperationFailure { effect: libtmux_core::Effect::NotSubmitted, source, .. }
+            if matches!(source.as_ref(), libtmux_tokio::Error::ExecutorShutdown { .. })),
         "the loud form preserves the real cause, got {error:?}",
     );
+    assert!(error.creation_receipt().is_none());
 
     server
         .shutdown()

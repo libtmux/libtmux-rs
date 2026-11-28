@@ -787,8 +787,9 @@ impl TestServer {
     ///
     /// # Errors
     ///
-    /// Returns the error tmux gave, including
-    /// [`crate::Error::SessionExists`] when the name is taken.
+    /// Returns an error when creation or discovery cannot complete. A creation
+    /// without a verified receipt preserves [`libtmux_core::Effect::Unknown`],
+    /// including when the requested name is already taken.
     ///
     /// # Examples
     ///
