@@ -1420,6 +1420,16 @@ async fn text_followed_by_enter_runs_the_line() {
     let guard = TestServer::new().await.expect("a server");
     let server = guard.server();
     let session = guard.session("submitted").await.expect("a session");
+    session
+        .set_environment(
+            "LIBTMUX_PLAN_TMUX",
+            server
+                .resolved_tmux_executable()
+                .expect("the fixture client resolves")
+                .into_os_string(),
+        )
+        .await
+        .expect("new panes inherit the fixture client");
 
     for (index, planner) in [Planner::Sequential, Planner::Folding, Planner::Marked]
         .into_iter()
@@ -1435,7 +1445,7 @@ async fn text_followed_by_enter_runs_the_line() {
         let mut plan = Plan::new();
         plan.add(
             SendKeys::new(pane.id().clone())
-                .text(format!("tmux wait-for -S {channel}"))
+                .text(format!("\"$LIBTMUX_PLAN_TMUX\" wait-for -S {channel}"))
                 .enter(),
         );
         server
