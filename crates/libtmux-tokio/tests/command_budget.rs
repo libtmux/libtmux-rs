@@ -8,8 +8,8 @@
 #[path = "support/versions.rs"]
 mod versions;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use libtmux_tokio::test::TestServer;
 use libtmux_tokio::{NewWindowOptions, SplitDirection, SplitOptions};
@@ -23,21 +23,63 @@ use tracing_subscriber::registry::LookupSpan;
 /// actually saw -- not a model of it that could drift.
 #[derive(Clone, Default)]
 struct CommandCounter {
-    count: Arc<AtomicUsize>,
+    subcommands: Arc<Mutex<BTreeMap<String, usize>>>,
 }
+
+struct Subcommand(String);
 
 impl CommandCounter {
     fn commands(&self) -> usize {
-        self.count.load(Ordering::Relaxed)
+        self.subcommands
+            .lock()
+            .expect("counter lock")
+            .values()
+            .sum()
     }
 
     fn reset(&self) {
-        self.count.store(0, Ordering::Relaxed);
+        self.subcommands.lock().expect("counter lock").clear();
+    }
+
+    fn by_subcommand(&self) -> BTreeMap<String, usize> {
+        self.subcommands.lock().expect("counter lock").clone()
     }
 }
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CommandCounter {
-    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
+    fn on_new_span(
+        &self,
+        attributes: &tracing::span::Attributes<'_>,
+        id: &tracing::Id,
+        context: Context<'_, S>,
+    ) {
+        struct Name(Option<String>);
+        impl tracing::field::Visit for Name {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "subcommand" {
+                    self.0 = Some(value.to_owned());
+                }
+            }
+
+            fn record_debug(
+                &mut self,
+                _field: &tracing::field::Field,
+                _value: &dyn std::fmt::Debug,
+            ) {
+            }
+        }
+        let mut name = Name(None);
+        attributes.record(&mut name);
+        if let Some(name) = name.0 {
+            context
+                .span(id)
+                .expect("new span")
+                .extensions_mut()
+                .insert(Subcommand(name));
+        }
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, context: Context<'_, S>) {
         struct Message<'a>(&'a mut bool);
 
         impl tracing::field::Visit for Message<'_> {
@@ -51,7 +93,22 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CommandCounter {
         let mut requested = false;
         event.record(&mut Message(&mut requested));
         if requested {
-            self.count.fetch_add(1, Ordering::Relaxed);
+            let name = context
+                .event_scope(event)
+                .and_then(|mut scope| {
+                    scope.find_map(|span| {
+                        span.extensions()
+                            .get::<Subcommand>()
+                            .map(|name| name.0.clone())
+                    })
+                })
+                .unwrap_or_else(|| "unscoped".to_owned());
+            *self
+                .subcommands
+                .lock()
+                .expect("counter lock")
+                .entry(name)
+                .or_default() += 1;
         }
     }
 }
@@ -97,12 +154,14 @@ async fn the_hierarchy_costs_the_same_however_large_it_is() {
     counter.reset();
     let small = server.hierarchy().await.expect("hierarchy");
     let small_commands = counter.commands();
+    let small_sources = counter.by_subcommand();
 
     // Sixteen times the objects.
     populate(server, "large", 3, 5).await;
     counter.reset();
     let large = server.hierarchy().await.expect("hierarchy");
     let large_commands = counter.commands();
+    let large_sources = counter.by_subcommand();
 
     assert!(large.len() > small.len(), "the second hierarchy is larger");
     assert!(
@@ -110,13 +169,25 @@ async fn the_hierarchy_costs_the_same_however_large_it_is() {
         "and larger by enough for a per-object cost to show",
     );
 
-    // Three listings, whatever the server holds. A walk down the tree would
-    // cost one command per session and one per window, so this is the
-    // difference between a constant and a hierarchy-sized bill.
-    assert_eq!(small_commands, 3, "sessions, windows, and panes");
+    // One generation probe and three listings, independent of object count.
+    assert_eq!(
+        small_commands, 4,
+        "generation, sessions, windows, and panes; {small_sources:?}"
+    );
+    assert_eq!(
+        small_sources,
+        BTreeMap::from([
+            ("run-shell".to_owned(), 1),
+            ("list-sessions".to_owned(), 1),
+            ("list-windows".to_owned(), 1),
+            ("list-panes".to_owned(), 1),
+        ]),
+        "bound listings must not repeat generation discovery"
+    );
+    assert_eq!(large_sources, small_sources);
     assert_eq!(
         large_commands, small_commands,
-        "the cost does not grow with the hierarchy",
+        "the cost does not grow with the hierarchy; {large_sources:?}",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -145,6 +216,7 @@ async fn walking_down_costs_a_command_for_every_step() {
         }
     }
     let walked = counter.commands();
+    let walked_sources = counter.by_subcommand();
 
     counter.reset();
     server.hierarchy().await.expect("hierarchy");
@@ -152,12 +224,21 @@ async fn walking_down_costs_a_command_for_every_step() {
 
     assert_eq!(
         walked,
-        1 + sessions.len() + windows,
-        "one listing per session and per window, plus the first",
+        2 + sessions.len() + windows,
+        "one generation probe, then listings at each step; {walked_sources:?}",
     );
-    assert_eq!(gathered, 3);
+    assert_eq!(
+        walked_sources,
+        BTreeMap::from([
+            ("run-shell".to_owned(), 1),
+            ("list-sessions".to_owned(), 1),
+            ("list-windows".to_owned(), sessions.len()),
+            ("list-panes".to_owned(), windows),
+        ]),
+    );
+    assert_eq!(gathered, 4);
     assert!(
-        walked > gathered * 3,
+        walked >= gathered * 3,
         "walking cost {walked} commands where the hierarchy cost {gathered}",
     );
 
@@ -331,7 +412,7 @@ async fn replacing_hooks_clears_and_writes_in_one_command() {
         .session("hooks")
         .await
         .expect("the session is created");
-    let mut entries = std::collections::BTreeMap::new();
+    let mut entries = BTreeMap::new();
     entries.insert(0, TmuxText::from(b"display-message one".to_vec()));
     entries.insert(1, TmuxText::from(b"display-message two".to_vec()));
     let written = IndexedHooks::from(entries);

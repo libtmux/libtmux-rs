@@ -4,10 +4,11 @@
 //! $ cargo bench --features test-support
 //! ```
 //!
-//! The claim under test is that [`libtmux_tokio::Server::hierarchy`] costs three
-//! tmux commands whatever the server holds, where walking down costs one per
-//! session and one per window. `tests/command_budget.rs` asserts the command
-//! counts, which are exact; this reports what they cost in time, which is not.
+//! After the version check, an unbound [`libtmux_tokio::Server::hierarchy`]
+//! uses one generation probe and three listings regardless of object count.
+//! Walking adds a listing per session and per window.
+//! `tests/command_budget.rs` checks those dispatch counts. This benchmark
+//! measures elapsed time against real tmux.
 
 // Helpers outside a test function are not covered by clippy.toml's
 // in-test exemptions, and these files have them.

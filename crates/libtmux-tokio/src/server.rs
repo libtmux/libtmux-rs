@@ -281,7 +281,8 @@ impl PromptKind {
 ///
 /// **Listing everything.** List every session, window, pane or client; each
 /// keeps the reason it failed, so an outage does not read as an empty server.
-/// Or gather the whole tree in three tmux commands rather than one per object.
+/// Or gather the tree with one generation probe and three listings, regardless
+/// of how many objects it contains.
 ///
 /// [`sessions`], [`windows`], [`panes`], [`clients`], [`hierarchy`]
 ///

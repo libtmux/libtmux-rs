@@ -30,8 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Three tmux commands, not one per object: walking down would cost a
-    // command per session and per window.
+    // One generation probe and three listings, regardless of object count.
     for branch in server.hierarchy().await? {
         let session = &branch.session;
         println!(

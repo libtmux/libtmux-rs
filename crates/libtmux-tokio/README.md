@@ -194,11 +194,17 @@ A window has one identity and several *links*:
 
 ## Find sessions, windows, and panes
 
-### [`Server::hierarchy`]: the whole tree in three commands
+### [`Server::hierarchy`]: the whole tree with three listings
 
-[`Server::hierarchy`] gathers sessions, windows, and panes in three tmux
-commands, rather than one per object. [`Server::sessions`] and
-[`Session::windows`][session-windows] are its narrower siblings:
+[`Server::hierarchy`] first discovers the daemon generation, then gathers
+sessions, windows, and panes with three listings fenced to it.
+
+After the initial version check, an unbound handle uses four dispatches.
+A bound handle reuses its generation and needs three. The count does not
+grow with the number of objects.
+
+[`Server::sessions`] and [`Session::windows`][session-windows] are its narrower
+siblings:
 
 ```rust
 use libtmux_tokio::test::TestServer;

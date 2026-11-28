@@ -293,8 +293,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .windows
         .any(windows.window.window_name.eq("build"));
 
-    // `hierarchy` gathers the whole tree in three tmux commands, not one
-    // per object.
+    // One generation probe and three listings gather the whole tree,
+    // regardless of object count.
     let matched: Vec<_> = server
         .hierarchy()
         .await?

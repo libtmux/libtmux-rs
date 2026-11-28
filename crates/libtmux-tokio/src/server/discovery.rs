@@ -217,13 +217,15 @@ impl Server {
             .find(|client| client.name() == name))
     }
 
-    /// Fetch the whole hierarchy in three commands.
+    /// Fetch the whole hierarchy with three listings.
     ///
     /// Walking down with [`Server::sessions`], then each session's windows,
     /// then each window's panes costs one command per object. tmux can answer
     /// the same question with `list-sessions`, `list-windows -a`, and
-    /// `list-panes -a`, so this issues three regardless of how much is
-    /// running and stitches the result by winlink.
+    /// `list-panes -a`, regardless of how much is running. An unbound server
+    /// first discovers the daemon generation, then fences all three listings
+    /// to it. After the initial version check, that is four dispatches; an
+    /// already bound server reuses its generation and needs three.
     ///
     /// Use it when you want everything. Use the scoped accessors when you
     /// want one branch: they fetch less.
@@ -236,7 +238,7 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when any of the three listings fails.
+    /// Returns an error when generation discovery or any listing fails.
     pub async fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
         let server = self.for_discovery().await?;
         let (sessions, windows, panes) =
