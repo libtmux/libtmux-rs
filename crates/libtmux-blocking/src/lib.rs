@@ -219,6 +219,42 @@ impl Server {
         Ok((version, true))
     }
 
+    /// Read owned observations of every session, window, pane or client.
+    ///
+    /// A snapshot keeps the field values returned by this listing. Linked
+    /// windows and their panes appear once, independent of session placement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the daemon, listing, or a complete row cannot be read.
+    pub fn snapshots<S: libtmux_core::Snapshot>(&self) -> Result<Vec<S>, Error> {
+        self.snapshots_with(RequestOptions::default())
+    }
+
+    /// Read snapshots within one deadline and cancellation budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same failures as [`Self::snapshots`].
+    pub fn snapshots_with<S: libtmux_core::Snapshot>(
+        &self,
+        options: RequestOptions,
+    ) -> Result<Vec<S>, Error> {
+        let (version, _) = self
+            .creation_version(&options)
+            .map_err(|error| error.during_read(S::COMMAND))?;
+        let request = libtmux_core::SnapshotList::<S>::new(&version, fresh_nonce(&options)?);
+        let (output, late) = self
+            .output(request.arguments(), options, None)
+            .map_err(|error| error.during_read(S::COMMAND))?;
+        request.decode(
+            output.status.code(),
+            &output.stdout,
+            output.stderr.len(),
+            late,
+        )
+    }
+
     /// Observe an exact pane ID and bind it to its daemon generation.
     ///
     /// # Errors

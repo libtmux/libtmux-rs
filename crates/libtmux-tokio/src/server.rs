@@ -1123,6 +1123,44 @@ impl Server {
             .map_err(Into::into)
     }
 
+    /// Read owned observations of every session, window, pane or client.
+    ///
+    /// Both native clients return the same snapshot types. A snapshot keeps
+    /// the field values from its listing after the daemon changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the deadline expires or tmux cannot supply complete rows.
+    pub async fn snapshots<S: libtmux_core::Snapshot>(&self) -> Result<Vec<S>, Error> {
+        let deadline = self.core.operation_deadline();
+        let version = match deadline {
+            Some(end) => tokio::time::timeout_at(end, self.daemon_version())
+                .await
+                .map_err(|_| libtmux_core::Error::LateObservation {
+                    operation: S::COMMAND,
+                })??,
+            None => self.daemon_version().await?,
+        };
+        let request =
+            libtmux_core::SnapshotList::<S>::new(&version, crate::internal::operation::nonce()?);
+        let (result, late) = self
+            .core
+            .execute_operation(
+                request.arguments(),
+                Command::new(S::COMMAND.to_string()).summary(),
+                crate::internal::operation::OperationContext::observation(deadline),
+            )
+            .await?;
+        request
+            .decode(
+                result.exit_code(),
+                result.stdout(),
+                result.stderr().len(),
+                late,
+            )
+            .map_err(Into::into)
+    }
+
     /// Observe an exact pane's endpoint and daemon generation without attaching.
     ///
     /// # Errors

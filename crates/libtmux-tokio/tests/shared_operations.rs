@@ -247,3 +247,26 @@ async fn a_stale_link_cannot_unlink_the_window_that_reused_its_index() {
     );
     guard.shutdown().await.expect("fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_session_handle_and_a_separate_listing_return_owned_core_snapshots() {
+    use libtmux_core::SessionSnapshot;
+
+    let fixture = TestServer::new().await.unwrap();
+    let mut session = fixture.session("original").await.unwrap();
+    let before: SessionSnapshot = session.snapshot().clone();
+    session.rename("changed").await.unwrap();
+    let rows = fixture
+        .server()
+        .snapshots::<SessionSnapshot>()
+        .await
+        .unwrap();
+    let after = rows
+        .iter()
+        .find(|row| row.session_id() == before.session_id())
+        .unwrap();
+    assert_eq!(before.session_name().as_bytes(), b"original");
+    assert_eq!(after.session_name().as_bytes(), b"changed");
+    assert_eq!(session.snapshot().session_name(), after.session_name());
+    fixture.shutdown().await.unwrap();
+}
