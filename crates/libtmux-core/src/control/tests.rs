@@ -200,6 +200,33 @@ fn reply_bytes_are_bounded_before_a_partial_record_finishes() {
 }
 
 #[test]
+fn a_caller_reply_budget_can_narrow_but_never_enlarge_the_drain() {
+    let mut tracker = opened(ControlLimits::default());
+    tracker
+        .register_with_reply_limit(1, FIRST, RequestKind::Ordinary, 32)
+        .unwrap();
+    tracker.cancel(1);
+    tracker.feed(b"%begin 0 2 1\n").unwrap();
+    assert_eq!(
+        tracker.feed(&[b'x'; 32]),
+        Err(ControlFault::ReplyLimit { limit: 32 })
+    );
+
+    let mut tracker = opened(ControlLimits {
+        max_reply_bytes: 32,
+        ..ControlLimits::default()
+    });
+    tracker
+        .register_with_reply_limit(1, FIRST, RequestKind::Ordinary, usize::MAX)
+        .unwrap();
+    tracker.feed(b"%begin 0 2 1\n").unwrap();
+    assert_eq!(
+        tracker.feed(&[b'x'; 32]),
+        Err(ControlFault::ReplyLimit { limit: 32 })
+    );
+}
+
+#[test]
 fn subscriber_overflow_never_steals_command_replies_or_pause_provenance() {
     let mut tracker = opened(ControlLimits {
         max_events: 2,

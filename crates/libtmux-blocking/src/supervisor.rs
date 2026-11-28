@@ -32,6 +32,8 @@ enum OutputMode {
 pub(super) struct Children {
     available: Arc<AtomicUsize>,
     limit: usize,
+    #[cfg(feature = "control-mode")]
+    persistent_available: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(super) reject_pipe_setup: Option<PathBuf>,
 }
@@ -42,7 +44,7 @@ impl Default for Children {
     }
 }
 
-struct Permit(Arc<AtomicUsize>);
+pub(super) struct Permit(Arc<AtomicUsize>);
 
 enum CreationReceipt {
     #[cfg(test)]
@@ -77,9 +79,16 @@ impl Children {
         Self {
             available: Arc::new(AtomicUsize::new(limit)),
             limit,
+            #[cfg(feature = "control-mode")]
+            persistent_available: Arc::new(AtomicUsize::new(4)),
             #[cfg(test)]
             reject_pipe_setup: None,
         }
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(super) fn reserve_persistent(&self) -> Result<Permit, Error> {
+        reserve(&self.persistent_available, 4)
     }
 
     #[cfg(test)]
@@ -186,6 +195,19 @@ impl Children {
     }
 }
 
+#[cfg(feature = "control-mode")]
+pub(super) fn reserve(available: &Arc<AtomicUsize>, limit: usize) -> Result<Permit, Error> {
+    let mut observed = available.load(Ordering::Acquire);
+    loop {
+        let next = observed.checked_sub(1).ok_or(Error::Busy { limit })?;
+        match available.compare_exchange_weak(observed, next, Ordering::Acquire, Ordering::Relaxed)
+        {
+            Ok(_) => return Ok(Permit(Arc::clone(available))),
+            Err(current) => observed = current,
+        }
+    }
+}
+
 pub(super) fn check_before_spawn(options: &RequestOptions) -> Result<(), Error> {
     if options.cancellation.is_cancelled() {
         Err(Error::CancelledBeforeSpawn)
@@ -286,13 +308,13 @@ fn publish_cleanup(
     }
 }
 
-struct OwnedChild {
-    child: Option<Child>,
+pub(super) struct OwnedChild {
+    pub(super) child: Option<Child>,
     group: Option<Pid>,
 }
 
 impl OwnedChild {
-    fn new(child: Child) -> Self {
+    pub(super) fn new(child: Child) -> Self {
         let group = i32::try_from(child.id()).ok().and_then(Pid::from_raw);
         Self {
             child: Some(child),
@@ -300,7 +322,7 @@ impl OwnedChild {
         }
     }
 
-    fn has_exited(&self) -> io::Result<bool> {
+    pub(super) fn has_exited(&self) -> io::Result<bool> {
         let pid = self
             .group
             .ok_or_else(|| io::Error::other("subprocess identity is unavailable"))?;
@@ -312,7 +334,7 @@ impl OwnedChild {
         .map_err(Into::into)
     }
 
-    fn finish(&mut self) -> Result<ExitStatus, CleanupErrors> {
+    pub(super) fn finish(&mut self) -> Result<ExitStatus, CleanupErrors> {
         let Some(child) = self.child.as_mut() else {
             return Err(CleanupErrors {
                 kill: None,
@@ -371,7 +393,7 @@ impl OwnedChild {
         }
     }
 
-    fn reap(&mut self) {
+    pub(super) fn reap(&mut self) {
         if let Some(child) = self.child.as_mut() {
             while let Err(error) = child.wait() {
                 if error.kind() != ErrorKind::Interrupted {
@@ -381,6 +403,13 @@ impl OwnedChild {
         }
         self.child = None;
     }
+}
+
+#[cfg(feature = "control-mode")]
+pub(super) fn nonblocking_file(fd: impl Into<OwnedFd>) -> io::Result<File> {
+    let file = File::from(fd.into());
+    fcntl_getfl(&file).and_then(|flags| fcntl_setfl(&file, flags | OFlags::NONBLOCK))?;
+    Ok(file)
 }
 
 impl Drop for OwnedChild {

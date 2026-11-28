@@ -16,6 +16,7 @@ struct Request {
     cancelled: bool,
     blocks: Vec<ControlBlock>,
     wire_bytes: usize,
+    reply_limit: usize,
     block_count: usize,
     input_blocks: usize,
     last_empty_success: bool,
@@ -103,6 +104,21 @@ impl Tracker {
         nonce: CreationNonce,
         kind: RequestKind,
     ) -> Result<(), ControlFault> {
+        self.register_with_reply_limit(token, nonce, kind, self.limits.max_reply_bytes)
+    }
+
+    /// Reserve a drain with a caller bound no larger than the connection's.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same admission errors as [`Self::register`].
+    pub fn register_with_reply_limit(
+        &mut self,
+        token: u64,
+        nonce: CreationNonce,
+        kind: RequestKind,
+        reply_limit: usize,
+    ) -> Result<(), ControlFault> {
         if self.is_closed() || !self.is_established() {
             return Err(ControlFault::Closed);
         }
@@ -128,6 +144,7 @@ impl Tracker {
             cancelled: false,
             blocks: Vec::new(),
             wire_bytes: 0,
+            reply_limit: reply_limit.min(self.limits.max_reply_bytes),
             block_count: 0,
             input_blocks: 0,
             last_empty_success: false,
@@ -205,12 +222,14 @@ impl Tracker {
                 let partial = self.line.len().saturating_add(1);
                 if block.wire_bytes.saturating_add(partial) > self.limits.max_reply_bytes
                     || self.pending.front().is_some_and(|request| {
-                        request.wire_bytes.saturating_add(partial) > self.limits.max_reply_bytes
+                        request.wire_bytes.saturating_add(partial) > request.reply_limit
                     })
                 {
-                    return self.fail(ControlFault::ReplyLimit {
-                        limit: self.limits.max_reply_bytes,
-                    });
+                    let limit = self
+                        .pending
+                        .front()
+                        .map_or(self.limits.max_reply_bytes, |request| request.reply_limit);
+                    return self.fail(ControlFault::ReplyLimit { limit });
                 }
             }
             if byte == b'\n' {
@@ -319,9 +338,9 @@ impl Tracker {
     fn account_wire(&mut self, bytes: usize, new_block: bool) -> Result<(), ControlFault> {
         if let Some(request) = self.pending.front_mut() {
             request.wire_bytes = request.wire_bytes.saturating_add(bytes);
-            if request.wire_bytes > self.limits.max_reply_bytes {
+            if request.wire_bytes > request.reply_limit {
                 return Err(ControlFault::ReplyLimit {
-                    limit: self.limits.max_reply_bytes,
+                    limit: request.reply_limit,
                 });
             }
             if new_block {

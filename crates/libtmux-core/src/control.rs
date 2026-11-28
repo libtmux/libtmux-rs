@@ -238,6 +238,12 @@ impl ControlReply {
         &self.blocks
     }
 
+    /// Consume this reply without copying its bounded payload vectors.
+    #[must_use]
+    pub fn into_blocks(self) -> Vec<ControlBlock> {
+        self.blocks
+    }
+
     /// Whether every input block succeeded.
     #[must_use]
     pub fn succeeded(&self) -> bool {

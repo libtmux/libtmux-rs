@@ -19,6 +19,8 @@ use libtmux_core::{
     OrdinaryPaneProbe, OrdinaryVersionProbe, PaneId, PaneKey, Reply, TmuxVersion, VersionError,
 };
 
+#[cfg(feature = "control-mode")]
+pub mod control;
 mod mutations;
 mod supervisor;
 
