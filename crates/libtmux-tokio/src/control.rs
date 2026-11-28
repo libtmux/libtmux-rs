@@ -1332,6 +1332,7 @@ pub struct PaneOutput {
     pane: PaneId,
     events: ControlEvents,
     closed: bool,
+    ending: Option<PaneOutputEnd>,
     sender: ControlSender,
     narrowing: Arc<AtomicU8>,
     narrow_handle: Option<tokio::task::JoinHandle<Result<bool, Error>>>,
@@ -1344,6 +1345,7 @@ impl PaneOutput {
             pane,
             events,
             closed: false,
+            ending: None,
             sender,
             narrowing: Arc::new(AtomicU8::new(NARROW_IDLE)),
             narrow_handle: None,
@@ -1468,10 +1470,46 @@ impl PaneOutput {
         self.events.shutdown().await
     }
 
-    fn ended(&mut self, cause: PaneOutputEnd) -> Poll<Option<Result<Vec<u8>, Error>>> {
+    fn actor_reports(&self, error: &Error) -> bool {
+        match error {
+            Error::ControlModeFrameTooLarge {
+                frame: "line" | "reply" | "blocks",
+                ..
+            }
+            | Error::ControlProtocol {
+                fault: libtmux_core::control::ControlFault::Disconnected,
+            }
+            | Error::ControlMode {
+                kind: crate::ControlModeErrorKind::Closed,
+                ..
+            } => true,
+            Error::ControlProtocol { .. }
+            | Error::ExecutorShutdown { .. }
+            | Error::ControlMode {
+                kind: crate::ControlModeErrorKind::Transport | crate::ControlModeErrorKind::TimedOut,
+                ..
+            } => self.sender.is_closed(),
+            _ => false,
+        }
+    }
+
+    fn end_after_notices(&mut self, cause: PaneOutputEnd) {
+        if self.ending.is_none() {
+            self.ending = Some(cause);
+            let _ = self.events.stop.send(());
+        }
+    }
+
+    fn terminal(&mut self, error: Option<Error>) -> Poll<Option<Result<Vec<u8>, Error>>> {
         self.closed = true;
-        let _ = self.events.stop.send(());
-        Poll::Ready(Some(Err(Error::PaneOutputEnded { cause })))
+        let cause = self.ending.unwrap_or(PaneOutputEnd::ConnectionEnded);
+        Poll::Ready(Some(Err(match error {
+            None
+            | Some(Error::ControlProtocol {
+                fault: libtmux_core::control::ControlFault::Disconnected,
+            }) => Error::PaneOutputEnded { cause },
+            Some(error) => error,
+        })))
     }
 }
 
@@ -1487,7 +1525,12 @@ impl Stream for PaneOutput {
             match Pin::new(&mut handle).poll(context) {
                 Poll::Pending => this.narrow_handle = Some(handle),
                 Poll::Ready(Ok(Ok(true))) => {}
-                Poll::Ready(Ok(Ok(false))) => return this.ended(PaneOutputEnd::PaneGone),
+                Poll::Ready(Ok(Ok(false))) => this.end_after_notices(PaneOutputEnd::PaneGone),
+                // A watch RPC receives a copy of an actor failure. Drain the
+                // original through the event receiver, after any queued bytes.
+                Poll::Ready(Ok(Err(error))) if this.actor_reports(&error) => {
+                    this.end_after_notices(PaneOutputEnd::ConnectionEnded);
+                }
                 Poll::Ready(outcome) => {
                     this.closed = true;
                     let _ = this.events.stop.send(());
@@ -1520,24 +1563,22 @@ impl Stream for PaneOutput {
                     })));
                 }
                 Some(Ok(ControlNotice::Event(Event::Exit { .. }))) => {
-                    return this.ended(PaneOutputEnd::ConnectionEnded);
+                    this.end_after_notices(PaneOutputEnd::ConnectionEnded);
                 }
                 Some(Ok(ControlNotice::Event(event))) => {
-                    if event.may_have_added_a_pane()
-                        || matches!(
-                            event,
-                            Event::WindowClosed { .. } | Event::UnlinkedWindowClosed { .. }
-                        )
+                    if this.ending.is_none()
+                        && (event.may_have_added_a_pane()
+                            || matches!(
+                                event,
+                                Event::WindowClosed { .. } | Event::UnlinkedWindowClosed { .. }
+                            ))
                     {
                         this.narrow();
                     }
                 }
-                Some(Err(error)) => {
-                    this.closed = true;
-                    return Poll::Ready(Some(Err(error)));
-                }
+                Some(Err(error)) => return this.terminal(Some(error)),
                 Some(Ok(_)) => {}
-                None => return this.ended(PaneOutputEnd::ConnectionEnded),
+                None => return this.terminal(None),
             }
         }
         context.waker().wake_by_ref();

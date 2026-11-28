@@ -243,6 +243,32 @@ async fn pane_output_yields_a_gap_and_then_the_original_terminal_cause() {
 }
 
 #[tokio::test]
+async fn a_failed_pane_watch_drains_buffered_output_and_delivers_the_actor_error_once() {
+    let wire_error = || Error::control_mode_frame_too_large("line", 64);
+    let (events, wire) = events(ControlLimits::default(), Err(wire_error()));
+    let (commands, _queued) = mpsc::channel(1);
+    let mut output = PaneOutput::new(
+        "%3".parse().unwrap(),
+        events,
+        sender(commands, Duration::from_secs(1)),
+    );
+    output.narrow_handle = Some(tokio::spawn(async move { Err(wire_error()) }));
+    tokio::task::yield_now().await;
+    wire.feed(b"%output %3 before-close\n").unwrap();
+    wire.finish();
+    assert_eq!(output.next_chunk().await.unwrap().unwrap(), b"before-close");
+    assert!(matches!(
+        output.next_chunk().await,
+        Some(Err(Error::ControlModeFrameTooLarge {
+            frame: "line",
+            limit: 64
+        }))
+    ));
+    assert!(output.next_chunk().await.is_none());
+    output.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unrelated_notices_yield_before_the_next_pane_chunk() {
     use futures_core::Stream as _;
     use std::pin::Pin;
