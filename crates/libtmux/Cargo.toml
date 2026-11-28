@@ -51,7 +51,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [[example]]
 name = "api_mixed"
-required-features = ["blocking", "tokio", "test-support"]
+required-features = ["blocking", "tokio"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -8,5 +8,5 @@ publish = false
 exclude = ["libtmux-source"]
 
 [dependencies]
-libtmux = { path = "libtmux-source/crates/libtmux", features = ["blocking", "tokio", "test-support"] }
+libtmux = { path = "libtmux-source/crates/libtmux", default-features = false, features = ["blocking", "tokio"] }
 tokio = { version = "1.40", features = ["rt", "time"] }

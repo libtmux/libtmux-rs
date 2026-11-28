@@ -332,6 +332,7 @@ function libtmux_tokio::DispatchLimits::max_in_flight: const fn(self, permits: u
 function libtmux_tokio::DispatchLimits::max_parked: const fn(self, permits: usize) -> Self
 function libtmux_tokio::DispatchLimits::parked: const fn(self) -> usize
 function libtmux_tokio::EngineCapabilities::tmux_version: const fn(&self) -> &libtmux_tokio::TmuxVersion
+function libtmux_tokio::Error::after_cleanup: fn<T>(operation: Result<T, Self>, cleanup: Result<(), Self>) -> Result<T, Self>
 function libtmux_tokio::Error::after_creation: fn(self, receipt: libtmux_tokio::CreatedSession) -> Self
 function libtmux_tokio::Error::after_effect: fn(self, operation: &'static str) -> Self
 function libtmux_tokio::Error::creation_receipt: fn(&self) -> Option<&libtmux_tokio::CreatedSession>

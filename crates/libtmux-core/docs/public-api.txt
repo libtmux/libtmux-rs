@@ -111,6 +111,7 @@ function libtmux_core::CreatedSession::window: fn(&self) -> libtmux_core::Window
 function libtmux_core::CreatedSession::window_key: fn(&self) -> libtmux_core::WindowKey
 function libtmux_core::CreationNonce::from_bytes: const fn(bytes: [u8; 16]) -> Self
 function libtmux_core::Effect::as_str: const fn(self) -> &'static str
+function libtmux_core::Error::creation_receipt: fn(&self) -> Option<&libtmux_core::CreatedSession>
 function libtmux_core::Error::effect: fn(&self) -> libtmux_core::Effect
 function libtmux_core::FormatCodecError::expected: const fn(&self) -> Option<libtmux_core::formats::DecoderKind>
 function libtmux_core::FormatCodecError::field: const fn(&self) -> Option<usize>

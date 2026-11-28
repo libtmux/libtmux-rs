@@ -13,7 +13,7 @@
     }
   ],
   "programFileName": "src/main.rs",
-  "runCommand": "cargo run --quiet",
+  "runCommand": "(\n  set -eu\n  mkdir -p /tmp/libtmux-rs-dev\n  directory=$(mktemp -d /tmp/libtmux-rs-dev/mixed.XXXXXX)\n  socket=\"$directory/socket\"\n  cleanup() {\n    tmux -S \"$socket\" kill-server >/dev/null 2>&1 || return\n    attempts=0\n    while tmux -N -S \"$socket\" list-sessions >/dev/null 2>&1; do\n      attempts=$((attempts + 1))\n      [ \"$attempts\" -lt 100 ] || return 1\n      sleep 0.01\n    done\n    rm -f \"$socket\"\n    rmdir \"$directory\"\n  }\n  trap cleanup EXIT\n  tmux -S \"$socket\" -f /dev/null new-session -d -s fixture\n  cargo run --quiet -- \"$socket\"\n  [ \"$(tmux -S \"$socket\" list-sessions -F '#{session_name}')\" = fixture ]\n)",
   "examples": [
     {
       "id": "rust-mixed",
