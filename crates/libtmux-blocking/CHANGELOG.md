@@ -14,9 +14,9 @@ Notable changes to `libtmux-blocking`.
   locale.
 - `ControlMode::attach` preserves session environment variables selected by
   `update-environment`.
-- `ControlMode::attach` retries a pinned client's `-V` probe when a concurrent
-  fork temporarily retains its writable executable handle. The attachment's
-  deadline and cancellation still bound qualification.
+- `ControlMode::attach` retries its identity and version probes when a
+  concurrent fork still has the executable open for writing. The attachment
+  deadline and cancellation apply while it waits.
 - **Breaking.** `ControlMode::send` and `ControlSender::send` refuse scripts,
   unqualified waits and arbitrary output before submission. Inspect
   `ControlError::policy_refusal` for the reason. Use `Server::capture` for
