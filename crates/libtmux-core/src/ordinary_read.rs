@@ -157,8 +157,10 @@ impl OrdinaryPaneProbe {
     ///
     /// # Errors
     ///
-    /// Rejects late, malformed, unrelated or unsupported reports. Payload
-    /// bytes and the nonce are never included in an error.
+    /// Rejects late, malformed, unrelated or unsupported reports. A complete
+    /// report naming a different pane returns [`Error::StalePane`]. tmux can
+    /// select an attached client's current pane when the requested pane is
+    /// gone. Payload bytes and the nonce are excluded from errors.
     pub fn decode(
         &self,
         socket: &Path,
@@ -193,9 +195,7 @@ impl OrdinaryPaneProbe {
         {
             return Err(Error::PaneNotFound(self.pane.clone()));
         }
-        if pane.parse::<PaneId>().ok().as_ref() != Some(&self.pane) {
-            return Err(Error::InvalidKey);
-        }
+        let reported = pane.parse::<PaneId>().map_err(|_| Error::InvalidKey)?;
         let height = parse_number::<u32>(height)
             .filter(|height| *height > 0)
             .ok_or(Error::InvalidKey)?;
@@ -205,6 +205,10 @@ impl OrdinaryPaneProbe {
             "1" => true,
             _ => return Err(Error::InvalidKey),
         };
+        // With an attached client, run-shell may fall back to its current pane.
+        if reported != self.pane {
+            return Err(Error::StalePane);
+        }
         let key = ObservePane::decode_rows(
             socket,
             &self.pane,
@@ -601,6 +605,33 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_valid_probe_for_a_different_pane_reports_stale_identity() {
+        let decode = |row: &str| {
+            let diagnostic =
+                format!("unknown command: libtmux-pane:12121212121212121212121212121212:{row}\n");
+            probe().decode(
+                Path::new("/example/socket"),
+                Some(1),
+                b"",
+                diagnostic.as_bytes(),
+                false,
+            )
+        };
+        assert!(matches!(
+            decode("123,456,%8,3,3.8,0,0"),
+            Err(Error::StalePane)
+        ));
+        assert!(matches!(
+            decode("123,456,%8,0,3.8,0,0"),
+            Err(Error::InvalidKey)
+        ));
+        assert!(matches!(
+            decode("123,456,pane,3,3.8,0,0"),
+            Err(Error::InvalidKey)
+        ));
     }
 
     #[test]
