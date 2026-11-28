@@ -177,23 +177,23 @@ through pidfds, so PID reuse cannot redirect a signal.
 `LIBTMUX_TEST_TMUX` points the guard at a specific build when one release
 matters.
 
-[`Error`]: https://libtmux.org/en/rs/latest/reference/error-error/
-[`Error::kind`]: https://libtmux.org/en/rs/latest/reference/error-error-kind/
-[`Error::is_object_gone`]: https://libtmux.org/en/rs/latest/reference/error-error-is_object_gone/
-[`Error::is_transient`]: https://libtmux.org/en/rs/latest/reference/error-error-is_transient/
-[`Error::AfterEffect`]: https://libtmux.org/en/rs/latest/reference/error-error-aftereffect/
-[`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/error-errorkind-partialeffect/
-[`Error::UnsupportedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/error-error-unsupportedtmuxversion/
-[`Error::UnrecognizedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/error-error-unrecognizedtmuxversion/
-[`Error::VersionProbeFailed`]: https://libtmux.org/en/rs/latest/reference/error-error-versionprobefailed/
-[`Error::InvalidVersionOutput`]: https://libtmux.org/en/rs/latest/reference/error-error-invalidversionoutput/
-[`Error::Timeout`]: https://libtmux.org/en/rs/latest/reference/error-error-timeout/
-[`Error::ServerReplaced`]: https://libtmux.org/en/rs/latest/reference/error-error-serverreplaced/
-[`Server`]: https://libtmux.org/en/rs/latest/reference/server-server/
-[`Server::capabilities`]: https://libtmux.org/en/rs/latest/reference/server-server-capabilities/
-[`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/server-server-cmd/
-[`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/server-server-sessions/
-[`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/server-server-shutdown/
-[`ServerBuilder::tmux_executable`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-tmux_executable/
-[`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-default_timeout/
-[`TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
+[`Error`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error/
+[`Error::kind`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-kind/
+[`Error::is_object_gone`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-is_object_gone/
+[`Error::is_transient`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-is_transient/
+[`Error::AfterEffect`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-aftereffect/
+[`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-errorkind-partialeffect/
+[`Error::UnsupportedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-unsupportedtmuxversion/
+[`Error::UnrecognizedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-unrecognizedtmuxversion/
+[`Error::VersionProbeFailed`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-versionprobefailed/
+[`Error::InvalidVersionOutput`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-invalidversionoutput/
+[`Error::Timeout`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-timeout/
+[`Error::ServerReplaced`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-serverreplaced/
+[`Server`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server/
+[`Server::capabilities`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-capabilities/
+[`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-cmd/
+[`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-sessions/
+[`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-shutdown/
+[`ServerBuilder::tmux_executable`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-tmux_executable/
+[`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-default_timeout/
+[`TestServer`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-test-testserver/

@@ -211,9 +211,9 @@ async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row
 /// Which way a plan reaches tmux over one control-mode connection.
 #[derive(Clone, Copy)]
 enum Connection {
-    /// `Plan::run_over_control_mode`, a plan-only route.
+    /// `ControlSender::run_plan` runs a plan on the attached daemon.
     Streaming,
-    /// `Plan::run` on a handle from `Server::over_control_mode`, the route
+    /// `Server::run_plan` on a handle from `Server::over_control_mode`, the route
     /// the whole typed API can take.
     Routed,
 }

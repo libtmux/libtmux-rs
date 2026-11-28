@@ -187,11 +187,10 @@ Server ──┬── Session ──── Window ──── Pane
 
 A window has one identity and several *links*:
 
-- A command that removes one link names the session too, as `session:@id`.
-  [`Window::unlink`][window-unlink] does exactly that.
-- It reports [`Error::LinkGone`][error-linkgone], not
-  [`Error::ObjectGone`][error-objectgone], when the link is gone, because the
-  window may still run under another session.
+- `window.link().unlink().await?` removes the placement at its observed
+  session and index. The guard checks which window still occupies that index.
+- [`Error::LinkGone`][error-linkgone] means the placement disappeared.
+  [`Error::ObjectGone`][error-objectgone] means the window itself has gone.
 
 ## Find sessions, windows, and panes
 
@@ -936,11 +935,10 @@ or [MIT license](LICENSE-MIT) at your option.
 [pkg-macros]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-macros
 [pkg-workspace]: https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-workspace
 [pkg-mcp]: https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp
-[window-unlink]: https://libtmux.org/en/rs/latest/reference/window-window-unlink/
-[error-linkgone]: https://libtmux.org/en/rs/latest/reference/error-error-linkgone/
-[error-objectgone]: https://libtmux.org/en/rs/latest/reference/error-error-objectgone/
-[session-windows]: https://libtmux.org/en/rs/latest/reference/session-session-windows/
-[default-timeout]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-default_timeout/
+[error-linkgone]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-linkgone/
+[error-objectgone]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-objectgone/
+[session-windows]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-windows/
+[default-timeout]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-default_timeout/
 [libtmux-api]: https://libtmux.org/en/rs/latest/reference/
 [libtmux-docsrs]: https://docs.rs/libtmux-tokio/latest/libtmux_tokio/
 [libtmux-examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-tokio/examples
@@ -956,60 +954,60 @@ or [MIT license](LICENSE-MIT) at your option.
 [mcp-connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
 [mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/README.md
 
-[`Error::UnsupportedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/error-error-unsupportedtmuxversion/
-[`Server`]: https://libtmux.org/en/rs/latest/reference/server-server/
-[`ServerBuilder::tmux_executable`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-tmux_executable/
-[`FilterExpr<T>`]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
-[`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/server-server-cmd/
-[`Server::new`]: https://libtmux.org/en/rs/latest/reference/server-server-new/
-[`Server::builder`]: https://libtmux.org/en/rs/latest/reference/server-server-builder/
-[`Server::with_session`]: https://libtmux.org/en/rs/latest/reference/server-server-with_session/
-[`Server::session`]: https://libtmux.org/en/rs/latest/reference/server-server-session/
-[`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/server-server-sessions/
-[`Pane::from_env`]: https://libtmux.org/en/rs/latest/reference/pane-pane-from_env/
-[`Session::new_window`]: https://libtmux.org/en/rs/latest/reference/session-session-new_window/
-[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/pane-pane-split/
-[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_line/
-[`Pane::send_keys`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_keys/
-[`Pane::send_key_names`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_key_names/
-[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture/
-[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture_with/
-[`Pane::wait_for_text`]: https://libtmux.org/en/rs/latest/reference/pane-pane-wait_for_text/
-[`Pane::wait_for_quiet`]: https://libtmux.org/en/rs/latest/reference/pane-pane-wait_for_quiet/
-[`Pane::stream_output`]: https://libtmux.org/en/rs/latest/reference/pane-pane-stream_output/
-[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/control-controlmode-attach/
-[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/control-controlsender-subscribe/
-[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
-[`QueryIteratorExt::matching`]: https://libtmux.org/en/rs/latest/reference/query-queryiteratorext-matching/
-[`plan::Plan`]: https://libtmux.org/en/rs/latest/reference/plan-plan/
-[`plan::Planner`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner/
-[`test::reap_abandoned_servers`]: https://libtmux.org/en/rs/latest/reference/test-reap_abandoned_servers/
-[`Error::is_object_gone`]: https://libtmux.org/en/rs/latest/reference/error-error-is_object_gone/
-[`Error::is_transient`]: https://libtmux.org/en/rs/latest/reference/error-error-is_transient/
-[`PaneWait`]: https://libtmux.org/en/rs/latest/reference/pane-panewait/
-[`PaneWait::Dead`]: https://libtmux.org/en/rs/latest/reference/pane-panewait-dead/
+[`Error::UnsupportedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-unsupportedtmuxversion/
+[`Server`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server/
+[`ServerBuilder::tmux_executable`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-tmux_executable/
+[`FilterExpr<T>`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterexpr/
+[`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-cmd/
+[`Server::new`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-new/
+[`Server::builder`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-builder/
+[`Server::with_session`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-with_session/
+[`Server::session`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-session/
+[`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-sessions/
+[`Pane::from_env`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-from_env/
+[`Session::new_window`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-new_window/
+[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-split/
+[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-send_line/
+[`Pane::send_keys`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-send_keys/
+[`Pane::send_key_names`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-send_key_names/
+[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-capture/
+[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-capture_with/
+[`Pane::wait_for_text`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-wait_for_text/
+[`Pane::wait_for_quiet`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-wait_for_quiet/
+[`Pane::stream_output`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-stream_output/
+[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlmode-attach/
+[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlsender-subscribe/
+[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable-filter_fields/
+[`QueryIteratorExt::matching`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-queryiteratorext-matching/
+[`plan::Plan`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-plan/
+[`plan::Planner`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner/
+[`test::reap_abandoned_servers`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-test-reap_abandoned_servers/
+[`Error::is_object_gone`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-is_object_gone/
+[`Error::is_transient`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-is_transient/
+[`PaneWait`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-panewait/
+[`PaneWait::Dead`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-panewait-dead/
 [do not poll]: https://libtmux.org/en/rs/latest/topics/waiting-and-retry/
-[`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/server-server-over_control_mode/
-[`Server::wait_for_channel`]: https://libtmux.org/en/rs/latest/reference/server-server-wait_for_channel/
-[`Server::signal_channel`]: https://libtmux.org/en/rs/latest/reference/server-server-signal_channel/
-[`ChannelWait`]: https://libtmux.org/en/rs/latest/reference/server-channelwait/
-[`Session`]: https://libtmux.org/en/rs/latest/reference/session-session/
-[`Window`]: https://libtmux.org/en/rs/latest/reference/window-window/
-[`Pane`]: https://libtmux.org/en/rs/latest/reference/pane-pane/
-[`Client`]: https://libtmux.org/en/rs/latest/reference/client-client/
-[`Server::hierarchy`]: https://libtmux.org/en/rs/latest/reference/server-server-hierarchy/
+[`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-over_control_mode/
+[`Server::wait_for_channel`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-wait_for_channel/
+[`Server::signal_channel`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-signal_channel/
+[`ChannelWait`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-channelwait/
+[`Session`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session/
+[`Window`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window/
+[`Pane`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane/
+[`Client`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-client/
+[`Server::hierarchy`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-hierarchy/
 [Typed field handles]: https://libtmux.org/en/rs/latest/concepts/queries/
-[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-sessiontree/
-[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-windowtree/
-[versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
-[`TmuxText`]: https://libtmux.org/en/rs/latest/reference/formats-text-tmuxtext/
-[`Error`]: https://libtmux.org/en/rs/latest/reference/error-error/
-[`Error::kind`]: https://libtmux.org/en/rs/latest/reference/error-error-kind/
-[`Error::AfterEffect`]: https://libtmux.org/en/rs/latest/reference/error-error-aftereffect/
-[`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/error-errorkind-partialeffect/
-[`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-default_timeout/
-[`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/server-server-shutdown/
-[`libtmux_tokio::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
-[`TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
-[`CommandChain::new(a).then(b)`]: https://libtmux.org/en/rs/latest/reference/command-commandchain/
-[`CommandResult`]: https://libtmux.org/en/rs/latest/reference/command-commandresult/
+[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-sessiontree/
+[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-windowtree/
+[versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterexpr/
+[`TmuxText`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-tmuxtext/
+[`Error`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error/
+[`Error::kind`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-kind/
+[`Error::AfterEffect`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-aftereffect/
+[`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-errorkind-partialeffect/
+[`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-default_timeout/
+[`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-shutdown/
+[`libtmux_tokio::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-test-testserver/
+[`TestServer`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-test-testserver/
+[`CommandChain::new(a).then(b)`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-commandchain/
+[`CommandResult`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-commandresult/

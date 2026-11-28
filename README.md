@@ -624,39 +624,39 @@ Licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT). Part of the
 [tmux-support]: https://libtmux.org/en/tmux/guides/tmux-support/
 [tmux-rc]: https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates
 
-[Typed field handles]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
-[versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
+[Typed field handles]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable-filter_fields/
+[versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterexpr/
 [Three switches]: https://libtmux.org/en/rs/latest/concepts/transports/
-[Folding]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-folding/
-[`Window::refresh`]: https://libtmux.org/en/rs/latest/reference/window-window-refresh/
-[`Window::refreshed`]: https://libtmux.org/en/rs/latest/reference/window-window-refreshed/
-[`Session`]: https://libtmux.org/en/rs/latest/reference/session-session/
-[`Pane`]: https://libtmux.org/en/rs/latest/reference/pane-pane/
-[`Planner::explain`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-explain/
-[`Planner::Sequential`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-sequential/
-[`Planner::Folding`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-folding/
-[`Planner::Marked`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-marked/
-[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/control-controlmode-attach/
-[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/control-controlsender-subscribe/
-[`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/server-server-over_control_mode/
-[Control mode]: https://libtmux.org/en/rs/latest/reference/control-controlmode/
-[`run_shell`]: https://libtmux.org/en/rs/latest/reference/server-server-run_shell/
-[`Filterable`]: https://libtmux.org/en/rs/latest/reference/query-filterable/
-[`libtmux::tokio::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
-[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
-[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_line/
-[`Window::split`]: https://libtmux.org/en/rs/latest/reference/window-window-split/
-[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/pane-pane-split/
-[`Pane::kill`]: https://libtmux.org/en/rs/latest/reference/pane-pane-kill/
-[`Pane::resize`]: https://libtmux.org/en/rs/latest/reference/pane-pane-resize/
-[`Window::resize`]: https://libtmux.org/en/rs/latest/reference/window-window-resize/
-[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture/
-[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture_with/
-[`Window::kill`]: https://libtmux.org/en/rs/latest/reference/window-window-kill/
-[`Session::kill`]: https://libtmux.org/en/rs/latest/reference/session-session-kill/
-[`Server::kill`]: https://libtmux.org/en/rs/latest/reference/server-server-kill/
-[`Session::set_option`]: https://libtmux.org/en/rs/latest/reference/session-session-set_option/
-[`Session::typed_option`]: https://libtmux.org/en/rs/latest/reference/session-session-typed_option/
-[`Session::set_hook`]: https://libtmux.org/en/rs/latest/reference/session-session-set_hook/
-[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-sessiontree/
-[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-windowtree/
+[Folding]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-folding/
+[`Window::refresh`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-refresh/
+[`Window::refreshed`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-refreshed/
+[`Session`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session/
+[`Pane`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane/
+[`Planner::explain`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-explain/
+[`Planner::Sequential`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-sequential/
+[`Planner::Folding`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-folding/
+[`Planner::Marked`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-marked/
+[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlmode-attach/
+[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlsender-subscribe/
+[`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-over_control_mode/
+[Control mode]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlmode/
+[`run_shell`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-run_shell/
+[`Filterable`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable/
+[`libtmux::tokio::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-test-testserver/
+[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable-filter_fields/
+[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-send_line/
+[`Window::split`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-split/
+[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-split/
+[`Pane::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-kill/
+[`Pane::resize`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-resize/
+[`Window::resize`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-resize/
+[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-capture/
+[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-capture_with/
+[`Window::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-kill/
+[`Session::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-kill/
+[`Server::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-kill/
+[`Session::set_option`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-set_option/
+[`Session::typed_option`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-typed_option/
+[`Session::set_hook`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-set_hook/
+[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-sessiontree/
+[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-windowtree/
