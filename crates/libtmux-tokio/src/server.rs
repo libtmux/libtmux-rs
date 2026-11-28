@@ -1341,24 +1341,15 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be run. A daemon that was already
-    /// stopped is not an error.
+    /// Returns an error if tmux cannot be run or refuses the command. A
+    /// daemon already absent at the initial endpoint check counts as stopped.
     pub async fn kill(&self) -> Result<(), Error> {
         let result = self.core.kill_server().await?;
         if result.success() {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(Error::from_refused_result("kill-server", &result, None))
         }
-
-        // tmux exits nonzero when no server was running, which is the state
-        // the caller asked for.
-        if self.is_alive().await {
-            return Err(Error::CommandFailed {
-                command: "kill-server",
-                exit_code: result.exit_code(),
-                stderr: result.stderr_lossy().into_owned(),
-            });
-        }
-        Ok(())
     }
 
     /// Store data in a tmux paste buffer.
@@ -2447,6 +2438,41 @@ mod tests {
             .shutdown()
             .await
             .expect("later clone completes shutdown");
+    }
+
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn kill_distinguishes_a_refused_generation_from_a_stopped_endpoint() {
+        let fixture = crate::test::TestServer::new()
+            .await
+            .expect("private daemon");
+        let server = fixture.server();
+        let generation = server.generation().await.expect("running generation");
+        let stale = server
+            .bound_to(crate::ServerGeneration::from_raw(
+                generation.pid(),
+                generation.unix_start_time().wrapping_sub(1),
+            ))
+            .expect("bind the previous observation");
+
+        let result = stale.kill().await;
+        assert_eq!(
+            server
+                .generation()
+                .await
+                .expect("daemons survive stale kills"),
+            generation
+        );
+        let endpoint = Server::builder()
+            .socket_path(fixture.socket_path())
+            .build()
+            .expect("same private endpoint");
+        fixture.shutdown().await.expect("close private fixture");
+        result.expect_err("tmux refused the stale generation");
+        endpoint
+            .kill()
+            .await
+            .expect("the endpoint is already stopped");
     }
 
     #[tokio::test]
