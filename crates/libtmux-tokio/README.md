@@ -1,8 +1,8 @@
 <!-- libtmux-logo -->
 <div align="center">
   <picture>
-    <source srcset="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux-tokio/assets/logo.svg" type="image/svg+xml">
-    <img src="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux-tokio/assets/logo.png" width="128" height="128" alt="libtmux for Rust">
+    <source srcset="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux/assets/logo.svg" type="image/svg+xml">
+    <img src="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux/assets/logo.png" width="128" height="128" alt="libtmux for Rust">
   </picture>
 </div>
 <!-- /libtmux-logo -->
@@ -11,13 +11,11 @@
 
 # libtmux-tokio
 
-[![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]
+[![CI]][actions] [![MSRV]][rust-1.85]
 [![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/rs/)
 
-[crates.io]: https://img.shields.io/crates/v/libtmux-tokio.svg?label=libtmux-tokio
-[crate]: https://crates.io/crates/libtmux-tokio
-[docs.rs]: https://img.shields.io/docsrs/libtmux-tokio
-[docs]: https://docs.rs/libtmux-tokio
+[CI]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml/badge.svg
+[actions]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml
 [MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
 [rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
 
@@ -858,7 +856,7 @@ are in this library and need no feature.
 This crate: the async tmux client and object model. [`examples/`][libtmux-examples]
 holds longer programs.
 
-[API reference][libtmux-api] · [docs.rs][libtmux-docsrs]
+[API reference][libtmux-api] · [Source examples][libtmux-examples]
 
 ### [`libtmux-macros`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-macros)
 
@@ -969,8 +967,8 @@ $ claude mcp add tmux \
 
 | | |
 | --- | --- |
-| [API documentation](https://docs.rs/libtmux) | The public surface, one page per item, with runnable examples |
-| [API reference][libtmux-api] | The same surface on libtmux.org, with guides and concepts beside it |
+| `cargo doc --locked -p libtmux-tokio --all-features --open` | Browse the API and examples from this checkout |
+| [Published Rust reference][libtmux-api] | Browse the released API and its guides on libtmux.org |
 | [`docs/design.md`][design] | Why the crate is shaped the way it is: the transport, the snapshot and format boundary, the query grammar, the test guard, and the compatibility lanes |
 | [`docs/findings.md`][findings] | Every tmux defect and platform surprise the crate works around, each with the tmux releases it holds for and what the crate does |
 | [`docs/contracts.md`][contracts] | What the crate promises: the version check, deadlines, errors, and the test guard |
@@ -983,20 +981,20 @@ $ claude mcp add tmux \
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
 or [MIT license](LICENSE-MIT) at your option.
 
-[design]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/design.md
-[findings]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/findings.md
-[contracts]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/contracts.md
-[contract-version]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/contracts.md#the-tmux-version-check
-[contract-narrow]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/contracts.md#operations-with-narrower-requirements
-[contract-nested]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/contracts.md#commands-nested-in-another-command
+[design]: docs/design.md
+[findings]: docs/findings.md
+[contracts]: docs/contracts.md
+[contract-version]: docs/contracts.md#the-tmux-version-check
+[contract-narrow]: docs/contracts.md#operations-with-narrower-requirements
+[contract-nested]: docs/contracts.md#commands-nested-in-another-command
 [tmux-support]: https://libtmux.org/en/tmux/guides/tmux-support/
 [tmux-rc]: https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates
-[contract-cancellation]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/contracts.md#deadlines-cancellation-and-shutdown
-[contract-errors]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/contracts.md#errors
-[contract-test-guard]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/docs/contracts.md#the-test-guard
-[example-orchestrate]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/examples/orchestrate.rs
-[example-watch]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/examples/watch.rs
-[example-recover]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-tokio/examples/recover.rs
+[contract-cancellation]: docs/contracts.md#deadlines-cancellation-and-shutdown
+[contract-errors]: docs/contracts.md#errors
+[contract-test-guard]: docs/contracts.md#the-test-guard
+[example-orchestrate]: examples/orchestrate.rs
+[example-watch]: examples/watch.rs
+[example-recover]: examples/recover.rs
 [pkg-macros]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-macros
 [pkg-workspace]: https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-workspace
 [pkg-mcp]: https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp
@@ -1005,8 +1003,7 @@ or [MIT license](LICENSE-MIT) at your option.
 [session-windows]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-windows/
 [default-timeout]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-default_timeout/
 [libtmux-api]: https://libtmux.org/en/rs/latest/reference/
-[libtmux-docsrs]: https://docs.rs/libtmux-tokio/latest/libtmux_tokio/
-[libtmux-examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-tokio/examples
+[libtmux-examples]: examples/
 [macros-docsrs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
 [macros-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-macros/README.md
 [workspace-cli]: https://libtmux.org/en/rs/latest/workspace/cli/
