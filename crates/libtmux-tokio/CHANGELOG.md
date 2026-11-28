@@ -45,6 +45,12 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- `Server::run_plan` excludes `after-capture-pane` hook output from
+  `CapturePane` results, including captures that retain ANSI escapes.
+  Failed captures return an error without pane bytes, retaining earlier
+  operation reports through `Error::PlanInterrupted`.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - A subprocess request now returns its timeout and pending-cleanup evidence
   when all Tokio blocking workers stay occupied past the cleanup allowance.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
