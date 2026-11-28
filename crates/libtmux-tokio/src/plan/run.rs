@@ -14,6 +14,8 @@ use std::str::FromStr as _;
 
 use super::{Op, OperationKind, Part, Plan, Scope, Step};
 use super::{Planner, layouts};
+#[cfg(feature = "control-mode")]
+use crate::control::ControlSender;
 use crate::error::ListingDecodeError;
 use crate::formats::FormatCodecError;
 use crate::{
@@ -387,13 +389,18 @@ impl Server {
     ///
     /// Returns a validation or transport error. After an earlier step completes,
     /// [`Error::PlanInterrupted`] retains its typed results and replay evidence.
+    ///
+    /// # Cancel safety
+    ///
+    /// Dropping the future discards the report. Earlier mutations remain
+    /// applied, and tmux may still finish the current invocation.
     pub async fn run_plan(&self, plan: &Plan, planner: Planner) -> Result<PlanResult, Error> {
         Execution(plan).run(self, planner).await
     }
 }
 
 #[cfg(feature = "control-mode")]
-impl crate::control::ControlSender {
+impl ControlSender {
     /// Execute each plan operation against the attached daemon.
     ///
     /// Commands that wait or print ambiguous payloads use a separate native client.
@@ -403,6 +410,12 @@ impl crate::control::ControlSender {
     ///
     /// Returns an error for an unsupported operation or a lost connection.
     /// [`Error::PlanInterrupted`] retains results for earlier completed steps.
+    ///
+    /// # Cancel safety
+    ///
+    /// Dropping the future discards its report. Earlier mutations remain
+    /// applied. The driver drains a submitted control request or closes its
+    /// connection before assigning a reply to another caller.
     pub async fn run_plan(&self, plan: &Plan) -> Result<PlanResult, Error> {
         Execution(plan).run_over_control_mode(self).await
     }
@@ -828,7 +841,7 @@ fn bound_id<T: std::str::FromStr>(
 impl Execution<'_> {
     fn validate_control_layouts(
         &self,
-        sender: &crate::control::ControlSender,
+        sender: &ControlSender,
     ) -> Result<(), Error> {
         let pending = crate::layout::prepare(layouts(self.steps()))?;
         if !pending.is_empty() {
@@ -854,7 +867,7 @@ impl Execution<'_> {
     )]
     async fn run_over_control_mode(
         &self,
-        sender: &crate::control::ControlSender,
+        sender: &ControlSender,
     ) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;

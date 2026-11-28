@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 /// says when a method belongs here.
 const MUST_CARRY: &[(&str, &str, &str)] = &[
     ("src/control.rs", "ControlEvents", "next_event"),
+    ("src/control.rs", "ControlEvents", "next_notice"),
     ("src/control.rs", "ControlMode", "attach"),
     ("src/control.rs", "ControlMode", "attach_with_limits"),
     ("src/control.rs", "ControlMode", "next_event"),
@@ -29,8 +30,8 @@ const MUST_CARRY: &[(&str, &str, &str)] = &[
     ("src/pane/observe.rs", "Pane", "wait_for_quiet"),
     ("src/pane/observe.rs", "Pane", "wait_for_text"),
     ("src/pane/observe.rs", "Pane", "wait_until"),
-    ("src/plan/run.rs", "Plan", "run"),
-    ("src/plan/run.rs", "Plan", "run_over_control_mode"),
+    ("src/plan/run.rs", "Server", "run_plan"),
+    ("src/plan/run.rs", "ControlSender", "run_plan"),
     ("src/server.rs", "Server", "new_session"),
     ("src/server.rs", "Server", "run_shell"),
     ("src/server.rs", "Server", "with_session"),
