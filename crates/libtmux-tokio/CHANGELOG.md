@@ -45,6 +45,10 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- A subprocess request now returns its timeout and pending-cleanup evidence
+  when all Tokio blocking workers stay occupied past the cleanup allowance.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - All subprocess calls acquire the child before registering its pipes with
   Tokio. When registration fails after spawn, the client reaps the child
   and reports the operation’s uncertain effect. A runtime shutting down
