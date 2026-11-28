@@ -1,50 +1,41 @@
 //! Watching a tmux server over control mode.
 //!
-//! Every other API in this crate spawns a tmux process per command. Control
-//! mode opens one connection and keeps it: commands go down it, and tmux
-//! reports what happens on the server as it happens. That is the difference
-//! between asking tmux what is true and being told when it changes.
+//! A control client keeps one tmux connection open for commands and
+//! notifications. Its Tokio task drains replies even while the subscriber
+//! is idle. If buffered notices exceed the configured limits, the subscriber
+//! receives a [`ControlNotice::Gap`].
 //!
-//! Sending and watching are separate handles, so one task can act on what
-//! another sees:
+//! List the windows when tmux reports that a window was added:
 //!
 //! ```no_run
 //! # async fn watch(server: &libtmux_tokio::Server, id: &libtmux_tokio::SessionId) -> Result<(), libtmux_tokio::Error> {
-//! use libtmux_tokio::control::{ControlMode, Event};
+//! use libtmux_tokio::{Command, Error};
+//! use libtmux_tokio::control::{ControlMode, ControlNotice, Event};
 //!
 //! let (commands, mut events) = ControlMode::attach(server, id).await?.split();
-//!
-//! // Commands travel down the connection, so none of these spawn a process.
-//! let listed = commands.send(libtmux_tokio::Command::new("list-windows").arg("-F").arg("#{window_id}")).await?;
-//! assert!(listed.succeeded());
-//!
-//! // The watcher reads, and only reads. A reply arrives on the connection
-//! // the events arrive on, so a loop that stops reading in order to await one
-//! // is waiting on the connection it stopped reading.
-//! let watcher = tokio::spawn(async move {
-//!     while let Some(event) = events.next_event().await {
-//!         match event? {
-//!             Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
-//!             Event::Exit { .. } => break,
-//!             other => println!("{other:?}"),
+//! let observed = async {
+//!     while let Some(notice) = events.next_notice().await {
+//!         match notice? {
+//!             ControlNotice::Event(Event::WindowAdded { .. }) | ControlNotice::Gap { .. } => {
+//!                 let reply = commands.send(Command::new("list-windows").arg("-F").arg("#{window_id}")).await?;
+//!                 if let Some(error) = reply.refusal_for("list-windows") {
+//!                     return Err(error);
+//!                 }
+//!                 println!("{} windows in the session", reply.output().len());
+//!                 break;
+//!             }
+//!             ControlNotice::Event(Event::Exit { .. }) => break,
+//!             _ => {}
 //!         }
 //!     }
-//!
-//!     // Explicit shutdown also closes a connection before stream exhaustion.
-//!     events.shutdown().await
-//! });
-//!
-//! // Acting on what the watcher sees happens out here, on the other handle,
-//! // which is what having two of them is for.
-//! commands.send(libtmux_tokio::Command::new("list-panes").arg("-F").arg("#{pane_id}")).await?;
-//!
-//! let _ = watcher.await;
-//! Ok(())
+//!     Ok(())
+//! }.await;
+//! Error::after_cleanup(observed, events.shutdown().await)
 //! # }
 //! ```
 //!
-//! `examples/watch.rs` is this as a program that runs, against a server it
-//! starts and cleans up.
+//! `examples/watch.rs` creates a private session and observes window changes
+//! while another task sends commands.
 
 use std::future::{Future as _, poll_fn};
 use std::pin::Pin;
@@ -190,10 +181,8 @@ impl std::fmt::Debug for BlockResult {
 
 /// One control-mode connection to a tmux server.
 ///
-/// Sending and receiving are separate handles, reachable through [`split`].
-/// That is not decoration: the point of control mode is to act on what you
-/// observe, and a single object would need `&mut` for both, so a task awaiting
-/// an event could never send the command that event implies.
+/// Use [`split`] to get a cloneable command sender and a single event
+/// receiver. The subscriber can await a command in response to an event.
 ///
 /// [`split`]: ControlMode::split
 #[derive(Debug)]

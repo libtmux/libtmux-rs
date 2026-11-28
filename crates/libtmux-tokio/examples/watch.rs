@@ -42,9 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (commands, mut events) = control.split();
     println!("one connection to {}", socket.display());
 
-    // The watcher gets its own task. Sending and watching are separate
-    // handles precisely so neither has to wait for the other, and a loop that
-    // only reads is the shape that keeps the connection moving.
+    // The connection task drains replies while this subscriber watches window changes.
     let watcher = tokio::spawn(async move {
         let mut seen = Vec::new();
         while let Some(event) = events.next_event().await {
