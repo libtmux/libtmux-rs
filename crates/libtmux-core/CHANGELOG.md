@@ -22,3 +22,8 @@ Notable changes to `libtmux-core`.
   Its error describes the uncertainty and asks callers to inspect the server
   before repeating, without including diagnostic or receipt payloads.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
+### Fixed
+
+- `FilterSchema` links its expression type with `query` enabled and `schema`
+  disabled. `PaneProgressState` links `PaneFields` when `query` is enabled.
