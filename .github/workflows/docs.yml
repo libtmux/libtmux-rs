@@ -52,7 +52,7 @@ jobs:
   # A pull request builds `latest` without publishing; this port has no
   # preview role.
   build:
-    uses: libtmux/docs/.github/workflows/port-docs.yml@f2e7244263b4e7ee2185b46dc91e43416625a9a1
+    uses: libtmux/docs/.github/workflows/port-docs.yml@fa35fabb2c6efe43ef2068bec4dfc0fd0e537d40
     with:
       port: rs
       tag-prefix: libtmux@
@@ -111,7 +111,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: libtmux/docs
-          ref: f2e7244263b4e7ee2185b46dc91e43416625a9a1
+          ref: fa35fabb2c6efe43ef2068bec4dfc0fd0e537d40
           path: verifier
           sparse-checkout: scripts/verify-rust-archives.mjs
           sparse-checkout-cone-mode: false
@@ -140,7 +140,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@f2e7244263b4e7ee2185b46dc91e43416625a9a1
+    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@fa35fabb2c6efe43ef2068bec4dfc0fd0e537d40
     with:
       # Unprefixed by locale: reusable-deploy prepends <locale>/ itself when
       # `port` is set, so this becomes en/rs/<version>.
