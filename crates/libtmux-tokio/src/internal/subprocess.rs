@@ -93,17 +93,6 @@ impl RequestContext {
             error
         }
     }
-
-    fn cleanup_failed(&self, primary: Error, cleanup: Error) -> Error {
-        if self.operation.is_some() {
-            Error::OperationAndCleanup {
-                primary: Box::new(primary),
-                cleanup: Box::new(cleanup),
-            }
-        } else {
-            cleanup
-        }
-    }
 }
 
 #[cfg(test)]
@@ -132,6 +121,7 @@ pub(crate) struct TestHooks {
     pipe_registration_failure: Option<PipeRegistrationFailure>,
     reader_failure: Option<ReaderFailure>,
     reader_failure_release: Option<Arc<Notify>>,
+    reported_group_signal_failure: Option<io::ErrorKind>,
     wait_failure_release: Option<Arc<Notify>>,
     supervisor_failure_reached: Option<Arc<Notify>>,
     supervisor_failure_release: Option<Arc<Notify>>,
@@ -676,12 +666,10 @@ fn start_native_child(
             {
                 process_group.disarm();
             }
-            return Err(
-                match cleanup_result(group, kill, waited.map(|_| ()), context) {
-                    Ok(()) => primary,
-                    Err(cleanup) => context.cleanup_failed(primary, cleanup),
-                },
-            );
+            return Err(with_cleanup(
+                primary,
+                cleanup_result(group, kill, waited.map(|_| ()), context),
+            ));
         }
     };
     let readers = ReaderTasks::spawn(
@@ -983,47 +971,36 @@ async fn supervise_outer(
         CatchUnwindFuture::new(inner).await
     };
 
+    let outcome = outcome.unwrap_or_else(|()| {
+        InnerOutcome::Failed(Error::supervisor_lost(
+            context.request_id(),
+            context.command.clone(),
+        ))
+    });
     let result = match outcome {
-        Ok(InnerOutcome::Complete {
+        InnerOutcome::Complete {
             status,
             stdout,
             stderr,
-        }) => Ok(CommandResult::new(
+        } => Ok(CommandResult::new(
             context.request_id,
             context.command.clone(),
             status,
             stdout,
             stderr,
         )),
-        Ok(InnerOutcome::Failed(error)) => {
+        InnerOutcome::Failed(error) => {
             let cleanup = cleanup_child(
                 &mut ownership.child,
                 &mut ownership.readers,
                 &mut ownership.process_group,
                 &context,
+                #[cfg(test)]
+                hooks.reported_group_signal_failure,
             )
             .await;
             // Reader cancellation settles the collected prefix before its receipt is decoded.
-            let error = context.interrupted(error);
-            match cleanup {
-                Ok(()) => Err(error),
-                Err(wait_error) => Err(context.cleanup_failed(error, wait_error)),
-            }
-        }
-        Err(()) => {
-            let primary = Error::supervisor_lost(context.request_id(), context.command.clone());
-            let cleanup = cleanup_child(
-                &mut ownership.child,
-                &mut ownership.readers,
-                &mut ownership.process_group,
-                &context,
-            )
-            .await;
-            let primary = context.interrupted(primary);
-            match cleanup {
-                Ok(()) => Err(primary),
-                Err(wait_error) => Err(context.cleanup_failed(primary, wait_error)),
-            }
+            Err(with_cleanup(context.interrupted(error), cleanup))
         }
     };
 
@@ -1236,15 +1213,14 @@ async fn cleanup_child(
     readers: &mut ReaderTasks,
     process_group: &mut ProcessGroupGuard,
     context: &RequestContext,
+    #[cfg(test)] reported_group_signal_failure: Option<io::ErrorKind>,
 ) -> Result<(), Error> {
     readers.abort_and_join().await;
-    let group = if context.operation.is_some() {
-        process_group.signal_checked()
-    } else {
-        process_group.signal();
-        Ok(())
-    };
+    let group = process_group.signal_checked();
     let kill = child.start_kill();
+    #[cfg(test)]
+    let group =
+        group.and_then(|()| reported_group_signal_failure.map_or(Ok(()), |kind| Err(kind.into())));
     let waited = loop {
         match child.wait().await {
             Ok(_) => {
@@ -1260,12 +1236,16 @@ async fn cleanup_child(
             }
         }
     };
-    if context.operation.is_some() {
-        cleanup_result(group, kill, waited, context)
-    } else {
-        waited.map_err(|source| {
-            Error::wait_child(context.request_id(), context.command.clone(), source)
-        })
+    cleanup_result(group, kill, waited, context)
+}
+
+fn with_cleanup(primary: Error, cleanup: Result<(), Error>) -> Error {
+    match cleanup {
+        Ok(()) => primary,
+        Err(cleanup) => Error::OperationAndCleanup {
+            primary: Box::new(primary),
+            cleanup: Box::new(cleanup),
+        },
     }
 }
 

@@ -1121,6 +1121,40 @@ async fn wait_failure_is_typed_and_cleanup_reaps_the_child() {
 }
 
 #[tokio::test]
+async fn ordinary_dispatch_keeps_the_primary_failure_and_cleanup_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("child.pid");
+    let release = Arc::new(tokio::sync::Notify::new());
+    let executor = executor("block", TEST_TIMEOUT).with_test_hooks(TestHooks {
+        reader_failure: Some(ReaderFailure::Error),
+        reader_failure_release: Some(Arc::clone(&release)),
+        reported_group_signal_failure: Some(std::io::ErrorKind::PermissionDenied),
+        ..TestHooks::default()
+    });
+    let response = tokio::spawn(executor.execute(request(23, [path.as_os_str().to_owned()])));
+    let pid = read_pids(&path, 1).await[0];
+    release.notify_one();
+    let error = response
+        .await
+        .unwrap()
+        .expect_err("read and cleanup failed");
+    assert!(!error.is_transient());
+    let Error::OperationAndCleanup { primary, cleanup } = error else {
+        panic!("expected the read and cleanup errors, got {error:?}");
+    };
+    assert!(matches!(*primary, Error::ReadOutput { .. }));
+    let Error::WaitChild { source, .. } = *cleanup else {
+        panic!("expected a subprocess cleanup error");
+    };
+    assert!(
+        source
+            .to_string()
+            .contains("process-group signal failed (PermissionDenied)")
+    );
+    assert_process_reaped(pid);
+}
+
+#[tokio::test]
 async fn shell_metacharacters_reach_the_child_as_one_exact_argument() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let side_effect = directory.path().join("must-not-exist");
