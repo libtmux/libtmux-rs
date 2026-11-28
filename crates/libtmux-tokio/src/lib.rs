@@ -85,6 +85,8 @@
 //!
 //! ## Options carry types
 //!
+//! The schema, names and values come from [`libtmux_core::options`].
+//!
 //! tmux reports no type over the command line, so the crate generates the
 //! schema from tmux's own table. That matters more than it sounds: `status`
 //! holds `"on"` but is a choice, because tmux also accepts `2` through `5`.
@@ -343,7 +345,6 @@ pub mod hooks;
 mod internal;
 mod layout;
 mod limits;
-mod options;
 mod pane;
 #[cfg(feature = "plan")]
 pub mod plan;
@@ -384,6 +385,10 @@ pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[cfg(feature = "unstable-fuzzing")]
 #[doc(hidden)]
 pub use internal::environment::__fuzz_environment_listing;
+pub use libtmux_core::options::{
+    OptionKind, OptionSchema, OptionScope, OptionValue, OptionValueRefusal, names as option_names,
+    option_schema,
+};
 pub use libtmux_core::{
     Availability, ClientSnapshot, PaneProgressState, PaneSnapshot, SessionSnapshot, WindowSnapshot,
 };
@@ -393,10 +398,6 @@ pub use libtmux_core::{
 #[cfg(feature = "control-mode")]
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};
-pub use options::{
-    OptionKind, OptionSchema, OptionScope, OptionValue, OptionValueRefusal, names as option_names,
-    option_schema,
-};
 pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 #[cfg(feature = "unstable-fuzzing")]
 #[doc(hidden)]

@@ -5,6 +5,11 @@
 //! therefore generated from tmux's own `options-table.c` rather than guessed
 //! from a value's shape, which would read `on` as a flag and `2` as a number
 //! whatever the option actually is.
+//!
+//! The catalogue is generated from [tmux 3.7's option table][table]. Later
+//! scope requirements are reported separately by [`OptionSchema::required_version`].
+//!
+//! [table]: https://github.com/tmux/tmux/blob/94cb3cec6a39aadefe7b1e81068caa72c9345952/options-table.c
 
 mod generated;
 
@@ -13,14 +18,14 @@ pub use generated::names;
 use std::fmt;
 use std::ops::RangeInclusive;
 
-use crate::formats::TmuxText;
+use crate::TmuxText;
 
 /// What kind of value an option holds.
 ///
 /// # Examples
 ///
 /// ```
-/// use libtmux_tokio::{OptionKind, option_schema};
+/// use libtmux_core::options::{OptionKind, option_schema};
 ///
 /// // `mouse` is a real flag: on or off.
 /// assert_eq!(option_schema("mouse").map(OptionSchema::kind), Some(OptionKind::Flag));
@@ -28,7 +33,7 @@ use crate::formats::TmuxText;
 /// // `status` looks like one and is not: it also accepts a count of status
 /// // lines, so reading it as a boolean discards those values.
 /// assert_eq!(option_schema("status").map(OptionSchema::kind), Some(OptionKind::Choice));
-/// # use libtmux_tokio::OptionSchema;
+/// # use libtmux_core::options::OptionSchema;
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -49,14 +54,32 @@ pub enum OptionKind {
     Command,
 }
 
-pub use libtmux_core::OptionScope;
+pub use crate::OptionScope;
+
+/// Options tmux started keeping at a second scope after the supported floor.
+///
+/// Gating on the current table alone would allow a write that an older tmux
+/// silently places at the other scope, which is the defect this guard exists
+/// to stop.
+const LATE_SCOPES: &[(&str, OptionScope, crate::ReleaseVersion)] = &[
+    (
+        "pane-active-border-style",
+        OptionScope::Pane,
+        crate::since::PANE_BORDER_STYLE_PER_PANE,
+    ),
+    (
+        "pane-border-style",
+        OptionScope::Pane,
+        crate::since::PANE_BORDER_STYLE_PER_PANE,
+    ),
+];
 
 /// What tmux declares about one option.
 ///
 /// # Examples
 ///
 /// ```
-/// use libtmux_tokio::{OptionKind, OptionScope, option_schema};
+/// use libtmux_core::options::{OptionKind, OptionScope, option_schema};
 ///
 /// let schema = option_schema("history-limit").expect("a documented option");
 /// assert_eq!(schema.name(), "history-limit");
@@ -134,6 +157,27 @@ impl OptionSchema {
         self.scopes.contains(&scope)
     }
 
+    /// Return the required version for a scope added after the supported floor.
+    ///
+    /// `None` means no additional version requirement is recorded. Check
+    /// [`Self::accepts`] first: an absent scope also has no requirement here.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_core::{OptionScope, since};
+    /// use libtmux_core::options::option_schema;
+    ///
+    /// assert!(option_schema("pane-border-style").is_some_and(|schema|
+    ///     schema.required_version(OptionScope::Pane) == Some(since::PANE_BORDER_STYLE_PER_PANE)));
+    /// ```
+    #[must_use]
+    pub fn required_version(&self, scope: OptionScope) -> Option<crate::ReleaseVersion> {
+        LATE_SCOPES.iter().find_map(|(name, late, needs)| {
+            (*name == self.name && *late == scope).then_some(*needs)
+        })
+    }
+
     /// Return the words a [`OptionKind::Choice`] option accepts, in tmux's
     /// order.
     ///
@@ -143,7 +187,7 @@ impl OptionSchema {
     /// # Examples
     ///
     /// ```
-    /// use libtmux_tokio::option_schema;
+    /// use libtmux_core::options::option_schema;
     ///
     /// let keys = option_schema("mode-keys").expect("a documented option");
     /// assert_eq!(keys.choices(), ["emacs", "vi"]);
@@ -163,7 +207,7 @@ impl OptionSchema {
     /// # Examples
     ///
     /// ```
-    /// use libtmux_tokio::option_schema;
+    /// use libtmux_core::options::option_schema;
     ///
     /// let limit = option_schema("buffer-limit").expect("a documented option");
     /// assert_eq!(limit.range(), Some(1..=i64::from(i32::MAX)));
@@ -178,9 +222,14 @@ impl OptionSchema {
 
     /// Check a value against what the table declares, before it is sent.
     ///
-    /// The value must be the variant [`typed_option`](crate::Server::typed_option)
-    /// reads back for this option.
-    pub(crate) fn check(&self, value: &OptionValue) -> Result<(), OptionValueRefusal> {
+    /// Flags require [`OptionValue::Flag`], numbers [`OptionValue::Number`],
+    /// and other kinds [`OptionValue::Text`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for the wrong variant, an unlisted choice or an
+    /// out-of-range number. The refusal never retains the supplied value.
+    pub fn check(&self, value: &OptionValue) -> Result<(), OptionValueRefusal> {
         match (self.kind, value) {
             (OptionKind::Number, OptionValue::Number(number)) => match self.range() {
                 Some(range) if !range.contains(number) => {
@@ -215,13 +264,13 @@ impl OptionSchema {
 
 /// Why a typed option write was refused before it reached tmux.
 ///
-/// Carried by [`crate::Error::OptionValueRefused`]. Never holds the value,
-/// which is treated as sensitive like every option value.
+/// Returned by [`OptionSchema::check`]. Never holds the supplied value, which
+/// may contain sensitive text.
 ///
 /// # Examples
 ///
 /// ```
-/// use libtmux_tokio::{OptionKind, OptionValueRefusal};
+/// use libtmux_core::options::{OptionKind, OptionValueRefusal};
 ///
 /// fn advise(refusal: &OptionValueRefusal) -> String {
 ///     match refusal {
@@ -301,7 +350,7 @@ impl fmt::Display for OptionValueRefusal {
 /// # Examples
 ///
 /// ```
-/// use libtmux_tokio::{OptionKind, option_schema};
+/// use libtmux_core::options::{OptionKind, option_schema};
 ///
 /// // `status` looks like a flag but accepts on, off, and 2 through 5, so
 /// // tmux declares it a choice. The schema records that rather than guessing.
@@ -347,83 +396,24 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
 
 /// One option's value, typed by what tmux's own option table declares.
 ///
-/// Every handle reads and writes options the same way:
+/// Flags and numbers use their declared kind. Choices, colours, keys, commands
+/// and user options keep their original text bytes. [`Self::decode`] preserves
+/// text even when it does not parse as the declared kind.
 ///
-/// | To | Call |
-/// | --- | --- |
-/// | read one value | `typed_option`, and on [`Server`] also `typed_global_option` and `typed_global_window_option` |
-/// | read every value set at one scope | `options` |
-/// | list the names set at one scope | `option_names` |
-/// | write a value checked against the table | `set_typed_option`, and on [`Server`] also `set_typed_global_option` and `set_typed_global_window_option` |
-/// | write text unchecked | `set_option`, `append_option`, and on [`Server`] `set_global_option`, `set_global_window_option`, and the array writes |
-///
-/// **Reads** decode by declared kind: a flag arrives as [`Self::Flag`], a
-/// number as [`Self::Number`], and everything else as [`Self::Text`]. Nothing
-/// is lost in decoding: `TmuxText::from(value)` gives back the bytes tmux
-/// stored.
-///
-/// **A typed write** takes the variant a read returns, and checks it against
-/// the table before anything is sent. The wrong variant, a word outside a
-/// choice's set, and a number outside its range each fail with
-/// [`Error::OptionValueRefused`](crate::Error::OptionValueRefused) and leave
-/// the option unchanged. `status` reads `on` and is a choice, not a flag, so
-/// it takes `"on"`, not `true`.
-///
-/// Two writes are not checked, because there is nothing to check against:
-///
-/// - A user option, whose name begins with `@`. tmux keeps no type for one, so
-///   the value is stored as the text a read would show for it -- `true` as
-///   `on`, `3` as `3` -- and reads back as [`Self::Text`].
-/// - A name the table does not declare. It is sent as written, and tmux
-///   answers for it.
-///
-/// Appending and the array writes have no typed form: tmux appends to text,
-/// and every array option holds text or commands.
-///
-/// The table is generated from the newest tmux release this crate supports.
-/// An older release refuses what it lacks on its own. A newer one may accept a
-/// word the table does not list; `set_option` sends that unchecked.
-///
-/// [`Server`]: crate::Server
+/// [`OptionSchema::check`] validates a typed value before an adapter writes it.
+/// A choice such as `status` takes text (`"on"` or `"2"`), not a flag. Unknown
+/// options have no schema and remain the adapter's responsibility.
 ///
 /// # Examples
 ///
 /// ```
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// use libtmux_tokio::{Error, OptionValue, OptionValueRefusal};
+/// use libtmux_core::TmuxText;
+/// use libtmux_core::options::{OptionValue, option_schema};
 ///
-/// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let server = guard.server();
-/// server.new_session("typed").await?;
-///
-/// // `mouse` is a flag, so it is written and read back as one.
-/// server.set_typed_global_option("mouse", true).await?;
-/// assert_eq!(server.typed_global_option("mouse").await?, Some(OptionValue::Flag(true)));
-///
-/// // `status` also reads `on`, and is *not* a flag: tmux accepts `on`, `off`,
-/// // and `2` through `5`. Inferring the type from the value would call this a
-/// // boolean and then fail on a value that is not one, which is why the
-/// // schema is generated from tmux's own option table instead.
-/// let status = server.typed_global_option("status").await?.expect("status is set");
-/// assert!(matches!(status, OptionValue::Text(_)));
-///
-/// // A word tmux's table does not list for a choice is refused unsent.
-/// let refused = server
-///     .set_typed_global_option("status-position", "sideways")
-///     .await
-///     .expect_err("not a position tmux has");
-/// assert!(matches!(
-///     refused,
-///     Error::OptionValueRefused { reason: OptionValueRefusal::NotAChoice { .. }, .. },
-/// ));
-///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
-/// # Ok(())
-/// # }
+/// assert!(option_schema("mouse").is_some_and(|schema| schema.check(&true.into()).is_ok()));
+/// assert_eq!(OptionValue::decode("mouse", TmuxText::from("on")), OptionValue::Flag(true));
+/// let status = OptionValue::decode("status", TmuxText::from("on"));
+/// assert_eq!(TmuxText::from(status).as_bytes(), b"on");
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -496,7 +486,7 @@ impl From<TmuxText> for OptionValue {
 /// # Examples
 ///
 /// ```
-/// use libtmux_tokio::{OptionValue, TmuxText};
+/// use libtmux_core::{TmuxText, options::OptionValue};
 ///
 /// assert_eq!(TmuxText::from(OptionValue::Flag(true)), "on");
 /// assert_eq!(TmuxText::from(OptionValue::Number(-3)), "-3");
@@ -519,7 +509,8 @@ impl OptionValue {
     /// A value that does not match its declared kind stays [`OptionValue::Text`]
     /// rather than being discarded, because tmux stored it and the caller may
     /// still want it.
-    pub(crate) fn decode(name: &str, value: TmuxText) -> Self {
+    #[must_use]
+    pub fn decode(name: &str, value: TmuxText) -> Self {
         match option_schema(name).map(OptionSchema::kind) {
             Some(OptionKind::Flag) => value
                 .as_flag()

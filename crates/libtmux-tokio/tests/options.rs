@@ -5,6 +5,7 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+use libtmux_core::options::OptionValue as CoreOptionValue;
 use libtmux_tokio::test::TestServer;
 use libtmux_tokio::{EnvironmentEntry, OptionValue};
 use libtmux_tokio::{NewWindowOptions, TmuxText};
@@ -15,6 +16,16 @@ fn bytes(value: Option<impl Into<TmuxText>>) -> Vec<u8> {
         .into()
         .as_bytes()
         .to_vec()
+}
+
+#[test]
+fn option_catalogue_and_values_are_shared_with_core() {
+    let value: CoreOptionValue = OptionValue::Flag(true);
+    assert_eq!(value, true.into());
+    assert!(std::ptr::eq(
+        libtmux_tokio::option_schema("mouse").expect("a documented option"),
+        libtmux_core::options::option_schema("mouse").expect("a documented option"),
+    ));
 }
 
 #[tokio::test]

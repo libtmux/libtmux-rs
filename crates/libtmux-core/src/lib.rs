@@ -15,6 +15,7 @@ pub mod formats;
 mod framed;
 mod new_session;
 mod operand;
+pub mod options;
 mod ordinary_capture;
 mod ordinary_creation;
 mod ordinary_read;

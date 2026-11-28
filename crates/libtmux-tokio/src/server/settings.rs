@@ -186,6 +186,50 @@ impl Server {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg_attr(
+        feature = "test-support",
+        doc = r#"
+With `test-support`, a private fixture checks typed reads and refused writes:
+
+```
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+# runtime.block_on(async {
+use libtmux_tokio::{Error, NewSession, OptionValue, OptionValueRefusal};
+
+let guard = libtmux_tokio::test::TestServer::new().await?;
+let server = guard.server();
+server.new_session(NewSession::new("typed")).await?;
+
+// `mouse` is a flag, so it is written and read back as one.
+server.set_typed_global_option("mouse", true).await?;
+assert_eq!(server.typed_global_option("mouse").await?, Some(OptionValue::Flag(true)));
+
+// `status` also reads `on`, and is *not* a flag: tmux accepts `on`, `off`,
+// and `2` through `5`. Inferring the type from the value would call this a
+// boolean and then fail on a value that is not one, which is why the
+// schema is generated from tmux's own option table instead.
+let status = server.typed_global_option("status").await?.expect("status is set");
+assert!(matches!(status, OptionValue::Text(_)));
+
+// A word tmux's table does not list for a choice is refused unsent.
+let refused = server
+    .set_typed_global_option("status-position", "sideways")
+    .await
+    .expect_err("not a position tmux has");
+assert!(matches!(
+    refused,
+    Error::OptionValueRefused { reason: OptionValueRefusal::NotAChoice { .. }, .. },
+));
+
+guard.shutdown().await?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+# })?;
+# Ok(())
+# }
+```
+"#
+    )]
     pub async fn set_typed_global_option(
         &self,
         name: &str,

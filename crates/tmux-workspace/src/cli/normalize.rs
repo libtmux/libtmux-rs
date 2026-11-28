@@ -129,7 +129,7 @@ pub(super) fn pairs(value: &Value, options: bool) -> Result<Vec<(String, String)
 /// applied to each of the workspace's own windows, where what the document
 /// asked for takes effect.
 fn window_scoped(options: &mut Vec<(String, String)>) -> Vec<(String, String)> {
-    use libtmux_tokio::{OptionScope, option_schema};
+    use libtmux_core::options::{OptionScope, option_schema};
 
     let mut moved = Vec::new();
     options.retain(|(name, value)| {

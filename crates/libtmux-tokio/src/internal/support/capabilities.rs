@@ -213,7 +213,7 @@ pub(crate) const PANE_BORDER_STYLE_PER_PANE: Capability = Capability {
     since: since::PANE_BORDER_STYLE_PER_PANE,
     handling: Handling::Refuse,
     error: UNSUPPORTED,
-    apis: &["libtmux_tokio.OptionSchema.accepts"],
+    apis: &["libtmux_core.options.OptionSchema.required_version"],
     commands: &[("set-option", &["-p"])],
 };
 

@@ -188,7 +188,7 @@
     },
     {
       "apis": [
-        "libtmux_tokio.OptionSchema.accepts"
+        "libtmux_core.options.OptionSchema.required_version"
       ],
       "commands": [
         {

@@ -1470,11 +1470,11 @@ pub(super) async fn capture(session: &Session) -> Result<Value> {
     Ok(value)
 }
 
-fn option_value(value: libtmux_tokio::OptionValue) -> Value {
+fn option_value(value: libtmux_core::options::OptionValue) -> Value {
     match value {
-        libtmux_tokio::OptionValue::Flag(value) => json!(value),
-        libtmux_tokio::OptionValue::Number(value) => json!(value),
-        libtmux_tokio::OptionValue::Text(value) => json!(value.to_string_lossy()),
+        libtmux_core::options::OptionValue::Flag(value) => json!(value),
+        libtmux_core::options::OptionValue::Number(value) => json!(value),
+        libtmux_core::options::OptionValue::Text(value) => json!(value.to_string_lossy()),
         _ => Value::Null,
     }
 }

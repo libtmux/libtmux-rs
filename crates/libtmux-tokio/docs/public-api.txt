@@ -5,223 +5,6 @@ assoc_const libtmux_tokio::DispatchLimits::DEFAULT_IN_FLIGHT: usize
 assoc_const libtmux_tokio::DispatchLimits::DEFAULT_PARKED: usize
 assoc_const libtmux_tokio::OutputLimits::DEFAULT_STDERR_BYTES: usize
 assoc_const libtmux_tokio::OutputLimits::DEFAULT_STDOUT_BYTES: usize
-constant libtmux_tokio::option_names::ACTIVITY_ACTION: &str
-constant libtmux_tokio::option_names::AFTER_BIND_KEY: &str
-constant libtmux_tokio::option_names::AFTER_CAPTURE_PANE: &str
-constant libtmux_tokio::option_names::AFTER_COPY_MODE: &str
-constant libtmux_tokio::option_names::AFTER_DISPLAY_MESSAGE: &str
-constant libtmux_tokio::option_names::AFTER_DISPLAY_PANES: &str
-constant libtmux_tokio::option_names::AFTER_KILL_PANE: &str
-constant libtmux_tokio::option_names::AFTER_LIST_BUFFERS: &str
-constant libtmux_tokio::option_names::AFTER_LIST_CLIENTS: &str
-constant libtmux_tokio::option_names::AFTER_LIST_KEYS: &str
-constant libtmux_tokio::option_names::AFTER_LIST_PANES: &str
-constant libtmux_tokio::option_names::AFTER_LIST_SESSIONS: &str
-constant libtmux_tokio::option_names::AFTER_LIST_WINDOWS: &str
-constant libtmux_tokio::option_names::AFTER_LOAD_BUFFER: &str
-constant libtmux_tokio::option_names::AFTER_LOCK_SERVER: &str
-constant libtmux_tokio::option_names::AFTER_NEW_SESSION: &str
-constant libtmux_tokio::option_names::AFTER_NEW_WINDOW: &str
-constant libtmux_tokio::option_names::AFTER_PASTE_BUFFER: &str
-constant libtmux_tokio::option_names::AFTER_PIPE_PANE: &str
-constant libtmux_tokio::option_names::AFTER_QUEUE: &str
-constant libtmux_tokio::option_names::AFTER_REFRESH_CLIENT: &str
-constant libtmux_tokio::option_names::AFTER_RENAME_SESSION: &str
-constant libtmux_tokio::option_names::AFTER_RENAME_WINDOW: &str
-constant libtmux_tokio::option_names::AFTER_RESIZE_PANE: &str
-constant libtmux_tokio::option_names::AFTER_RESIZE_WINDOW: &str
-constant libtmux_tokio::option_names::AFTER_SAVE_BUFFER: &str
-constant libtmux_tokio::option_names::AFTER_SELECT_LAYOUT: &str
-constant libtmux_tokio::option_names::AFTER_SELECT_PANE: &str
-constant libtmux_tokio::option_names::AFTER_SELECT_WINDOW: &str
-constant libtmux_tokio::option_names::AFTER_SEND_KEYS: &str
-constant libtmux_tokio::option_names::AFTER_SET_BUFFER: &str
-constant libtmux_tokio::option_names::AFTER_SET_ENVIRONMENT: &str
-constant libtmux_tokio::option_names::AFTER_SET_HOOK: &str
-constant libtmux_tokio::option_names::AFTER_SET_OPTION: &str
-constant libtmux_tokio::option_names::AFTER_SHOW_ENVIRONMENT: &str
-constant libtmux_tokio::option_names::AFTER_SHOW_MESSAGES: &str
-constant libtmux_tokio::option_names::AFTER_SHOW_OPTIONS: &str
-constant libtmux_tokio::option_names::AFTER_SPLIT_WINDOW: &str
-constant libtmux_tokio::option_names::AFTER_UNBIND_KEY: &str
-constant libtmux_tokio::option_names::AGGRESSIVE_RESIZE: &str
-constant libtmux_tokio::option_names::ALERT_ACTIVITY: &str
-constant libtmux_tokio::option_names::ALERT_BELL: &str
-constant libtmux_tokio::option_names::ALERT_SILENCE: &str
-constant libtmux_tokio::option_names::ALLOW_PASSTHROUGH: &str
-constant libtmux_tokio::option_names::ALLOW_RENAME: &str
-constant libtmux_tokio::option_names::ALLOW_SET_TITLE: &str
-constant libtmux_tokio::option_names::ALTERNATE_SCREEN: &str
-constant libtmux_tokio::option_names::ASSUME_PASTE_TIME: &str
-constant libtmux_tokio::option_names::AUTOMATIC_RENAME: &str
-constant libtmux_tokio::option_names::AUTOMATIC_RENAME_FORMAT: &str
-constant libtmux_tokio::option_names::BACKSPACE: &str
-constant libtmux_tokio::option_names::BASE_INDEX: &str
-constant libtmux_tokio::option_names::BELL_ACTION: &str
-constant libtmux_tokio::option_names::BUFFER_LIMIT: &str
-constant libtmux_tokio::option_names::CLIENT_ACTIVE: &str
-constant libtmux_tokio::option_names::CLIENT_ATTACHED: &str
-constant libtmux_tokio::option_names::CLIENT_DARK_THEME: &str
-constant libtmux_tokio::option_names::CLIENT_DETACHED: &str
-constant libtmux_tokio::option_names::CLIENT_FOCUS_IN: &str
-constant libtmux_tokio::option_names::CLIENT_FOCUS_OUT: &str
-constant libtmux_tokio::option_names::CLIENT_LIGHT_THEME: &str
-constant libtmux_tokio::option_names::CLIENT_RESIZED: &str
-constant libtmux_tokio::option_names::CLIENT_SESSION_CHANGED: &str
-constant libtmux_tokio::option_names::CLOCK_MODE_COLOUR: &str
-constant libtmux_tokio::option_names::CLOCK_MODE_STYLE: &str
-constant libtmux_tokio::option_names::CODEPOINT_WIDTHS: &str
-constant libtmux_tokio::option_names::COMMAND_ALIAS: &str
-constant libtmux_tokio::option_names::COMMAND_ERROR: &str
-constant libtmux_tokio::option_names::COPY_COMMAND: &str
-constant libtmux_tokio::option_names::COPY_MODE_CURRENT_LINE_NUMBER_STYLE: &str
-constant libtmux_tokio::option_names::COPY_MODE_CURRENT_MATCH_STYLE: &str
-constant libtmux_tokio::option_names::COPY_MODE_LINE_NUMBERS: &str
-constant libtmux_tokio::option_names::COPY_MODE_LINE_NUMBER_STYLE: &str
-constant libtmux_tokio::option_names::COPY_MODE_MARK_STYLE: &str
-constant libtmux_tokio::option_names::COPY_MODE_MATCH_STYLE: &str
-constant libtmux_tokio::option_names::COPY_MODE_POSITION_FORMAT: &str
-constant libtmux_tokio::option_names::COPY_MODE_POSITION_STYLE: &str
-constant libtmux_tokio::option_names::COPY_MODE_SELECTION_STYLE: &str
-constant libtmux_tokio::option_names::CURSOR_COLOUR: &str
-constant libtmux_tokio::option_names::CURSOR_STYLE: &str
-constant libtmux_tokio::option_names::DEFAULT_CLIENT_COMMAND: &str
-constant libtmux_tokio::option_names::DEFAULT_COMMAND: &str
-constant libtmux_tokio::option_names::DEFAULT_SHELL: &str
-constant libtmux_tokio::option_names::DEFAULT_SIZE: &str
-constant libtmux_tokio::option_names::DEFAULT_TERMINAL: &str
-constant libtmux_tokio::option_names::DESTROY_UNATTACHED: &str
-constant libtmux_tokio::option_names::DETACH_ON_DESTROY: &str
-constant libtmux_tokio::option_names::DISPLAY_PANES_ACTIVE_COLOUR: &str
-constant libtmux_tokio::option_names::DISPLAY_PANES_COLOUR: &str
-constant libtmux_tokio::option_names::DISPLAY_PANES_TIME: &str
-constant libtmux_tokio::option_names::DISPLAY_TIME: &str
-constant libtmux_tokio::option_names::EDITOR: &str
-constant libtmux_tokio::option_names::ESCAPE_TIME: &str
-constant libtmux_tokio::option_names::EXIT_EMPTY: &str
-constant libtmux_tokio::option_names::EXIT_UNATTACHED: &str
-constant libtmux_tokio::option_names::EXTENDED_KEYS: &str
-constant libtmux_tokio::option_names::EXTENDED_KEYS_FORMAT: &str
-constant libtmux_tokio::option_names::FILL_CHARACTER: &str
-constant libtmux_tokio::option_names::FOCUS_EVENTS: &str
-constant libtmux_tokio::option_names::FOCUS_FOLLOWS_MOUSE: &str
-constant libtmux_tokio::option_names::GET_CLIPBOARD: &str
-constant libtmux_tokio::option_names::HISTORY_FILE: &str
-constant libtmux_tokio::option_names::HISTORY_LIMIT: &str
-constant libtmux_tokio::option_names::INITIAL_REPEAT_TIME: &str
-constant libtmux_tokio::option_names::INPUT_BUFFER_SIZE: &str
-constant libtmux_tokio::option_names::KEY_TABLE: &str
-constant libtmux_tokio::option_names::LOCK_AFTER_TIME: &str
-constant libtmux_tokio::option_names::LOCK_COMMAND: &str
-constant libtmux_tokio::option_names::MAIN_PANE_HEIGHT: &str
-constant libtmux_tokio::option_names::MAIN_PANE_WIDTH: &str
-constant libtmux_tokio::option_names::MENU_BORDER_LINES: &str
-constant libtmux_tokio::option_names::MENU_BORDER_STYLE: &str
-constant libtmux_tokio::option_names::MENU_SELECTED_STYLE: &str
-constant libtmux_tokio::option_names::MENU_STYLE: &str
-constant libtmux_tokio::option_names::MESSAGE_COMMAND_STYLE: &str
-constant libtmux_tokio::option_names::MESSAGE_FORMAT: &str
-constant libtmux_tokio::option_names::MESSAGE_LIMIT: &str
-constant libtmux_tokio::option_names::MESSAGE_LINE: &str
-constant libtmux_tokio::option_names::MESSAGE_STYLE: &str
-constant libtmux_tokio::option_names::MODE_KEYS: &str
-constant libtmux_tokio::option_names::MODE_STYLE: &str
-constant libtmux_tokio::option_names::MONITOR_ACTIVITY: &str
-constant libtmux_tokio::option_names::MONITOR_BELL: &str
-constant libtmux_tokio::option_names::MONITOR_SILENCE: &str
-constant libtmux_tokio::option_names::MOUSE: &str
-constant libtmux_tokio::option_names::OTHER_PANE_HEIGHT: &str
-constant libtmux_tokio::option_names::OTHER_PANE_WIDTH: &str
-constant libtmux_tokio::option_names::PANE_ACTIVE_BORDER_STYLE: &str
-constant libtmux_tokio::option_names::PANE_BASE_INDEX: &str
-constant libtmux_tokio::option_names::PANE_BORDER_FORMAT: &str
-constant libtmux_tokio::option_names::PANE_BORDER_INDICATORS: &str
-constant libtmux_tokio::option_names::PANE_BORDER_LINES: &str
-constant libtmux_tokio::option_names::PANE_BORDER_STATUS: &str
-constant libtmux_tokio::option_names::PANE_BORDER_STYLE: &str
-constant libtmux_tokio::option_names::PANE_COLOURS: &str
-constant libtmux_tokio::option_names::PANE_DIED: &str
-constant libtmux_tokio::option_names::PANE_EXITED: &str
-constant libtmux_tokio::option_names::PANE_FOCUS_IN: &str
-constant libtmux_tokio::option_names::PANE_FOCUS_OUT: &str
-constant libtmux_tokio::option_names::PANE_MODE_CHANGED: &str
-constant libtmux_tokio::option_names::PANE_SCROLLBARS: &str
-constant libtmux_tokio::option_names::PANE_SCROLLBARS_POSITION: &str
-constant libtmux_tokio::option_names::PANE_SCROLLBARS_STYLE: &str
-constant libtmux_tokio::option_names::PANE_SET_CLIPBOARD: &str
-constant libtmux_tokio::option_names::PANE_STATUS_CURRENT_STYLE: &str
-constant libtmux_tokio::option_names::PANE_STATUS_STYLE: &str
-constant libtmux_tokio::option_names::PANE_TITLE_CHANGED: &str
-constant libtmux_tokio::option_names::POPUP_BORDER_LINES: &str
-constant libtmux_tokio::option_names::POPUP_BORDER_STYLE: &str
-constant libtmux_tokio::option_names::POPUP_STYLE: &str
-constant libtmux_tokio::option_names::PREFIX2: &str
-constant libtmux_tokio::option_names::PREFIX: &str
-constant libtmux_tokio::option_names::PREFIX_TIMEOUT: &str
-constant libtmux_tokio::option_names::PROMPT_COMMAND_CURSOR_STYLE: &str
-constant libtmux_tokio::option_names::PROMPT_CURSOR_COLOUR: &str
-constant libtmux_tokio::option_names::PROMPT_CURSOR_STYLE: &str
-constant libtmux_tokio::option_names::PROMPT_HISTORY_LIMIT: &str
-constant libtmux_tokio::option_names::REMAIN_ON_EXIT: &str
-constant libtmux_tokio::option_names::REMAIN_ON_EXIT_FORMAT: &str
-constant libtmux_tokio::option_names::RENUMBER_WINDOWS: &str
-constant libtmux_tokio::option_names::REPEAT_TIME: &str
-constant libtmux_tokio::option_names::SCROLL_ON_CLEAR: &str
-constant libtmux_tokio::option_names::SESSION_CLOSED: &str
-constant libtmux_tokio::option_names::SESSION_CREATED: &str
-constant libtmux_tokio::option_names::SESSION_RENAMED: &str
-constant libtmux_tokio::option_names::SESSION_STATUS_CURRENT_STYLE: &str
-constant libtmux_tokio::option_names::SESSION_STATUS_STYLE: &str
-constant libtmux_tokio::option_names::SESSION_WINDOW_CHANGED: &str
-constant libtmux_tokio::option_names::SET_CLIPBOARD: &str
-constant libtmux_tokio::option_names::SET_TITLES: &str
-constant libtmux_tokio::option_names::SET_TITLES_STRING: &str
-constant libtmux_tokio::option_names::SILENCE_ACTION: &str
-constant libtmux_tokio::option_names::STATUS: &str
-constant libtmux_tokio::option_names::STATUS_BG: &str
-constant libtmux_tokio::option_names::STATUS_FG: &str
-constant libtmux_tokio::option_names::STATUS_FORMAT: &str
-constant libtmux_tokio::option_names::STATUS_INTERVAL: &str
-constant libtmux_tokio::option_names::STATUS_JUSTIFY: &str
-constant libtmux_tokio::option_names::STATUS_KEYS: &str
-constant libtmux_tokio::option_names::STATUS_LEFT: &str
-constant libtmux_tokio::option_names::STATUS_LEFT_LENGTH: &str
-constant libtmux_tokio::option_names::STATUS_LEFT_STYLE: &str
-constant libtmux_tokio::option_names::STATUS_POSITION: &str
-constant libtmux_tokio::option_names::STATUS_RIGHT: &str
-constant libtmux_tokio::option_names::STATUS_RIGHT_LENGTH: &str
-constant libtmux_tokio::option_names::STATUS_RIGHT_STYLE: &str
-constant libtmux_tokio::option_names::STATUS_STYLE: &str
-constant libtmux_tokio::option_names::SYNCHRONIZE_PANES: &str
-constant libtmux_tokio::option_names::TERMINAL_FEATURES: &str
-constant libtmux_tokio::option_names::TERMINAL_OVERRIDES: &str
-constant libtmux_tokio::option_names::TILED_LAYOUT_MAX_COLUMNS: &str
-constant libtmux_tokio::option_names::TREE_MODE_PREVIEW_FORMAT: &str
-constant libtmux_tokio::option_names::TREE_MODE_PREVIEW_STYLE: &str
-constant libtmux_tokio::option_names::UPDATE_ENVIRONMENT: &str
-constant libtmux_tokio::option_names::USER_KEYS: &str
-constant libtmux_tokio::option_names::VARIATION_SELECTOR_ALWAYS_WIDE: &str
-constant libtmux_tokio::option_names::VISUAL_ACTIVITY: &str
-constant libtmux_tokio::option_names::VISUAL_BELL: &str
-constant libtmux_tokio::option_names::VISUAL_SILENCE: &str
-constant libtmux_tokio::option_names::WINDOW_ACTIVE_STYLE: &str
-constant libtmux_tokio::option_names::WINDOW_LINKED: &str
-constant libtmux_tokio::option_names::WINDOW_PANE_CURRENT_STATUS_FORMAT: &str
-constant libtmux_tokio::option_names::WINDOW_PANE_STATUS_FORMAT: &str
-constant libtmux_tokio::option_names::WINDOW_SIZE: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_ACTIVITY_STYLE: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_BELL_STYLE: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_CURRENT_FORMAT: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_CURRENT_STYLE: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_FORMAT: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_LAST_STYLE: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_SEPARATOR: &str
-constant libtmux_tokio::option_names::WINDOW_STATUS_STYLE: &str
-constant libtmux_tokio::option_names::WINDOW_STYLE: &str
-constant libtmux_tokio::option_names::WINDOW_UNLINKED: &str
-constant libtmux_tokio::option_names::WORD_SEPARATORS: &str
-constant libtmux_tokio::option_names::WRAP_SEARCH: &str
-constant libtmux_tokio::option_names::XTERM_KEYS: &str
 enum libtmux_tokio::AccessMode
 enum libtmux_tokio::Availability = libtmux_core::snapshot::Availability
 enum libtmux_tokio::ChannelWait
@@ -234,10 +17,10 @@ enum libtmux_tokio::Layout
 enum libtmux_tokio::LayoutSpec
 enum libtmux_tokio::ObjectKind
 enum libtmux_tokio::OptionErrorKind
-enum libtmux_tokio::OptionKind
+enum libtmux_tokio::OptionKind = libtmux_core::options::OptionKind
 enum libtmux_tokio::OptionScope = libtmux_core::placement::OptionScope
-enum libtmux_tokio::OptionValue
-enum libtmux_tokio::OptionValueRefusal
+enum libtmux_tokio::OptionValue = libtmux_core::options::OptionValue
+enum libtmux_tokio::OptionValueRefusal = libtmux_core::options::OptionValueRefusal
 enum libtmux_tokio::PaneDirection
 enum libtmux_tokio::PaneProgressState = libtmux_core::snapshot::PaneProgressState
 enum libtmux_tokio::PaneSize
@@ -368,12 +151,6 @@ function libtmux_tokio::NewWindowOptions::replace_existing: const fn(self) -> Se
 function libtmux_tokio::NewWindowOptions::select: const fn(self) -> Self
 function libtmux_tokio::NewWindowOptions::start_directory: fn(self, directory: impl Into<libtmux_tokio::TmuxArg>) -> Self
 function libtmux_tokio::NewWindowOptions::unnamed: const fn() -> Self
-function libtmux_tokio::OptionSchema::accepts: fn(&self, scope: libtmux_tokio::OptionScope) -> bool
-function libtmux_tokio::OptionSchema::choices: const fn(&self) -> &'static [&'static str]
-function libtmux_tokio::OptionSchema::kind: const fn(&self) -> libtmux_tokio::OptionKind
-function libtmux_tokio::OptionSchema::name: const fn(&self) -> &'static str
-function libtmux_tokio::OptionSchema::range: fn(&self) -> Option<RangeInclusive<i64>>
-function libtmux_tokio::OptionSchema::scopes: const fn(&self) -> &'static [libtmux_tokio::OptionScope]
 function libtmux_tokio::OutputLimits::max_stderr_bytes: const fn(self, bytes: usize) -> Self
 function libtmux_tokio::OutputLimits::max_stdout_bytes: const fn(self, bytes: usize) -> Self
 function libtmux_tokio::OutputLimits::stderr_bytes: const fn(self) -> usize
@@ -732,7 +509,7 @@ function libtmux_tokio::control::PaneOutput::sender: const fn(&self) -> &libtmux
 function libtmux_tokio::control::PaneOutput::shutdown: async fn(self) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::control::PaneOutput::snapshot: async fn(&mut self, on_output: impl FnMut(&[u8])) -> Result<Vec<libtmux_tokio::TmuxText>, libtmux_tokio::Error>
 function libtmux_tokio::escape_format = libtmux_core::target::escape_format
-function libtmux_tokio::option_schema: fn(name: &str) -> Option<&'static libtmux_tokio::OptionSchema>
+function libtmux_tokio::option_schema = libtmux_core::options::option_schema
 function libtmux_tokio::plan::OperationReport::attribution: const fn(&self) -> Option<libtmux_tokio::plan::Attribution>
 function libtmux_tokio::plan::OperationReport::index: const fn(&self) -> usize
 function libtmux_tokio::plan::OperationReport::kind: const fn(&self) -> OperationKind
@@ -797,10 +574,6 @@ impl Clone for libtmux_tokio::MenuItem
 impl Clone for libtmux_tokio::NewWindowOptions
 impl Clone for libtmux_tokio::ObjectKind
 impl Clone for libtmux_tokio::OptionErrorKind
-impl Clone for libtmux_tokio::OptionKind
-impl Clone for libtmux_tokio::OptionSchema
-impl Clone for libtmux_tokio::OptionValue
-impl Clone for libtmux_tokio::OptionValueRefusal
 impl Clone for libtmux_tokio::OutputLimits
 impl Clone for libtmux_tokio::Pane
 impl Clone for libtmux_tokio::PaneDirection
@@ -849,8 +622,6 @@ impl Copy for libtmux_tokio::Layout
 impl Copy for libtmux_tokio::ListingDecodeError
 impl Copy for libtmux_tokio::ObjectKind
 impl Copy for libtmux_tokio::OptionErrorKind
-impl Copy for libtmux_tokio::OptionKind
-impl Copy for libtmux_tokio::OptionSchema
 impl Copy for libtmux_tokio::OutputLimits
 impl Copy for libtmux_tokio::PaneDirection
 impl Copy for libtmux_tokio::PaneSize
@@ -895,10 +666,6 @@ impl Debug for libtmux_tokio::MenuItem
 impl Debug for libtmux_tokio::NewWindowOptions
 impl Debug for libtmux_tokio::ObjectKind
 impl Debug for libtmux_tokio::OptionErrorKind
-impl Debug for libtmux_tokio::OptionKind
-impl Debug for libtmux_tokio::OptionSchema
-impl Debug for libtmux_tokio::OptionValue
-impl Debug for libtmux_tokio::OptionValueRefusal
 impl Debug for libtmux_tokio::OutputLimits
 impl Debug for libtmux_tokio::Pane
 impl Debug for libtmux_tokio::PaneDirection
@@ -951,7 +718,6 @@ impl Display for libtmux_tokio::Error
 impl Display for libtmux_tokio::Layout
 impl Display for libtmux_tokio::ListingDecodeError
 impl Display for libtmux_tokio::ObjectKind
-impl Display for libtmux_tokio::OptionValueRefusal
 impl Display for libtmux_tokio::Pane
 impl Display for libtmux_tokio::PaneSize
 impl Display for libtmux_tokio::ServerGoneKind
@@ -984,10 +750,6 @@ impl Eq for libtmux_tokio::ListingDecodeError
 impl Eq for libtmux_tokio::MenuItem
 impl Eq for libtmux_tokio::ObjectKind
 impl Eq for libtmux_tokio::OptionErrorKind
-impl Eq for libtmux_tokio::OptionKind
-impl Eq for libtmux_tokio::OptionSchema
-impl Eq for libtmux_tokio::OptionValue
-impl Eq for libtmux_tokio::OptionValueRefusal
 impl Eq for libtmux_tokio::OutputLimits
 impl Eq for libtmux_tokio::Pane
 impl Eq for libtmux_tokio::PaneDirection
@@ -1034,24 +796,12 @@ impl Filterable for libtmux_tokio::WindowTree
 impl From<&OsStr> for libtmux_tokio::LayoutSpec
 impl From<&libtmux_tokio::TmuxText> for libtmux_tokio::LayoutSpec
 impl From<&str> for libtmux_tokio::LayoutSpec
-impl From<&str> for libtmux_tokio::OptionValue
 impl From<Error> for libtmux_tokio::Error
 impl From<OsString> for libtmux_tokio::LayoutSpec
 impl From<String> for libtmux_tokio::LayoutSpec
-impl From<String> for libtmux_tokio::OptionValue
-impl From<bool> for libtmux_tokio::OptionValue
-impl From<i16> for libtmux_tokio::OptionValue
-impl From<i32> for libtmux_tokio::OptionValue
-impl From<i64> for libtmux_tokio::OptionValue
-impl From<i8> for libtmux_tokio::OptionValue
 impl From<libtmux_tokio::Layout> for libtmux_tokio::LayoutSpec
-impl From<libtmux_tokio::OptionValue> for libtmux_tokio::TmuxText
 impl From<libtmux_tokio::SplitDirection> for libtmux_tokio::SplitOptions
-impl From<libtmux_tokio::TmuxText> for libtmux_tokio::OptionValue
 impl From<libtmux_tokio::VersionError> for libtmux_tokio::Error
-impl From<u16> for libtmux_tokio::OptionValue
-impl From<u32> for libtmux_tokio::OptionValue
-impl From<u8> for libtmux_tokio::OptionValue
 impl Hash for libtmux_tokio::CaptureOptions
 impl Hash for libtmux_tokio::CapturedLine
 impl Hash for libtmux_tokio::ChannelWait
@@ -1094,10 +844,6 @@ impl PartialEq for libtmux_tokio::ListingDecodeError
 impl PartialEq for libtmux_tokio::MenuItem
 impl PartialEq for libtmux_tokio::ObjectKind
 impl PartialEq for libtmux_tokio::OptionErrorKind
-impl PartialEq for libtmux_tokio::OptionKind
-impl PartialEq for libtmux_tokio::OptionSchema
-impl PartialEq for libtmux_tokio::OptionValue
-impl PartialEq for libtmux_tokio::OptionValueRefusal
 impl PartialEq for libtmux_tokio::OutputLimits
 impl PartialEq for libtmux_tokio::Pane
 impl PartialEq for libtmux_tokio::PaneDirection
@@ -1145,8 +891,6 @@ impl TrivialClone for libtmux_tokio::Layout
 impl TrivialClone for libtmux_tokio::ListingDecodeError
 impl TrivialClone for libtmux_tokio::ObjectKind
 impl TrivialClone for libtmux_tokio::OptionErrorKind
-impl TrivialClone for libtmux_tokio::OptionKind
-impl TrivialClone for libtmux_tokio::OptionSchema
 impl TrivialClone for libtmux_tokio::OutputLimits
 impl TrivialClone for libtmux_tokio::PaneDirection
 impl TrivialClone for libtmux_tokio::PaneSize
@@ -1179,7 +923,7 @@ impl<T: fmt::Debug, E: fmt::Debug> Debug for libtmux_tokio::ScopeError<T, E>
 impl<T> From<BTreeMap<u32, T>> for libtmux_tokio::SparseValues<T>
 module libtmux_tokio::control
 module libtmux_tokio::hooks
-module libtmux_tokio::option_names
+module libtmux_tokio::option_names = libtmux_core::options::generated::names
 module libtmux_tokio::plan
 module libtmux_tokio::query
 module libtmux_tokio::since = libtmux_core::version::since
@@ -1206,7 +950,7 @@ struct libtmux_tokio::ListingDecodeError
 struct libtmux_tokio::MenuItem
 struct libtmux_tokio::NewSession = libtmux_core::new_session::NewSession
 struct libtmux_tokio::NewWindowOptions
-struct libtmux_tokio::OptionSchema
+struct libtmux_tokio::OptionSchema = libtmux_core::options::OptionSchema
 struct libtmux_tokio::OutputLimits
 struct libtmux_tokio::Pane
 struct libtmux_tokio::PaneFields = libtmux_core::snapshot::PaneFields
@@ -1357,12 +1101,6 @@ struct_field libtmux_tokio::Error::WaitChild::request_id: u64
 struct_field libtmux_tokio::Error::WaitChild::source: io::Error
 struct_field libtmux_tokio::LayoutSpec::Named::0: libtmux_tokio::Layout
 struct_field libtmux_tokio::LayoutSpec::Saved::0: std::ffi::OsString
-struct_field libtmux_tokio::OptionValue::Flag::0: bool
-struct_field libtmux_tokio::OptionValue::Number::0: i64
-struct_field libtmux_tokio::OptionValue::Text::0: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::OptionValueRefusal::NotAChoice::choices: &'static [&'static str]
-struct_field libtmux_tokio::OptionValueRefusal::OutOfRange::range: std::ops::RangeInclusive<i64>
-struct_field libtmux_tokio::OptionValueRefusal::WrongKind::expected: libtmux_tokio::OptionKind
 struct_field libtmux_tokio::PaneSize::Cells::0: u32
 struct_field libtmux_tokio::PaneSize::Percent::0: u32
 struct_field libtmux_tokio::ScopeError::Cleanup::cleanup: libtmux_tokio::Error
@@ -1489,19 +1227,6 @@ variant libtmux_tokio::ObjectKind::Window
 variant libtmux_tokio::OptionErrorKind::Ambiguous
 variant libtmux_tokio::OptionErrorKind::BadValue
 variant libtmux_tokio::OptionErrorKind::Unknown
-variant libtmux_tokio::OptionKind::Choice
-variant libtmux_tokio::OptionKind::Colour
-variant libtmux_tokio::OptionKind::Command
-variant libtmux_tokio::OptionKind::Flag
-variant libtmux_tokio::OptionKind::Key
-variant libtmux_tokio::OptionKind::Number
-variant libtmux_tokio::OptionKind::Text
-variant libtmux_tokio::OptionValue::Flag
-variant libtmux_tokio::OptionValue::Number
-variant libtmux_tokio::OptionValue::Text
-variant libtmux_tokio::OptionValueRefusal::NotAChoice
-variant libtmux_tokio::OptionValueRefusal::OutOfRange
-variant libtmux_tokio::OptionValueRefusal::WrongKind
 variant libtmux_tokio::PaneDirection::Above
 variant libtmux_tokio::PaneDirection::Below
 variant libtmux_tokio::PaneDirection::Left

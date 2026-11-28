@@ -19,8 +19,8 @@ use crate::formats::TmuxText;
 use crate::hooks::IndexedHooks;
 use crate::hooks::ReplaceMode;
 use crate::internal::core::Core;
-use crate::options::{OptionScope, OptionValue};
 use crate::{Command, CommandChain, Error};
+use crate::{OptionScope, OptionValue};
 
 /// Which option table an operation reads or writes.
 #[derive(Clone, Copy, Debug)]
@@ -288,24 +288,6 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
     .await
 }
 
-/// Options tmux started keeping at a second scope after the supported floor.
-///
-/// Gating on the current table alone would allow a write that an older tmux
-/// silently places at the other scope, which is the defect this guard exists
-/// to stop.
-const LATE_SCOPES: &[(&str, OptionScope, crate::version::ReleaseVersion)] = &[
-    (
-        "pane-active-border-style",
-        OptionScope::Pane,
-        crate::version::since::PANE_BORDER_STYLE_PER_PANE,
-    ),
-    (
-        "pane-border-style",
-        OptionScope::Pane,
-        crate::version::since::PANE_BORDER_STYLE_PER_PANE,
-    ),
-];
-
 /// Refuse a write tmux would carry out somewhere other than the handle says.
 ///
 /// tmux picks an option's table from its name, not from the flags the command
@@ -338,16 +320,14 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
 
     // The schema is built from one tmux. Where a scope arrived later than the
     // floor, the running server decides.
-    for (option, late, needs) in LATE_SCOPES {
-        if *option == schema.name() && *late == requested {
-            let found = core.format_version().await?;
-            if !found.has_behavior(needs) {
-                return Err(Error::UnsupportedCapability {
-                    capability: option,
-                    needs: *needs,
-                    found: found.clone(),
-                });
-            }
+    if let Some(needs) = schema.required_version(requested) {
+        let found = core.format_version().await?;
+        if !found.has_behavior(&needs) {
+            return Err(Error::UnsupportedCapability {
+                capability: schema.name(),
+                needs,
+                found: found.clone(),
+            });
         }
     }
 

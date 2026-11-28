@@ -11,6 +11,223 @@ assoc_const libtmux_core::query::Filterable::FILTER_TARGET: &'static str
 assoc_type libtmux_core::plan::Operation::Creates: libtmux_core::plan::FromStep
 assoc_type libtmux_core::query::Filterable::Fields
 assoc_type libtmux_core::query::ReadField::Value<'a> where Target: 'a
+constant libtmux_core::options::names::ACTIVITY_ACTION: &str
+constant libtmux_core::options::names::AFTER_BIND_KEY: &str
+constant libtmux_core::options::names::AFTER_CAPTURE_PANE: &str
+constant libtmux_core::options::names::AFTER_COPY_MODE: &str
+constant libtmux_core::options::names::AFTER_DISPLAY_MESSAGE: &str
+constant libtmux_core::options::names::AFTER_DISPLAY_PANES: &str
+constant libtmux_core::options::names::AFTER_KILL_PANE: &str
+constant libtmux_core::options::names::AFTER_LIST_BUFFERS: &str
+constant libtmux_core::options::names::AFTER_LIST_CLIENTS: &str
+constant libtmux_core::options::names::AFTER_LIST_KEYS: &str
+constant libtmux_core::options::names::AFTER_LIST_PANES: &str
+constant libtmux_core::options::names::AFTER_LIST_SESSIONS: &str
+constant libtmux_core::options::names::AFTER_LIST_WINDOWS: &str
+constant libtmux_core::options::names::AFTER_LOAD_BUFFER: &str
+constant libtmux_core::options::names::AFTER_LOCK_SERVER: &str
+constant libtmux_core::options::names::AFTER_NEW_SESSION: &str
+constant libtmux_core::options::names::AFTER_NEW_WINDOW: &str
+constant libtmux_core::options::names::AFTER_PASTE_BUFFER: &str
+constant libtmux_core::options::names::AFTER_PIPE_PANE: &str
+constant libtmux_core::options::names::AFTER_QUEUE: &str
+constant libtmux_core::options::names::AFTER_REFRESH_CLIENT: &str
+constant libtmux_core::options::names::AFTER_RENAME_SESSION: &str
+constant libtmux_core::options::names::AFTER_RENAME_WINDOW: &str
+constant libtmux_core::options::names::AFTER_RESIZE_PANE: &str
+constant libtmux_core::options::names::AFTER_RESIZE_WINDOW: &str
+constant libtmux_core::options::names::AFTER_SAVE_BUFFER: &str
+constant libtmux_core::options::names::AFTER_SELECT_LAYOUT: &str
+constant libtmux_core::options::names::AFTER_SELECT_PANE: &str
+constant libtmux_core::options::names::AFTER_SELECT_WINDOW: &str
+constant libtmux_core::options::names::AFTER_SEND_KEYS: &str
+constant libtmux_core::options::names::AFTER_SET_BUFFER: &str
+constant libtmux_core::options::names::AFTER_SET_ENVIRONMENT: &str
+constant libtmux_core::options::names::AFTER_SET_HOOK: &str
+constant libtmux_core::options::names::AFTER_SET_OPTION: &str
+constant libtmux_core::options::names::AFTER_SHOW_ENVIRONMENT: &str
+constant libtmux_core::options::names::AFTER_SHOW_MESSAGES: &str
+constant libtmux_core::options::names::AFTER_SHOW_OPTIONS: &str
+constant libtmux_core::options::names::AFTER_SPLIT_WINDOW: &str
+constant libtmux_core::options::names::AFTER_UNBIND_KEY: &str
+constant libtmux_core::options::names::AGGRESSIVE_RESIZE: &str
+constant libtmux_core::options::names::ALERT_ACTIVITY: &str
+constant libtmux_core::options::names::ALERT_BELL: &str
+constant libtmux_core::options::names::ALERT_SILENCE: &str
+constant libtmux_core::options::names::ALLOW_PASSTHROUGH: &str
+constant libtmux_core::options::names::ALLOW_RENAME: &str
+constant libtmux_core::options::names::ALLOW_SET_TITLE: &str
+constant libtmux_core::options::names::ALTERNATE_SCREEN: &str
+constant libtmux_core::options::names::ASSUME_PASTE_TIME: &str
+constant libtmux_core::options::names::AUTOMATIC_RENAME: &str
+constant libtmux_core::options::names::AUTOMATIC_RENAME_FORMAT: &str
+constant libtmux_core::options::names::BACKSPACE: &str
+constant libtmux_core::options::names::BASE_INDEX: &str
+constant libtmux_core::options::names::BELL_ACTION: &str
+constant libtmux_core::options::names::BUFFER_LIMIT: &str
+constant libtmux_core::options::names::CLIENT_ACTIVE: &str
+constant libtmux_core::options::names::CLIENT_ATTACHED: &str
+constant libtmux_core::options::names::CLIENT_DARK_THEME: &str
+constant libtmux_core::options::names::CLIENT_DETACHED: &str
+constant libtmux_core::options::names::CLIENT_FOCUS_IN: &str
+constant libtmux_core::options::names::CLIENT_FOCUS_OUT: &str
+constant libtmux_core::options::names::CLIENT_LIGHT_THEME: &str
+constant libtmux_core::options::names::CLIENT_RESIZED: &str
+constant libtmux_core::options::names::CLIENT_SESSION_CHANGED: &str
+constant libtmux_core::options::names::CLOCK_MODE_COLOUR: &str
+constant libtmux_core::options::names::CLOCK_MODE_STYLE: &str
+constant libtmux_core::options::names::CODEPOINT_WIDTHS: &str
+constant libtmux_core::options::names::COMMAND_ALIAS: &str
+constant libtmux_core::options::names::COMMAND_ERROR: &str
+constant libtmux_core::options::names::COPY_COMMAND: &str
+constant libtmux_core::options::names::COPY_MODE_CURRENT_LINE_NUMBER_STYLE: &str
+constant libtmux_core::options::names::COPY_MODE_CURRENT_MATCH_STYLE: &str
+constant libtmux_core::options::names::COPY_MODE_LINE_NUMBERS: &str
+constant libtmux_core::options::names::COPY_MODE_LINE_NUMBER_STYLE: &str
+constant libtmux_core::options::names::COPY_MODE_MARK_STYLE: &str
+constant libtmux_core::options::names::COPY_MODE_MATCH_STYLE: &str
+constant libtmux_core::options::names::COPY_MODE_POSITION_FORMAT: &str
+constant libtmux_core::options::names::COPY_MODE_POSITION_STYLE: &str
+constant libtmux_core::options::names::COPY_MODE_SELECTION_STYLE: &str
+constant libtmux_core::options::names::CURSOR_COLOUR: &str
+constant libtmux_core::options::names::CURSOR_STYLE: &str
+constant libtmux_core::options::names::DEFAULT_CLIENT_COMMAND: &str
+constant libtmux_core::options::names::DEFAULT_COMMAND: &str
+constant libtmux_core::options::names::DEFAULT_SHELL: &str
+constant libtmux_core::options::names::DEFAULT_SIZE: &str
+constant libtmux_core::options::names::DEFAULT_TERMINAL: &str
+constant libtmux_core::options::names::DESTROY_UNATTACHED: &str
+constant libtmux_core::options::names::DETACH_ON_DESTROY: &str
+constant libtmux_core::options::names::DISPLAY_PANES_ACTIVE_COLOUR: &str
+constant libtmux_core::options::names::DISPLAY_PANES_COLOUR: &str
+constant libtmux_core::options::names::DISPLAY_PANES_TIME: &str
+constant libtmux_core::options::names::DISPLAY_TIME: &str
+constant libtmux_core::options::names::EDITOR: &str
+constant libtmux_core::options::names::ESCAPE_TIME: &str
+constant libtmux_core::options::names::EXIT_EMPTY: &str
+constant libtmux_core::options::names::EXIT_UNATTACHED: &str
+constant libtmux_core::options::names::EXTENDED_KEYS: &str
+constant libtmux_core::options::names::EXTENDED_KEYS_FORMAT: &str
+constant libtmux_core::options::names::FILL_CHARACTER: &str
+constant libtmux_core::options::names::FOCUS_EVENTS: &str
+constant libtmux_core::options::names::FOCUS_FOLLOWS_MOUSE: &str
+constant libtmux_core::options::names::GET_CLIPBOARD: &str
+constant libtmux_core::options::names::HISTORY_FILE: &str
+constant libtmux_core::options::names::HISTORY_LIMIT: &str
+constant libtmux_core::options::names::INITIAL_REPEAT_TIME: &str
+constant libtmux_core::options::names::INPUT_BUFFER_SIZE: &str
+constant libtmux_core::options::names::KEY_TABLE: &str
+constant libtmux_core::options::names::LOCK_AFTER_TIME: &str
+constant libtmux_core::options::names::LOCK_COMMAND: &str
+constant libtmux_core::options::names::MAIN_PANE_HEIGHT: &str
+constant libtmux_core::options::names::MAIN_PANE_WIDTH: &str
+constant libtmux_core::options::names::MENU_BORDER_LINES: &str
+constant libtmux_core::options::names::MENU_BORDER_STYLE: &str
+constant libtmux_core::options::names::MENU_SELECTED_STYLE: &str
+constant libtmux_core::options::names::MENU_STYLE: &str
+constant libtmux_core::options::names::MESSAGE_COMMAND_STYLE: &str
+constant libtmux_core::options::names::MESSAGE_FORMAT: &str
+constant libtmux_core::options::names::MESSAGE_LIMIT: &str
+constant libtmux_core::options::names::MESSAGE_LINE: &str
+constant libtmux_core::options::names::MESSAGE_STYLE: &str
+constant libtmux_core::options::names::MODE_KEYS: &str
+constant libtmux_core::options::names::MODE_STYLE: &str
+constant libtmux_core::options::names::MONITOR_ACTIVITY: &str
+constant libtmux_core::options::names::MONITOR_BELL: &str
+constant libtmux_core::options::names::MONITOR_SILENCE: &str
+constant libtmux_core::options::names::MOUSE: &str
+constant libtmux_core::options::names::OTHER_PANE_HEIGHT: &str
+constant libtmux_core::options::names::OTHER_PANE_WIDTH: &str
+constant libtmux_core::options::names::PANE_ACTIVE_BORDER_STYLE: &str
+constant libtmux_core::options::names::PANE_BASE_INDEX: &str
+constant libtmux_core::options::names::PANE_BORDER_FORMAT: &str
+constant libtmux_core::options::names::PANE_BORDER_INDICATORS: &str
+constant libtmux_core::options::names::PANE_BORDER_LINES: &str
+constant libtmux_core::options::names::PANE_BORDER_STATUS: &str
+constant libtmux_core::options::names::PANE_BORDER_STYLE: &str
+constant libtmux_core::options::names::PANE_COLOURS: &str
+constant libtmux_core::options::names::PANE_DIED: &str
+constant libtmux_core::options::names::PANE_EXITED: &str
+constant libtmux_core::options::names::PANE_FOCUS_IN: &str
+constant libtmux_core::options::names::PANE_FOCUS_OUT: &str
+constant libtmux_core::options::names::PANE_MODE_CHANGED: &str
+constant libtmux_core::options::names::PANE_SCROLLBARS: &str
+constant libtmux_core::options::names::PANE_SCROLLBARS_POSITION: &str
+constant libtmux_core::options::names::PANE_SCROLLBARS_STYLE: &str
+constant libtmux_core::options::names::PANE_SET_CLIPBOARD: &str
+constant libtmux_core::options::names::PANE_STATUS_CURRENT_STYLE: &str
+constant libtmux_core::options::names::PANE_STATUS_STYLE: &str
+constant libtmux_core::options::names::PANE_TITLE_CHANGED: &str
+constant libtmux_core::options::names::POPUP_BORDER_LINES: &str
+constant libtmux_core::options::names::POPUP_BORDER_STYLE: &str
+constant libtmux_core::options::names::POPUP_STYLE: &str
+constant libtmux_core::options::names::PREFIX2: &str
+constant libtmux_core::options::names::PREFIX: &str
+constant libtmux_core::options::names::PREFIX_TIMEOUT: &str
+constant libtmux_core::options::names::PROMPT_COMMAND_CURSOR_STYLE: &str
+constant libtmux_core::options::names::PROMPT_CURSOR_COLOUR: &str
+constant libtmux_core::options::names::PROMPT_CURSOR_STYLE: &str
+constant libtmux_core::options::names::PROMPT_HISTORY_LIMIT: &str
+constant libtmux_core::options::names::REMAIN_ON_EXIT: &str
+constant libtmux_core::options::names::REMAIN_ON_EXIT_FORMAT: &str
+constant libtmux_core::options::names::RENUMBER_WINDOWS: &str
+constant libtmux_core::options::names::REPEAT_TIME: &str
+constant libtmux_core::options::names::SCROLL_ON_CLEAR: &str
+constant libtmux_core::options::names::SESSION_CLOSED: &str
+constant libtmux_core::options::names::SESSION_CREATED: &str
+constant libtmux_core::options::names::SESSION_RENAMED: &str
+constant libtmux_core::options::names::SESSION_STATUS_CURRENT_STYLE: &str
+constant libtmux_core::options::names::SESSION_STATUS_STYLE: &str
+constant libtmux_core::options::names::SESSION_WINDOW_CHANGED: &str
+constant libtmux_core::options::names::SET_CLIPBOARD: &str
+constant libtmux_core::options::names::SET_TITLES: &str
+constant libtmux_core::options::names::SET_TITLES_STRING: &str
+constant libtmux_core::options::names::SILENCE_ACTION: &str
+constant libtmux_core::options::names::STATUS: &str
+constant libtmux_core::options::names::STATUS_BG: &str
+constant libtmux_core::options::names::STATUS_FG: &str
+constant libtmux_core::options::names::STATUS_FORMAT: &str
+constant libtmux_core::options::names::STATUS_INTERVAL: &str
+constant libtmux_core::options::names::STATUS_JUSTIFY: &str
+constant libtmux_core::options::names::STATUS_KEYS: &str
+constant libtmux_core::options::names::STATUS_LEFT: &str
+constant libtmux_core::options::names::STATUS_LEFT_LENGTH: &str
+constant libtmux_core::options::names::STATUS_LEFT_STYLE: &str
+constant libtmux_core::options::names::STATUS_POSITION: &str
+constant libtmux_core::options::names::STATUS_RIGHT: &str
+constant libtmux_core::options::names::STATUS_RIGHT_LENGTH: &str
+constant libtmux_core::options::names::STATUS_RIGHT_STYLE: &str
+constant libtmux_core::options::names::STATUS_STYLE: &str
+constant libtmux_core::options::names::SYNCHRONIZE_PANES: &str
+constant libtmux_core::options::names::TERMINAL_FEATURES: &str
+constant libtmux_core::options::names::TERMINAL_OVERRIDES: &str
+constant libtmux_core::options::names::TILED_LAYOUT_MAX_COLUMNS: &str
+constant libtmux_core::options::names::TREE_MODE_PREVIEW_FORMAT: &str
+constant libtmux_core::options::names::TREE_MODE_PREVIEW_STYLE: &str
+constant libtmux_core::options::names::UPDATE_ENVIRONMENT: &str
+constant libtmux_core::options::names::USER_KEYS: &str
+constant libtmux_core::options::names::VARIATION_SELECTOR_ALWAYS_WIDE: &str
+constant libtmux_core::options::names::VISUAL_ACTIVITY: &str
+constant libtmux_core::options::names::VISUAL_BELL: &str
+constant libtmux_core::options::names::VISUAL_SILENCE: &str
+constant libtmux_core::options::names::WINDOW_ACTIVE_STYLE: &str
+constant libtmux_core::options::names::WINDOW_LINKED: &str
+constant libtmux_core::options::names::WINDOW_PANE_CURRENT_STATUS_FORMAT: &str
+constant libtmux_core::options::names::WINDOW_PANE_STATUS_FORMAT: &str
+constant libtmux_core::options::names::WINDOW_SIZE: &str
+constant libtmux_core::options::names::WINDOW_STATUS_ACTIVITY_STYLE: &str
+constant libtmux_core::options::names::WINDOW_STATUS_BELL_STYLE: &str
+constant libtmux_core::options::names::WINDOW_STATUS_CURRENT_FORMAT: &str
+constant libtmux_core::options::names::WINDOW_STATUS_CURRENT_STYLE: &str
+constant libtmux_core::options::names::WINDOW_STATUS_FORMAT: &str
+constant libtmux_core::options::names::WINDOW_STATUS_LAST_STYLE: &str
+constant libtmux_core::options::names::WINDOW_STATUS_SEPARATOR: &str
+constant libtmux_core::options::names::WINDOW_STATUS_STYLE: &str
+constant libtmux_core::options::names::WINDOW_STYLE: &str
+constant libtmux_core::options::names::WINDOW_UNLINKED: &str
+constant libtmux_core::options::names::WORD_SEPARATORS: &str
+constant libtmux_core::options::names::WRAP_SEARCH: &str
+constant libtmux_core::options::names::XTERM_KEYS: &str
 constant libtmux_core::since::CAPTURE_LINE_FLAGS: libtmux_core::ReleaseVersion
 constant libtmux_core::since::CAPTURE_TRIM_BLANK_CELLS: libtmux_core::ReleaseVersion
 constant libtmux_core::since::CLIENTS_HIDE_STOPPED: libtmux_core::ReleaseVersion
@@ -47,6 +264,9 @@ enum libtmux_core::formats::RequiredContext
 enum libtmux_core::formats::SemanticOwner
 enum libtmux_core::formats::row::FormatCodecErrorKind
 enum libtmux_core::formats::row::FormatCodecPhase
+enum libtmux_core::options::OptionKind
+enum libtmux_core::options::OptionValue
+enum libtmux_core::options::OptionValueRefusal
 enum libtmux_core::plan::Op
 enum libtmux_core::plan::OperationKind
 enum libtmux_core::plan::PaneTarget
@@ -338,6 +558,16 @@ function libtmux_core::formats::row::ParsedSlot::as_bytes: const fn(&self) -> &'
 function libtmux_core::formats::row::ParsedSlot::descriptor: const fn(&self) -> &'static libtmux_core::formats::FormatDescriptor
 function libtmux_core::formats::row::ParsedSlot::field: const fn(&self) -> usize
 function libtmux_core::formats::row::ParsedSlot::raw_start: const fn(&self) -> usize
+function libtmux_core::options::OptionSchema::accepts: fn(&self, scope: libtmux_core::OptionScope) -> bool
+function libtmux_core::options::OptionSchema::check: fn(&self, value: &libtmux_core::options::OptionValue) -> Result<(), libtmux_core::options::OptionValueRefusal>
+function libtmux_core::options::OptionSchema::choices: const fn(&self) -> &'static [&'static str]
+function libtmux_core::options::OptionSchema::kind: const fn(&self) -> libtmux_core::options::OptionKind
+function libtmux_core::options::OptionSchema::name: const fn(&self) -> &'static str
+function libtmux_core::options::OptionSchema::range: fn(&self) -> Option<RangeInclusive<i64>>
+function libtmux_core::options::OptionSchema::required_version: fn(&self, scope: libtmux_core::OptionScope) -> Option<libtmux_core::ReleaseVersion>
+function libtmux_core::options::OptionSchema::scopes: const fn(&self) -> &'static [libtmux_core::OptionScope]
+function libtmux_core::options::OptionValue::decode: fn(name: &str, value: libtmux_core::TmuxText) -> Self
+function libtmux_core::options::option_schema: fn(name: &str) -> Option<&'static libtmux_core::options::OptionSchema>
 function libtmux_core::plan::CapturePane::escape_sequences: const fn(self) -> Self
 function libtmux_core::plan::CapturePane::new: fn(target: impl Into<libtmux_core::plan::PaneTarget>) -> Self
 function libtmux_core::plan::FromStep::from_step: fn(index: usize, plan: &libtmux_core::plan::Plan) -> Self
@@ -579,6 +809,10 @@ impl Clone for libtmux_core::formats::RequiredContext
 impl Clone for libtmux_core::formats::SemanticOwner
 impl Clone for libtmux_core::formats::row::FormatCodecErrorKind
 impl Clone for libtmux_core::formats::row::FormatCodecPhase
+impl Clone for libtmux_core::options::OptionKind
+impl Clone for libtmux_core::options::OptionSchema
+impl Clone for libtmux_core::options::OptionValue
+impl Clone for libtmux_core::options::OptionValueRefusal
 impl Clone for libtmux_core::plan::CapturePane
 impl Clone for libtmux_core::plan::Effects
 impl Clone for libtmux_core::plan::KillPane
@@ -642,6 +876,8 @@ impl Copy for libtmux_core::formats::RequiredContext
 impl Copy for libtmux_core::formats::SemanticOwner
 impl Copy for libtmux_core::formats::row::FormatCodecErrorKind
 impl Copy for libtmux_core::formats::row::FormatCodecPhase
+impl Copy for libtmux_core::options::OptionKind
+impl Copy for libtmux_core::options::OptionSchema
 impl Copy for libtmux_core::plan::Effects
 impl Copy for libtmux_core::plan::OperationKind
 impl Copy for libtmux_core::plan::PaneSlot
@@ -720,6 +956,10 @@ impl Debug for libtmux_core::formats::SemanticOwner
 impl Debug for libtmux_core::formats::row::FormatCodecErrorKind
 impl Debug for libtmux_core::formats::row::FormatCodecPhase
 impl Debug for libtmux_core::formats::row::ParsedSlot<'_>
+impl Debug for libtmux_core::options::OptionKind
+impl Debug for libtmux_core::options::OptionSchema
+impl Debug for libtmux_core::options::OptionValue
+impl Debug for libtmux_core::options::OptionValueRefusal
 impl Debug for libtmux_core::plan::CapturePane
 impl Debug for libtmux_core::plan::Effects
 impl Debug for libtmux_core::plan::KillPane
@@ -776,6 +1016,7 @@ impl Display for libtmux_core::VersionError
 impl Display for libtmux_core::WindowId
 impl Display for libtmux_core::control::ControlCommandRefusal
 impl Display for libtmux_core::control::ControlFault
+impl Display for libtmux_core::options::OptionValueRefusal
 impl Display for libtmux_core::plan::PlanValidationError
 impl Display for libtmux_core::query::ExactlyOneError
 impl Display for libtmux_core::query::FilterExpressionError
@@ -832,6 +1073,10 @@ impl Eq for libtmux_core::formats::RequiredContext
 impl Eq for libtmux_core::formats::SemanticOwner
 impl Eq for libtmux_core::formats::row::FormatCodecErrorKind
 impl Eq for libtmux_core::formats::row::FormatCodecPhase
+impl Eq for libtmux_core::options::OptionKind
+impl Eq for libtmux_core::options::OptionSchema
+impl Eq for libtmux_core::options::OptionValue
+impl Eq for libtmux_core::options::OptionValueRefusal
 impl Eq for libtmux_core::plan::Effects
 impl Eq for libtmux_core::plan::OperationKind
 impl Eq for libtmux_core::plan::PaneSlot
@@ -871,20 +1116,29 @@ impl From<&String> for libtmux_core::TmuxArg
 impl From<&libtmux_core::TmuxText> for libtmux_core::TmuxArg
 impl From<&str> for libtmux_core::TmuxArg
 impl From<&str> for libtmux_core::TmuxText
+impl From<&str> for libtmux_core::options::OptionValue
 impl From<OsString> for libtmux_core::TmuxArg
 impl From<PathBuf> for libtmux_core::TmuxArg
 impl From<String> for libtmux_core::TmuxArg
 impl From<String> for libtmux_core::TmuxText
+impl From<String> for libtmux_core::options::OptionValue
 impl From<Vec<u8>> for libtmux_core::TmuxText
+impl From<bool> for libtmux_core::options::OptionValue
+impl From<i16> for libtmux_core::options::OptionValue
+impl From<i32> for libtmux_core::options::OptionValue
+impl From<i64> for libtmux_core::options::OptionValue
+impl From<i8> for libtmux_core::options::OptionValue
 impl From<libtmux_core::FormatCodecError> for libtmux_core::Error
 impl From<libtmux_core::NewSession> for libtmux_core::plan::Op
 impl From<libtmux_core::PaneId> for libtmux_core::PaneTarget
 impl From<libtmux_core::PaneId> for libtmux_core::plan::PaneTarget
 impl From<libtmux_core::SessionId> for libtmux_core::SessionTarget
 impl From<libtmux_core::SessionId> for libtmux_core::plan::SessionTarget
+impl From<libtmux_core::TmuxText> for libtmux_core::options::OptionValue
 impl From<libtmux_core::VersionError> for libtmux_core::Error
 impl From<libtmux_core::WindowId> for libtmux_core::WindowTarget
 impl From<libtmux_core::WindowId> for libtmux_core::plan::WindowTarget
+impl From<libtmux_core::options::OptionValue> for libtmux_core::TmuxText
 impl From<libtmux_core::plan::CapturePane> for libtmux_core::plan::Op
 impl From<libtmux_core::plan::KillPane> for libtmux_core::plan::Op
 impl From<libtmux_core::plan::KillWindow> for libtmux_core::plan::Op
@@ -901,6 +1155,9 @@ impl From<libtmux_core::plan::Slot<libtmux_core::plan::PaneSlot>> for libtmux_co
 impl From<libtmux_core::plan::Slot<libtmux_core::plan::SessionSlot>> for libtmux_core::plan::SessionTarget
 impl From<libtmux_core::plan::Slot<libtmux_core::plan::WindowSlot>> for libtmux_core::plan::WindowTarget
 impl From<libtmux_core::plan::SplitWindow> for libtmux_core::plan::Op
+impl From<u16> for libtmux_core::options::OptionValue
+impl From<u32> for libtmux_core::options::OptionValue
+impl From<u8> for libtmux_core::options::OptionValue
 impl FromStr for libtmux_core::PaneId
 impl FromStr for libtmux_core::SessionId
 impl FromStr for libtmux_core::SessionName
@@ -1005,6 +1262,10 @@ impl PartialEq for libtmux_core::formats::RequiredContext
 impl PartialEq for libtmux_core::formats::SemanticOwner
 impl PartialEq for libtmux_core::formats::row::FormatCodecErrorKind
 impl PartialEq for libtmux_core::formats::row::FormatCodecPhase
+impl PartialEq for libtmux_core::options::OptionKind
+impl PartialEq for libtmux_core::options::OptionSchema
+impl PartialEq for libtmux_core::options::OptionValue
+impl PartialEq for libtmux_core::options::OptionValueRefusal
 impl PartialEq for libtmux_core::plan::Effects
 impl PartialEq for libtmux_core::plan::OperationKind
 impl PartialEq for libtmux_core::plan::PaneSlot
@@ -1099,6 +1360,8 @@ impl TrivialClone for libtmux_core::formats::RequiredContext
 impl TrivialClone for libtmux_core::formats::SemanticOwner
 impl TrivialClone for libtmux_core::formats::row::FormatCodecErrorKind
 impl TrivialClone for libtmux_core::formats::row::FormatCodecPhase
+impl TrivialClone for libtmux_core::options::OptionKind
+impl TrivialClone for libtmux_core::options::OptionSchema
 impl TrivialClone for libtmux_core::plan::Effects
 impl TrivialClone for libtmux_core::plan::OperationKind
 impl TrivialClone for libtmux_core::plan::PaneSlot
@@ -1259,6 +1522,8 @@ impl<Target> Debug for libtmux_core::PaneFields<Target>
 impl<Target> Debug for libtmux_core::SessionFields<Target>
 impl<Target> Debug for libtmux_core::WindowFields<Target>
 module libtmux_core::control
+module libtmux_core::options
+module libtmux_core::options::names
 module libtmux_core::plan
 module libtmux_core::query
 module libtmux_core::since
@@ -1307,6 +1572,7 @@ struct libtmux_core::control::ControlReply
 struct libtmux_core::control::FrameHeader
 struct libtmux_core::formats::FormatDescriptor
 struct libtmux_core::formats::row::ParsedSlot<'row>
+struct libtmux_core::options::OptionSchema
 struct libtmux_core::plan::CapturePane
 struct libtmux_core::plan::Effects
 struct libtmux_core::plan::KillPane
@@ -1556,6 +1822,12 @@ struct_field libtmux_core::control::Event::WindowRenamed::window: libtmux_core::
 struct_field libtmux_core::control::FrameHeader::flags: u64
 struct_field libtmux_core::control::FrameHeader::number: u64
 struct_field libtmux_core::control::FrameHeader::timestamp: u64
+struct_field libtmux_core::options::OptionValue::Flag::0: bool
+struct_field libtmux_core::options::OptionValue::Number::0: i64
+struct_field libtmux_core::options::OptionValue::Text::0: libtmux_core::TmuxText
+struct_field libtmux_core::options::OptionValueRefusal::NotAChoice::choices: &'static [&'static str]
+struct_field libtmux_core::options::OptionValueRefusal::OutOfRange::range: std::ops::RangeInclusive<i64>
+struct_field libtmux_core::options::OptionValueRefusal::WrongKind::expected: libtmux_core::options::OptionKind
 struct_field libtmux_core::plan::Effects::creates: Option<libtmux_core::plan::Scope>
 struct_field libtmux_core::plan::Effects::destructive: bool
 struct_field libtmux_core::plan::Effects::idempotent: bool
@@ -1791,6 +2063,19 @@ variant libtmux_core::formats::row::FormatCodecPhase::Escape
 variant libtmux_core::formats::row::FormatCodecPhase::Field
 variant libtmux_core::formats::row::FormatCodecPhase::Plan
 variant libtmux_core::formats::row::FormatCodecPhase::RowTerminator
+variant libtmux_core::options::OptionKind::Choice
+variant libtmux_core::options::OptionKind::Colour
+variant libtmux_core::options::OptionKind::Command
+variant libtmux_core::options::OptionKind::Flag
+variant libtmux_core::options::OptionKind::Key
+variant libtmux_core::options::OptionKind::Number
+variant libtmux_core::options::OptionKind::Text
+variant libtmux_core::options::OptionValue::Flag
+variant libtmux_core::options::OptionValue::Number
+variant libtmux_core::options::OptionValue::Text
+variant libtmux_core::options::OptionValueRefusal::NotAChoice
+variant libtmux_core::options::OptionValueRefusal::OutOfRange
+variant libtmux_core::options::OptionValueRefusal::WrongKind
 variant libtmux_core::plan::Op::CapturePane
 variant libtmux_core::plan::Op::KillPane
 variant libtmux_core::plan::Op::KillWindow
