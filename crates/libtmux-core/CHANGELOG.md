@@ -6,6 +6,10 @@ Notable changes to `libtmux-core`.
 
 ### Added
 
+- `options` exposes the shared option catalogue, typed values, validation
+  and later-scope version requirements without a runtime dependency. Tokio
+  re-exports the same types for existing callers.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 - Native capture codecs can return the pane-dead observation preceding a
   capture. Ordinary codecs support bounded history ranges and pending bytes.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
