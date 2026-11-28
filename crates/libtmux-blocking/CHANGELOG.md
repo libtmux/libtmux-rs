@@ -10,6 +10,10 @@ Notable changes to `libtmux-blocking`.
 
 ### Fixed
 
+- A control client waiting for its owner thread to start now honors an
+  expired deadline, cancellation or shutdown before spawning tmux.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - A control subscriber can read the final `%exit` notice and reach the end of
   the stream. An unexpected disconnect delivers its error once after queued
   notices and cleanup.
