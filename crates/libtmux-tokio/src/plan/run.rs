@@ -851,6 +851,7 @@ impl Execution<'_> {
     }
 
     /// Keep separate outcomes for operations submitted through an attached client.
+    ///
     /// Creation consumes its action receipt. Grid capture and client-blocking
     /// operations use ordinary clients on the qualified daemon.
     ///

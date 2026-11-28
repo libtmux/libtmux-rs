@@ -5,12 +5,18 @@ same `NewSession`. Its creation receipt identifies the daemon, session, first
 window and first pane. A caller can create the session synchronously and hand
 the pane key directly to Tokio. [Architecture decision](adr/0001-native-blocking-and-tokio.md)
 
+## Contents
+
+- [Where a change belongs](#where-a-change-belongs)
+- [Identity and effects](#identity-and-effects)
+- [Verification](#verification)
+
 ## Where a change belongs
 
 | Package | Owns |
 | --- | --- |
 | `libtmux-core` | IDs, byte-preserving text and arguments, command encoding, receipt decoding, version rules, offline plans and filters |
-| `libtmux-blocking` | Blocking process I/O, deadlines, cancellation and child cleanup |
+| `libtmux-blocking` | Blocking subprocesses, persistent control, deadlines, cancellation and child cleanup |
 | `libtmux-tokio` | Async process I/O, control connections, live handles and execution of shared plans |
 | `libtmux` | Runtime selection and public re-exports |
 
