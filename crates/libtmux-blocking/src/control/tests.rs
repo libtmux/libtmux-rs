@@ -17,6 +17,25 @@ fn managed() -> Option<(Fixture, ControlMode)> {
 }
 
 #[test]
+fn initial_control_probe_waits_for_a_busy_executable() {
+    let fixture = ProtocolFixture::new("ordinary");
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&fixture.server.executable)
+        .unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(40));
+        drop(writer);
+    });
+    let result = ControlMode::attach(&fixture.server, "$0".parse().unwrap());
+    release.join().unwrap();
+    result
+        .expect("probe runs once the writer closes")
+        .shutdown()
+        .unwrap();
+}
+
+#[test]
 fn pinned_client_qualification_retries_pre_exec_busy_until_the_deadline() {
     use std::os::unix::fs::PermissionsExt as _;
 

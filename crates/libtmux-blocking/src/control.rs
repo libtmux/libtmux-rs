@@ -608,11 +608,14 @@ fn wire(command: &Command, nonce: CreationNonce, limit: usize) -> Result<Vec<u8>
     Ok(line.into_bytes())
 }
 
-fn qualify_client(server: &Server, options: &RequestOptions) -> Result<(), ControlError> {
-    let (output, late) = loop {
-        match server.output(["-V"], options.clone(), None) {
-            // A concurrent fork can retain the copy's writer until exec.
-            // ETXTBSY precedes exec; only this diagnostic probe is retried.
+fn run_probe(
+    options: &RequestOptions,
+    mut dispatch: impl FnMut() -> Result<(std::process::Output, bool), libtmux_core::Error>,
+) -> Result<(std::process::Output, bool), libtmux_core::Error> {
+    loop {
+        match dispatch() {
+            // A fork can hold the executable open for writing until exec.
+            // ETXTBSY confirms the probe never ran.
             Err(libtmux_core::Error::Spawn(source))
                 if source.kind() == std::io::ErrorKind::ExecutableFileBusy =>
             {
@@ -625,9 +628,13 @@ fn qualify_client(server: &Server, options: &RequestOptions) -> Result<(), Contr
                         .min(INTERVAL),
                 );
             }
-            result => break result.map_err(crate::before_submission)?,
+            result => return result.map_err(crate::before_submission),
         }
-    };
+    }
+}
+
+fn qualify_client(server: &Server, options: &RequestOptions) -> Result<(), ControlError> {
+    let (output, late) = run_probe(options, || server.output(["-V"], options.clone(), None))?;
     if late || !output.status.success() {
         return Err(ControlError::protocol(ControlFault::AttachRejected, false));
     }
@@ -646,10 +653,11 @@ fn probe(
     options: &RequestOptions,
 ) -> Result<ControlIdentity, ControlError> {
     let probe = ControlProbe::new(session, fresh_nonce(options)?);
-    let (output, late) = server
-        .children
-        .dispatch_probe(server.command(probe.arguments()), options.clone())
-        .map_err(crate::before_submission)?;
+    let (output, late) = run_probe(options, || {
+        server
+            .children
+            .dispatch_probe(server.command(probe.arguments()), options.clone())
+    })?;
     Ok(probe.decode_ordinary(output.status.code(), &output.stdout, &output.stderr, late)?)
 }
 
