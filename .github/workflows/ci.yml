@@ -294,10 +294,10 @@ jobs:
           restore-keys: bench-criterion-
 
       - name: Benchmark the hierarchy
-        run: cargo bench --locked --features test-support --bench hierarchy
+        run: cargo bench --locked --package libtmux-tokio --features test-support --bench hierarchy
 
       - name: Benchmark the waits
-        run: cargo bench --locked --features test-support,control-mode --bench waits
+        run: cargo bench --locked --package libtmux-tokio --features test-support,control-mode --bench waits
 
       - name: Compare with the previous run
         run: uv run scripts/bench-regressions/bench_regressions.py target/criterion

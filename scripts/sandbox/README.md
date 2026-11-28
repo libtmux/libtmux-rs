@@ -29,7 +29,7 @@ Run the runner by hand around a command:
 $ scripts/sandbox/sandbox_runner.py sh -c 'echo $TMUX_TMPDIR'
 ```
 
-Run the tests here. `crates/libtmux/tests/sandbox_runner.rs` runs the runner
+Run the tests here. `crates/libtmux-tokio/tests/sandbox_runner.rs` runs the runner
 around real tmux servers, and `sandbox_canary.rs` asserts what it did:
 
 ```console

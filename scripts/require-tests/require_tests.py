@@ -9,7 +9,7 @@
 
 A `cargo test` name filter that matches nothing exits 0 with "running 0
 tests", so a renamed test would leave its lane green without running anything.
-Pass the whole command: `require_tests.py cargo test --package libtmux ...`.
+Pass the whole command: `require_tests.py cargo test --package libtmux-tokio ...`.
 The command's output reaches this script's output as it is written. Its exit
 status is returned when it is not zero, and 1 when it passes without a test.
 """

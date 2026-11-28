@@ -12,7 +12,7 @@ runs in it, and `scripts/sandbox` and `scripts/tmux-format-compat` import it.
 ```console
 $ uv run scripts/require-tests/require_tests.py \
     cargo test \
-    --package libtmux \
+    --package libtmux-tokio \
     --test daemon_version_check \
     real_tmux_compat_
 ```

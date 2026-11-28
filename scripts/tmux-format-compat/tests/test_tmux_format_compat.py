@@ -7,6 +7,7 @@ workspace.
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import signal
@@ -48,12 +49,34 @@ def test_a_refusal_lane_names_the_tmux_it_proves_the_crate_refuses() -> None:
         assert step.env["LIBTMUX_TEST_UNSUPPORTED_TMUX"] == str(BINARY)
         assert step.env["LIBTMUX_REQUIRE_NATIVE"] == "LIBTMUX_TEST_UNSUPPORTED_TMUX"
     assert [step.argv[4] for step in steps] == [
-        "libtmux",
+        "libtmux-tokio",
         "tmux-workspace",
         "tmux-workspace",
         "tmux-mcp",
     ]
     assert "--exact" in steps[1].argv
+
+
+def test_refusal_steps_select_test_targets_the_workspace_ships() -> None:
+    result = subprocess.run(
+        ["cargo", "metadata", "--offline", "--no-deps", "--format-version", "1"],
+        cwd=harness.ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    targets = {
+        package["name"]: {
+            target["name"] for target in package["targets"] if "test" in target["kind"]
+        }
+        for package in json.loads(result.stdout)["packages"]
+    }
+    for contract in harness.REFUSAL_CONTRACTS:
+        for step in harness.refusal_steps(contract, BINARY, CURRENT, NEWER):
+            if "--test" in step.argv:
+                package = step.argv[step.argv.index("--package") + 1]
+                target = step.argv[step.argv.index("--test") + 1]
+                assert target in targets[package], (contract, package, target)
 
 
 def test_the_pre_probe_lane_runs_behind_the_minimum_client() -> None:
@@ -256,6 +279,6 @@ def test_a_whole_run_builds_a_pinned_commit_and_tests_it_under_the_supervisor(
     calls = [line for line in log.read_text().splitlines() if line.startswith("cargo")]
     assert calls == [
         "cargo test --locked --workspace --all-targets --all-features",
-        "cargo test --locked --package libtmux --lib --all-features real_tmux_compat_ -- --test-threads=1 --list",
-        "cargo test --locked --package libtmux --lib --all-features real_tmux_compat_ -- --test-threads=1",
+        "cargo test --locked --package libtmux-tokio --lib --all-features real_tmux_compat_ -- --test-threads=1 --list",
+        "cargo test --locked --package libtmux-tokio --lib --all-features real_tmux_compat_ -- --test-threads=1",
     ]

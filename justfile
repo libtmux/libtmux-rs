@@ -18,16 +18,16 @@ test *args:
 # behind a feature it does not declare is invisible to every gate -- which is
 # how two of them survived, one since the tree was imported.
 #
-# The second run is the configuration a contributor types, because the
-# doctests need the fixture: defaults on, `control-mode` and `derive` off. A
-# doctest that fails there is reaching past its own feature into a
-# neighbour's. One that needs `test-support` to reach a real server is not,
-# which is why this keeps the defaults rather than dropping to none.
+# Minimal core and facade builds, then each client's default features with its
+# fixture, cover the configurations a contributor uses. A doctest needing the
+# fixture enables `test-support`; other optional features remain off.
 #
 # Run documentation tests, including the examples on the front page
 [group: 'test']
 doctest:
     cargo test --locked --workspace --doc --all-features
+    cargo test --locked --package libtmux-core --package libtmux-blocking --package libtmux --doc --no-default-features
+    cargo test --locked --package libtmux-tokio --doc --features test-support
     cargo test --locked --package libtmux --doc --features test-support
 
 # Each doctest is a process of its own, and rustdoc gives it the sandbox only
@@ -82,10 +82,12 @@ fixture-root:
 [group: 'test']
 msrv:
     rustup run 1.85.0 cargo test --locked \
+        --package libtmux-core --package libtmux-blocking --package libtmux-tokio \
         --package libtmux --package libtmux-macros --package tmux-workspace \
         --package mcp-swap \
         --all-targets --all-features
     rustup run 1.85.0 cargo hack check --locked \
+        --package libtmux-core --package libtmux-blocking --package libtmux-tokio \
         --package libtmux --package libtmux-macros \
         --each-feature --all-targets
     rustup run 1.88.0 cargo test --locked \
@@ -121,20 +123,24 @@ compat:
 #
 # Report which crate-root types lack a runnable example
 [group: 'docs']
-example-coverage:
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json > /dev/null
-    uv run scripts/example-coverage/example_coverage.py target/doc/libtmux.json
+example-coverage: (_example-coverage "libtmux-core") (_example-coverage "libtmux-blocking") (_example-coverage "libtmux-tokio") (_example-coverage "libtmux")
 
 # Needs nightly for rustdoc's JSON output, so it runs beside `api-check`
 # rather than in `just check`.
 #
 # Fail when any crate-root type lacks a runnable example
 [group: 'docs']
-example-coverage-check:
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json > /dev/null
-    uv run scripts/example-coverage/example_coverage.py --require-all target/doc/libtmux.json
+example-coverage-check: (_example-coverage "libtmux-core" "--require-all") (_example-coverage "libtmux-blocking" "--require-all") (_example-coverage "libtmux-tokio" "--require-all") (_example-coverage "libtmux" "--require-all")
+
+[private]
+_runtime-json crate:
+    cargo +nightly rustdoc --locked --package {{ crate }} --all-features --lib \
+        -- -Zunstable-options --output-format json
+
+[private]
+_example-coverage crate strict="": (_runtime-json crate)
+    uv run scripts/example-coverage/example_coverage.py {{ strict }} \
+        target/doc/{{ replace(crate, "-", "_") }}.json
 
 # Which format names each listing asks tmux for.
 #
@@ -145,7 +151,8 @@ example-coverage-check:
 [doc('Which format names each listing asks tmux for')]
 [group: 'release']
 list-profiles:
-    LIBTMUX_RERECORD=1 cargo test --locked --package libtmux --all-features \
+    LIBTMUX_RERECORD=1 uv run scripts/require-tests/require_tests.py \
+        cargo test --locked --package libtmux-tokio --all-features \
         --lib each_listing_records_the_fields_it_requests
 
 # Regenerate the recorded public API surface
@@ -153,11 +160,12 @@ list-profiles:
 # Needs nightly for rustdoc's JSON output, so it is not part of `just check`.
 [doc('Regenerate the recorded public API surface')]
 [group: 'release']
-api:
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json
-    uv run scripts/public-api/public_api.py target/doc/libtmux.json \
-        > crates/libtmux/docs/public-api.txt
+api: (_api-record "libtmux-core") (_api-record "libtmux-blocking") (_api-record "libtmux-tokio") (_api-record "libtmux")
+
+[private]
+_api-record crate: (_runtime-json crate)
+    uv run scripts/public-api/public_api.py target/doc/{{ replace(crate, "-", "_") }}.json \
+        > crates/{{ crate }}/docs/public-api.txt
 
 # No automated semver gate runs yet, and a 0.1.N release may break the API, so
 # this is what makes a change to the surface visible. It does not judge whether
@@ -165,12 +173,13 @@ api:
 #
 # Report any change to the public API surface
 [group: 'release']
-api-check:
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json > /dev/null
+api-check: (_api-check "libtmux-core") (_api-check "libtmux-blocking") (_api-check "libtmux-tokio") (_api-check "libtmux")
+
+[private]
+_api-check crate: (_runtime-json crate)
     uv run scripts/public-api/public_api.py \
-        --check crates/libtmux/docs/public-api.txt \
-        target/doc/libtmux.json
+        --check crates/{{ crate }}/docs/public-api.txt \
+        target/doc/{{ replace(crate, "-", "_") }}.json
 
 # Nightly and a sanitizer, so `fuzz/` is not a workspace member and this is not
 # part of `just check`. The seeds matter: random bytes rarely produce a line
@@ -244,7 +253,8 @@ clippy:
 # Lint every pair of features, denying what `check` would only mention
 [group: 'lint']
 features:
-    cargo clippy --locked --package libtmux --all-targets --no-default-features -- -D warnings
+    cargo clippy --locked --package libtmux-core --package libtmux-blocking \
+        --package libtmux-tokio --package libtmux --all-targets --no-default-features -- -D warnings
     cargo hack clippy --locked --workspace --feature-powerset --depth 2 --all-targets -- -D warnings
 
 # Check dependency licences, advisories, and sources
@@ -266,19 +276,21 @@ watch-clippy:
 
 # Build the API documentation
 #
-# Every feature, as docs.rs builds it, then libtmux with its defaults and with
-# none, and tmux-workspace as a library dependent builds it, without the
+# Every feature, as docs.rs builds it, then each runtime crate with its defaults
+# and with none, and tmux-workspace as a library dependent builds it, without the
 # command: a warning that only a partial build raises would otherwise reach
 # every such reader and no gate.
 [group: 'docs']
 docs:
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
-    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux --no-deps
-    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux --no-default-features --no-deps
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux-core --package libtmux-blocking \
+        --package libtmux-tokio --package libtmux --no-deps
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux-core --package libtmux-blocking \
+        --package libtmux-tokio --package libtmux --no-default-features --no-deps
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --package tmux-workspace --no-default-features --no-deps
 
 # Each published crate ships a changelog of its own, so a reader of one crate
-# does not have to read the history of the other three.
+# does not have to read the history of the other crates.
 #
 # Fail when a published crate has no changelog, does not ship it or does not
 # link it
@@ -324,7 +336,7 @@ example-tables:
 [group: 'docs']
 doc-contents:
     uv run scripts/check-contents/check_contents.py crates/libtmux/docs/design.md \
-        crates/libtmux/docs/findings.md
+        crates/libtmux-tokio/docs/design.md crates/libtmux-tokio/docs/findings.md
 
 # rustdoc supplies a doctest's `fn main`, so a block whose body is only a
 # hidden function definition compiles it and then runs an empty main. Every
@@ -351,12 +363,12 @@ serve-docs port='8971': docs-full
 # Run the hierarchy benchmark against real tmux
 [group: 'bench']
 bench *args:
-    cargo bench --features test-support --bench hierarchy -- {{ args }}
+    cargo bench --package libtmux-tokio --features test-support --bench hierarchy -- {{ args }}
 
 # Run the pane-wait benchmark against real tmux, both wait paths
 [group: 'bench']
 bench-waits *args:
-    cargo bench --features test-support,control-mode --bench waits -- {{ args }}
+    cargo bench --package libtmux-tokio --features test-support,control-mode --bench waits -- {{ args }}
 
 # Compare the last benchmark run with the one before it; fails past 2x
 [group: 'bench']

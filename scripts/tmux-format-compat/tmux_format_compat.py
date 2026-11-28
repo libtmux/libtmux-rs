@@ -99,7 +99,9 @@ def refusal_steps(
         }
         return [
             Step(
-                cargo_test("libtmux", "--test", "daemon_version_check", "--", "--test-threads=1"),
+                cargo_test(
+                    "libtmux-tokio", "--test", "daemon_version_check", "--", "--test-threads=1"
+                ),
                 env,
             ),
             Step(
@@ -140,7 +142,7 @@ def refusal_steps(
         return [
             Step(
                 cargo_test(
-                    "libtmux",
+                    "libtmux-tokio",
                     "--test",
                     "daemon_version_check",
                     "real_tmux_compat_pre_probe_",
@@ -157,7 +159,9 @@ def refusal_steps(
     if contract == "reject-boundary":
         return [
             Step(
-                cargo_test("libtmux", "--test", "daemon_version_check", "--", "--test-threads=1"),
+                cargo_test(
+                    "libtmux-tokio", "--test", "daemon_version_check", "--", "--test-threads=1"
+                ),
                 {
                     "LIBTMUX_TEST_BOUNDARY_TMUX": binary,
                     "LIBTMUX_REQUIRE_NATIVE": "LIBTMUX_TEST_BOUNDARY_TMUX",
@@ -167,7 +171,9 @@ def refusal_steps(
     if contract == "feature-boundary":
         return [
             Step(
-                cargo_test("libtmux", "--test", "optional_features", "--", "--test-threads=1"),
+                cargo_test(
+                    "libtmux-tokio", "--test", "optional_features", "--", "--test-threads=1"
+                ),
                 {
                     "LIBTMUX_REQUIRE_NATIVE": (
                         "LIBTMUX_TEST_BROKEN_BREAK_TMUX,"
@@ -358,7 +364,7 @@ class Harness:
             self.run_step(
                 Step(
                     cargo_test(
-                        "libtmux",
+                        "libtmux-tokio",
                         "--test",
                         "daemon_version_check",
                         "real_tmux_compat_minimum_daemon_accepts_newer_clients",
@@ -394,7 +400,15 @@ class Harness:
             },
         )
 
-        compat = ["cargo", "test", "--locked", "--package", "libtmux", "--lib", "--all-features"]
+        compat = [
+            "cargo",
+            "test",
+            "--locked",
+            "--package",
+            "libtmux-tokio",
+            "--lib",
+            "--all-features",
+        ]
         environment = {**LOCALE, "LIBTMUX_TEST_TMUX": str(binary)}
         listing = run(
             [*compat, "real_tmux_compat_", "--", "--test-threads=1", "--list"],
