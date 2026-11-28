@@ -1828,8 +1828,9 @@ impl CaptureOptions {
     /// Returns [`Error::UnsupportedCapability`] when a requested flag needs a
     /// newer tmux than `version`.
     pub(crate) fn lower(self, pane: &str, version: &TmuxVersion) -> Result<Command, Error> {
-        // `-T` arrived in 3.4; every other flag lowered here is present at the
-        // supported floor.
+        if self.line_flags {
+            version.require("capture-pane -F", crate::version::since::CAPTURE_LINE_FLAGS)?;
+        }
         if self.trim_blank_cells {
             version.require(
                 "capture-pane -T",

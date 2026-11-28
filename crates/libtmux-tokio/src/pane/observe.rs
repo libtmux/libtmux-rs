@@ -326,10 +326,6 @@ impl Pane {
     /// # }
     /// ```
     pub async fn capture_lines(&self, options: CaptureOptions) -> Result<Vec<CapturedLine>, Error> {
-        crate::Server::from_core(Arc::clone(&self.core))
-            .require("capture-pane -F", crate::version::since::CAPTURE_LINE_FLAGS)
-            .await?;
-
         Ok(self
             .capture_with(options.line_flags())
             .await?
