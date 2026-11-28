@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use rustix::io::Errno;
 use rustix::process::{Pid, WaitOptions, test_kill_process, waitpid};
 
-use super::{ReaderFailure, SubprocessExecutor, TestHooks, validate_request};
+use super::{
+    PipeRegistrationFailure, ReaderFailure, SubprocessExecutor, TestHooks, validate_request,
+};
 use crate::command::{CommandRequest, RequestId};
 use crate::internal::executor::Executor;
 use crate::internal::process::LaunchContext;
@@ -690,6 +692,124 @@ async fn abort_between_spawn_and_supervisor_handoff_cannot_orphan() {
     assert_process_reaped(child_pid);
 }
 
+#[tokio::test]
+async fn typed_pipe_registration_failure_reaps_the_owned_child_and_releases_capacity() {
+    use crate::internal::operation::OperationContext;
+    use libtmux_core::{CreationNonce, Effect};
+
+    for failure in [
+        PipeRegistrationFailure::Stdout,
+        PipeRegistrationFailure::Stderr,
+    ] {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let pid_path = directory.path().join("registration.pid");
+        let spawned_pid = Arc::new(AtomicU32::new(0));
+        let hooks = TestHooks {
+            pipe_registration_failure: Some(failure),
+            spawned_pid: Some(Arc::clone(&spawned_pid)),
+            ..TestHooks::default()
+        };
+        let executor = executor("block", TEST_TIMEOUT)
+            .with_dispatch_limits(DispatchLimits::default().max_in_flight(1))
+            .with_test_hooks(hooks);
+        let error = executor
+            .execute_operation(
+                request(43, [pid_path.as_os_str().to_os_string()]),
+                OperationContext::creation(
+                    Path::new("/private/registration-socket"),
+                    CreationNonce::from_bytes([0xab; 16]),
+                    tokio::time::Instant::now().checked_add(TEST_TIMEOUT),
+                ),
+            )
+            .await
+            .expect_err("registration fails after a real child starts");
+        let child_pid = spawned_pid.load(Ordering::SeqCst);
+        assert_ne!(
+            child_pid, 0,
+            "failure follows successful OS process creation"
+        );
+        assert_eq!(error.operation_effect(), Some(Effect::Unknown));
+        assert!(!error.is_transient());
+        assert_error_redacted(
+            &error,
+            &["private-registration-failure", "registration-socket"],
+        );
+        assert!(matches!(error, Error::OperationFailure { source, .. }
+            if matches!(*source, Error::ReadOutput { .. })));
+        assert_eq!(executor.active_request_count(), 0);
+        assert_process_reaped(child_pid);
+        assert!(matches!(
+            waitpid(Some(pid(child_pid)), WaitOptions::NOHANG),
+            Err(Errno::CHILD)
+        ));
+        executor
+            .shutdown()
+            .await
+            .expect("failed startup has settled");
+    }
+}
+
+#[tokio::test]
+async fn typed_startup_keeps_the_runtime_responsive_and_abort_reaps_the_child() {
+    use std::sync::atomic::AtomicBool;
+
+    use crate::internal::operation::OperationContext;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let pid_path = directory.path().join("startup.pid");
+    let reached = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let spawned_pid = Arc::new(AtomicU32::new(0));
+    let runtime_advanced = Arc::new(AtomicBool::new(false));
+    let hooks = TestHooks {
+        after_spawn_reached: Some(Arc::clone(&reached)),
+        after_spawn_release: Some(Arc::clone(&release)),
+        spawned_pid: Some(Arc::clone(&spawned_pid)),
+        ..TestHooks::default()
+    };
+    let advanced = Arc::clone(&runtime_advanced);
+    let (ready_sender, ready) = tokio::sync::oneshot::channel();
+    let observer = std::thread::spawn(move || {
+        reached.wait();
+        ready_sender
+            .send(())
+            .expect("runtime awaits the startup boundary");
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        while !advanced.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        let advanced = advanced.load(Ordering::SeqCst);
+        release.wait();
+        advanced
+    });
+    let executor = executor("block", TEST_TIMEOUT).with_test_hooks(hooks);
+    let dispatch = tokio::spawn(executor.execute_operation(
+        request(44, [pid_path.as_os_str().to_os_string()]),
+        OperationContext::observation(tokio::time::Instant::now().checked_add(TEST_TIMEOUT)),
+    ));
+    tokio::time::timeout(TEST_TIMEOUT * 2, ready)
+        .await
+        .expect("startup boundary is reached")
+        .expect("observer remains alive");
+    tokio::time::sleep(POLL_INTERVAL).await;
+    runtime_advanced.store(true, Ordering::SeqCst);
+    dispatch.abort();
+    let _ = dispatch.await;
+    executor
+        .shutdown()
+        .await
+        .expect("abort finishes owned cleanup");
+    let advanced = observer.join().expect("startup observer remains healthy");
+    assert!(
+        advanced,
+        "startup must not occupy the single runtime worker"
+    );
+    let child_pid = spawned_pid.load(Ordering::SeqCst);
+    assert_ne!(child_pid, 0);
+    assert_process_reaped(child_pid);
+    assert_eq!(executor.active_request_count(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn accepted_start_racing_shutdown_remains_registered_until_cleanup() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -1179,6 +1299,45 @@ async fn tracing_errors_and_sources_omit_sensitive_argv_and_raw_output() {
         "sentinel-success-output",
     ] {
         assert!(!trace.contains(secret), "trace leaked {secret}: {trace:?}");
+    }
+}
+
+#[test]
+fn typed_runtime_teardown_keeps_ownership_until_the_native_child_is_reaped() {
+    use crate::internal::operation::OperationContext;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let pid_path = directory.path().join("typed-runtime-drop.pid");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime builds");
+    let executor = executor("descendant", TEST_TIMEOUT);
+    let pids = runtime.block_on(async {
+        tokio::spawn(executor.execute_operation(
+            request(45, [pid_path.as_os_str().to_os_string()]),
+            OperationContext::observation(tokio::time::Instant::now().checked_add(TEST_TIMEOUT)),
+        ));
+        read_pids(&pid_path, 2).await
+    });
+    drop(runtime);
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    while executor.active_request_count() != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "native reaper must settle its reservation"
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert_process_reaped(pids[0]);
+    assert!(matches!(
+        waitpid(Some(pid(pids[0])), WaitOptions::NOHANG),
+        Err(Errno::CHILD)
+    ));
+    while !matches!(test_kill_process(pid(pids[1])), Err(Errno::SRCH)) {
+        assert!(Instant::now() < deadline, "owned process group must end");
+        std::thread::sleep(POLL_INTERVAL);
     }
 }
 

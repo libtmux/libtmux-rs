@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(feature = "control-mode")]
 use std::io;
 #[cfg(feature = "control-mode")]
 use std::process::Stdio;

@@ -118,9 +118,16 @@ pub(crate) fn dispatch(
         let typed = operation.is_some();
         let result = match operation {
             Some(operation) => {
-                executor
+                match executor
                     .execute_operation(request.fence_ordinary_version(&version), operation)
-                    .await?
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        versions.forget(&version);
+                        return Err(error);
+                    }
+                }
             }
             None => {
                 within(
@@ -134,6 +141,11 @@ pub(crate) fn dispatch(
                 .await?
             }
         };
+        if typed && !result.success() && result.stderr().trim_ascii() == b"syntax error" {
+            // The ordinary guard has no private response block. Invalidating
+            // this observation does not establish whether the action ran.
+            versions.forget(&version);
+        }
         if !result.success()
             && result.stderr().trim_ascii() == b"unknown command: libtmux-core-version-changed"
         {
@@ -357,6 +369,89 @@ fn is_cold(stderr: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{is_cold, is_pre_probe_usage};
+
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn a_typed_fence_failure_invalidates_its_cached_version_without_replay() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use libtmux_core::{Effect, NewSession, Reply};
+
+        use super::{VersionCache, dispatch};
+        use crate::command::{CommandRequest, RequestId};
+        use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
+        use crate::internal::executor::Executor as _;
+        use crate::internal::operation::{OperationContext, nonce};
+        use crate::internal::subprocess::SubprocessExecutor;
+        use crate::test::{TestServer, scaled, unique_name};
+        use crate::{Command, TmuxVersion};
+
+        let fixture = TestServer::new().await.expect("private fixture starts");
+        let server = fixture.server();
+        let name = unique_name("unreplayed-stale-fence");
+        let timeout = scaled(Duration::from_secs(5));
+        let configuration = CoreConfiguration::resolve(
+            &SocketSelection::Path(server.socket_path().to_owned()),
+            None,
+            None,
+            server.tmux_executable().to_os_string(),
+            timeout,
+            BuildContext::capture(),
+        )
+        .expect("private endpoint configuration");
+        let executor = Arc::new(SubprocessExecutor::new(server.tmux_executable(), timeout));
+        let versions = Arc::new(VersionCache::default());
+        versions.remember(
+            TmuxVersion::parse_output(b"tmux 99.0\n").expect("deliberately stale version"),
+        );
+        let nonce = nonce().expect("fresh receipt nonce");
+        let operation = NewSession::new(&name);
+        let request = CommandRequest::native_argv(
+            RequestId::new(1),
+            configuration.global_argv(),
+            operation.ordinary_arguments(nonce),
+            Command::new("new-session").summary(),
+        );
+        let result = dispatch(
+            executor.clone(),
+            configuration,
+            request,
+            RequestId::new(2),
+            RequestId::new(3),
+            false,
+            Arc::clone(&versions),
+            Some(OperationContext::creation(
+                server.socket_path(),
+                nonce,
+                tokio::time::Instant::now().checked_add(timeout),
+            )),
+        )
+        .await
+        .expect("native guard returns its status");
+        assert!(!result.success());
+        let status = result.exit_code();
+        let (stdout, stderr) = result.into_streams();
+        let error = Reply::new(status, stdout, stderr.len(), false)
+            .ordinary_creation(operation, server.socket_path(), nonce)
+            .expect_err("there is no acknowledged action to replay");
+        assert_eq!(error.effect(), Effect::Unknown);
+        assert!(
+            versions.get().is_none(),
+            "the next independent request must probe afresh"
+        );
+        assert!(
+            !server
+                .has_session(&name)
+                .await
+                .expect("exact session lookup")
+        );
+        executor.shutdown().await.expect("request owner finishes");
+        fixture
+            .shutdown()
+            .await
+            .expect("private fixture shuts down");
+    }
 
     #[test]
     fn pre_probe_answers_from_old_daemons_and_clients_are_recognized() {
