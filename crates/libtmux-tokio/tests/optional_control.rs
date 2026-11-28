@@ -460,7 +460,7 @@ socket={socket}
 witness={witness}
 def native(binary,*args):
  return subprocess.run([binary,'-S',socket,'-f','/dev/null',*args],capture_output=True,timeout=4,cwd=pathlib.Path(witness).parent)
-if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv):
+if '-C' in sys.argv and 'attach' in sys.argv:
  assert native(modern,'-N','kill-server').returncode == 0
  end=time.monotonic()+3
  while native(modern,'-N','display-message','-p','version').returncode == 0:
@@ -472,7 +472,7 @@ if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.ar
  guard_received=False
  while time.monotonic()<end:
   logs=''.join(path.read_text(errors='replace') for path in pathlib.Path(witness).parent.glob('tmux-server-*.log'))
-  guard_received='if-shell' in logs
+  guard_received=any(argument.startswith('#{{') and argument in logs for argument in sys.argv)
   if guard_received or child.poll() is not None: break
   time.sleep(.005)
  child.terminate()
