@@ -1231,6 +1231,16 @@ impl Server {
             .map_err(Into::into)
     }
 
+    #[cfg(feature = "plan")]
+    pub(crate) async fn capture_bound_grid(
+        &self,
+        pane: crate::PaneId,
+        escapes: bool,
+    ) -> Result<Vec<u8>, Error> {
+        self.capture_grid(&self.core.observed_key(pane)?, escapes)
+            .await
+    }
+
     async fn observe_pane_until(
         &self,
         pane: crate::PaneId,

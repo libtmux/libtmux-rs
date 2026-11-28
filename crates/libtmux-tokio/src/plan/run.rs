@@ -80,7 +80,7 @@ pub enum OperationValue {
     },
     /// Pane contents, exactly as tmux wrote them.
     CapturedPane(
-        /// The capture command's stdout bytes, without UTF-8 conversion.
+        /// The viewport bytes, excluding hook output and without UTF-8 conversion.
         TmuxText,
     ),
 }
@@ -200,7 +200,7 @@ impl StepOutcome {
         self.attribution
     }
 
-    /// The invocation's stdout, exactly as tmux wrote it.
+    /// The invocation's stdout, or the isolated viewport for a pane capture.
     #[must_use]
     pub fn stdout(&self) -> &[u8] {
         &self.stdout
@@ -387,7 +387,8 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns a validation or transport error. After an earlier step completes,
+    /// Returns a validation, transport or pane observation error, including a
+    /// failed capture hook. After an earlier step completes,
     /// [`Error::PlanInterrupted`] retains its typed results and replay evidence.
     ///
     /// # Cancel safety
@@ -408,7 +409,8 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error for an unsupported operation or a lost connection.
+    /// Returns an error for an unsupported operation, a lost connection or a
+    /// failed pane observation.
     /// [`Error::PlanInterrupted`] retains results for earlier completed steps.
     ///
     /// # Cancel safety
@@ -433,8 +435,8 @@ impl Execution<'_> {
     /// captured, a slot dependency is invalid, or a creating operation does
     /// not return valid IDs, or a layout is invalid. Validation happens before
     /// the first recorded command. Version-sensitive layouts may query metadata. A
-    /// command tmux *refuses* is reported through the returned [`PlanResult`],
-    /// not as an error, because a plan may expect one.
+    /// command tmux *refuses* is reported through the returned [`PlanResult`].
+    /// Typed creation and capture failures instead return errors.
     ///
     /// # Cancel safety
     ///
@@ -469,6 +471,18 @@ impl Execution<'_> {
                 .for_discovery()
                 .await
                 .map_err(|error| progress.interrupted(error))?;
+            if let [index] = step.indices() {
+                if matches!(self.steps()[*index], Op::CapturePane(_)) {
+                    let resolve =
+                        |slot: usize, part: Part| progress.bound.get(&(slot, part)).cloned();
+                    let command = self.steps()[*index].render(&resolve).ok_or_else(|| {
+                        progress.interrupted(Error::invalid_command_input(0, "plan capture target"))
+                    })?;
+                    self.capture(&server, *index, &command, &mut progress)
+                        .await?;
+                    continue;
+                }
+            }
             let (result, marked_creation) = self
                 .dispatch(&server, &step, &progress.bound)
                 .await
@@ -526,6 +540,39 @@ impl Execution<'_> {
         }
 
         Ok(progress.finish())
+    }
+
+    async fn capture(
+        &self,
+        server: &Server,
+        index: usize,
+        command: &Command,
+        progress: &mut Progress<'_>,
+    ) -> Result<(), Error> {
+        let pane = command
+            .target()
+            .and_then(|target| target.to_str())
+            .and_then(|target| target.parse::<PaneId>().ok())
+            .ok_or_else(|| {
+                progress.interrupted(Error::invalid_command_input(0, "plan capture target"))
+            })?;
+        let escapes = command.logical_words().any(|word| word == "-e");
+        let bytes = server
+            .capture_bound_grid(pane, escapes)
+            .await
+            .map_err(|error| progress.interrupted(error))?;
+        progress.outcomes[index] = Outcome::Complete;
+        progress.reported.push(StepOutcome {
+            creation: None,
+            step: Step::single(index),
+            command: self.steps()[index].name(),
+            sensitive_input: true,
+            outcomes: vec![Outcome::Complete],
+            attribution: Attribution::PerCommand,
+            stdout: bytes,
+            stderr: Vec::new(),
+        });
+        Ok(())
     }
 
     /// Send one invocation, sharing it when the step carries several.
@@ -894,35 +941,8 @@ impl Execution<'_> {
                 .map_err(|error| progress.interrupted(error))?;
 
             if matches!(op, Op::CapturePane(_)) {
-                let pane = command
-                    .target()
-                    .and_then(|target| target.to_str())
-                    .and_then(|target| target.parse::<PaneId>().ok())
-                    .ok_or_else(|| {
-                        progress.interrupted(Error::invalid_command_input(0, "plan capture target"))
-                    })?;
-                let escapes = command.logical_words().any(|word| word == "-e");
-                let key = libtmux_core::PaneKey::new(
-                    sender.identity().clone(),
-                    sender.generation(),
-                    pane,
-                );
-                let bytes = sender
-                    .native_server()
-                    .capture_grid(&key, escapes)
-                    .await
-                    .map_err(|error| progress.interrupted(error))?;
-                progress.outcomes[index] = Outcome::Complete;
-                progress.reported.push(StepOutcome {
-                    creation: None,
-                    step: Step::single(index),
-                    command: op.name(),
-                    sensitive_input: true,
-                    outcomes: vec![Outcome::Complete],
-                    attribution: Attribution::PerCommand,
-                    stdout: bytes,
-                    stderr: Vec::new(),
-                });
+                self.capture(&server, index, &command, &mut progress)
+                    .await?;
                 continue;
             }
 
@@ -980,7 +1000,7 @@ mod tests {
     use crate::PaneId;
     use crate::command::{CommandRequest, CommandResult, ProcessStatus};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
-    use crate::plan::{CapturePane, NewSession, SendKeys};
+    use crate::plan::{CapturePane, NewSession, Pause, SendKeys};
 
     #[derive(Clone, Copy)]
     enum SecondOutcome {
@@ -1034,7 +1054,7 @@ mod tests {
         let pane: PaneId = "%1".parse().expect("a pane id");
         let mut plan = Plan::new();
         if first_read_only {
-            plan.add(CapturePane::new(pane.clone()));
+            plan.add(Pause::new(std::time::Duration::ZERO));
         } else {
             plan.add(SendKeys::new(pane.clone()).text("first"));
         }

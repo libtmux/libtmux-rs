@@ -628,6 +628,173 @@ async fn operation_reports_keep_typed_values_aligned_across_planners() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+async fn native_viewport(server: &Server, pane: &PaneId, escapes: bool) -> Vec<u8> {
+    let mut command = Command::new("capture-pane")
+        .arg("-p")
+        .arg("-t")
+        .arg(pane.to_string());
+    if escapes {
+        command = command.arg("-e");
+    }
+    let result = server.cmd(command).await.expect("native capture runs");
+    assert!(result.success());
+    result.stdout().to_vec()
+}
+
+async fn capture_hook(server: &Server, command: Option<&str>) {
+    let mut request = Command::new("set-hook")
+        .arg(if command.is_some() { "-g" } else { "-gu" })
+        .arg("after-capture-pane");
+    if let Some(command) = command {
+        request = request.sensitive_arg(command);
+    }
+    assert!(
+        server
+            .cmd(request)
+            .await
+            .expect("capture hook changes")
+            .success()
+    );
+}
+
+#[tokio::test]
+async fn planned_capture_keeps_exact_viewport_bytes_and_excludes_hooks() {
+    let guard = TestServer::new().await.expect("tmux starts");
+    let server = guard.server();
+    let session = guard
+        .session(
+            NewSession::new("capture-plan")
+                .size(80, 8)
+                .command("printf 'capture-grid\\n\\033[31mcoloured\\033[0m\\n\\n'; exec sleep 60"),
+        )
+        .await
+        .expect("source pane is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    assert_eq!(
+        pane.wait_for_text("coloured", Duration::from_secs(5))
+            .await
+            .expect("pane prints"),
+        PaneWait::Arrived
+    );
+    let key = server
+        .observe_pane(pane.id().clone())
+        .await
+        .expect("pane observed");
+    let viewport = native_viewport(server, &key.id(), false).await;
+    let ansi = native_viewport(server, &key.id(), true).await;
+    assert!(viewport.ends_with(b"\n\n\n"));
+    assert_ne!(viewport, ansi, "the fixture has visible ANSI attributes");
+
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let mut plan = Plan::new();
+        let window = plan.add(NewWindow::new(session.id().clone()).command("exec sleep 60"));
+        plan.add(CapturePane::new(window.pane()));
+        plan.add(CapturePane::new(key.id()));
+        plan.add(CapturePane::new(key.id()).escape_sequences());
+        capture_hook(server, Some("display-message -p private-capture-hook")).await;
+        let result = server.run_plan(&plan, planner).await;
+        capture_hook(server, None).await;
+        let result = result.expect("the capture plan completes");
+        assert!(result.is_complete(), "{planner:?}: {result:?}");
+        let Some(OperationValue::CreatedWindow { pane, .. }) = result.operations()[0].value()
+        else {
+            panic!("the new window retains its pane binding");
+        };
+        let empty = native_viewport(server, pane, false).await;
+        assert_eq!(empty, vec![b'\n'; 8]);
+        for (index, expected) in [(1, &empty), (2, &viewport), (3, &ansi)] {
+            let report = &result.operations()[index];
+            let Some(OperationValue::CapturedPane(actual)) = report.value() else {
+                panic!("capture {index} lost its typed bytes: {report:?}");
+            };
+            assert_eq!(actual.as_bytes(), expected, "{planner:?}, capture {index}");
+            assert_eq!(result.steps()[index].stdout(), expected);
+            assert!(result.steps()[index].stderr().is_empty());
+            assert_eq!(result.steps()[index].attribution(), Attribution::PerCommand);
+        }
+    }
+    guard.shutdown().await.expect("fixture shuts down");
+}
+
+#[tokio::test]
+async fn planned_capture_failures_withhold_bytes_and_keep_prior_effects() {
+    let guard = TestServer::new().await.expect("tmux starts");
+    let server = guard.server();
+    let session = guard
+        .session(
+            NewSession::new("capture-errors")
+                .command("printf 'private-capture-grid\\n'; exec sleep 60"),
+        )
+        .await
+        .expect("session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    assert_eq!(
+        pane.wait_for_text("private-capture-grid", Duration::from_secs(5))
+            .await
+            .expect("pane prints"),
+        PaneWait::Arrived
+    );
+    let absent: PaneId = "%4294967295".parse().expect("missing pane id");
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        for failed_hook in [false, true] {
+            if failed_hook {
+                capture_hook(
+                    server,
+                    Some("display-message -p private-capture-hook ; select-pane -t %4294967295"),
+                )
+                .await;
+            }
+            let target = if failed_hook { pane.id() } else { &absent };
+            let mut capture_only = Plan::new();
+            capture_only.add(CapturePane::new(target.clone()));
+            let read_error = server.run_plan(&capture_only, planner).await;
+            let mut after_mutation = Plan::new();
+            after_mutation.add(SetOption::session(
+                session.id().clone(),
+                "@capture-effect",
+                "yes",
+            ));
+            after_mutation.add(CapturePane::new(target.clone()));
+            let mutation_error = server.run_plan(&after_mutation, planner).await;
+            if failed_hook {
+                capture_hook(server, None).await;
+            }
+            let read_error =
+                read_error.expect_err("an incomplete observation has no capture value");
+            assert_eq!(
+                read_error.operation_effect(),
+                Some(libtmux_core::Effect::Observation)
+            );
+            assert!(!matches!(
+                read_error,
+                libtmux_tokio::Error::PlanInterrupted { .. }
+            ));
+            let mutation_error =
+                mutation_error.expect_err("the earlier mutation survives capture failure");
+            assert_eq!(
+                mutation_error.kind(),
+                libtmux_tokio::ErrorKind::PartialEffect
+            );
+            assert!(!mutation_error.is_transient());
+            let libtmux_tokio::Error::PlanInterrupted { completed, .. } = &mutation_error else {
+                panic!("the earlier mutation retains its report: {mutation_error:?}");
+            };
+            assert_eq!(completed.len(), 1);
+            assert_eq!(completed[0].outcome(), Outcome::Complete);
+            assert!(matches!(
+                completed[0].value(),
+                Some(OperationValue::Acknowledged)
+            ));
+            for error in [&read_error, &mutation_error] {
+                let diagnostic = format!("{error} {error:?}");
+                assert!(!diagnostic.contains("private-capture-hook"));
+                assert!(!diagnostic.contains("private-capture-grid"));
+            }
+        }
+    }
+    guard.shutdown().await.expect("fixture shuts down");
+}
+
 fn duplicate_session_plan(name: &str) -> Plan {
     let mut plan = Plan::new();
     plan.add(NewSession::new(name));
