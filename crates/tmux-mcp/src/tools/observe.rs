@@ -798,7 +798,7 @@ mod tests {
                     lease,
                     echoes: tools.echoes.as_ref(),
                 },
-                final_check,
+                Box::pin(final_check),
             )
             .await;
 
