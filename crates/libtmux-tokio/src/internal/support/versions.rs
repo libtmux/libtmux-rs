@@ -76,11 +76,19 @@ pub(crate) fn dispatch(
             if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
                 return Ok(Some((version, false)));
             }
-            let _initialization = versions.initializing.lock().await;
+            let _initialization = within(
+                async { Ok(versions.initializing.lock().await) },
+                deadline,
+                request_id,
+                &summary,
+                configuration.timeout(),
+                true,
+            )
+            .await?;
             if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
                 return Ok(Some((version, false)));
             }
-            let live = live_version(&executor, &configuration, endpoint_probe).await?;
+            let live = live_version(&executor, &configuration, endpoint_probe, deadline).await?;
             if absent_cleanup && live.is_none() {
                 if let Some(version) = versions.get() {
                     versions.forget(&version);
@@ -90,7 +98,7 @@ pub(crate) fn dispatch(
             let allow_start = live.is_none();
             let version = match live {
                 Some(version) => version,
-                None => binary_version(&executor, &configuration, binary_probe).await?,
+                None => binary_version(&executor, &configuration, binary_probe, deadline).await?,
             };
             version.ensure_supported()?;
             if !allow_start {
@@ -98,15 +106,9 @@ pub(crate) fn dispatch(
             }
             Ok(Some((version, allow_start)))
         };
-        let Some((version, allow_start)) = within(
-            version_check,
-            deadline,
-            request_id,
-            &summary,
-            configuration.timeout(),
-            true,
-        )
-        .await?
+        let Some((version, allow_start)) = version_check.await.map_err(|error| {
+            qualification_error(error, request_id, &summary, configuration.timeout())
+        })?
         else {
             return Ok(CommandResult::new(
                 request_id,
@@ -164,6 +166,28 @@ pub(crate) fn dispatch(
         }
         Ok(result)
     })
+}
+
+// A probe can start a child before the caller's command has been submitted.
+fn qualification_error(
+    error: Error,
+    action_id: RequestId,
+    action: &CommandSummary,
+    budget: Duration,
+) -> Error {
+    match error {
+        Error::Timeout { .. } => {
+            Error::timeout_before_dispatch(action_id.get(), action.clone(), budget)
+        }
+        Error::OperationAndCleanup { primary, cleanup } => Error::OperationAndCleanup {
+            primary: Box::new(qualification_error(*primary, action_id, action, budget)),
+            cleanup,
+        },
+        Error::OperationCleanupPending { source } => Error::OperationCleanupPending {
+            source: Box::new(qualification_error(*source, action_id, action, budget)),
+        },
+        other => other,
+    }
 }
 
 pub(in crate::internal) async fn within<T>(
@@ -230,12 +254,13 @@ pub(crate) async fn endpoint_version(
     binary_probe: RequestId,
     versions: &VersionCache,
 ) -> Result<TmuxVersion, Error> {
-    if let Some(version) = live_version(executor, configuration, endpoint_probe).await? {
+    let deadline = Instant::now().checked_add(configuration.timeout());
+    if let Some(version) = live_version(executor, configuration, endpoint_probe, deadline).await? {
         version.ensure_supported()?;
         versions.remember(version.clone());
         Ok(version)
     } else {
-        let version = binary_version(executor, configuration, binary_probe).await?;
+        let version = binary_version(executor, configuration, binary_probe, deadline).await?;
         version.ensure_supported()?;
         Ok(version)
     }
@@ -245,6 +270,7 @@ async fn live_version(
     executor: &Arc<dyn Executor>,
     configuration: &CoreConfiguration,
     request_id: RequestId,
+    deadline: Option<Instant>,
 ) -> Result<Option<TmuxVersion>, Error> {
     // Over a control connection the probe's refusal is printed outside any
     // block, so it cannot be read back. A routed handle is seeded with the
@@ -277,7 +303,9 @@ async fn live_version(
         CommandRequest::with_global_argv(request_id, &global_argv, command).discarding_stdout();
     #[cfg(feature = "control-mode")]
     let request = request.with_control_line(line.flatten());
-    let result = executor.execute(request).await?;
+    let result = executor
+        .execute_until(request, deadline, configuration.timeout())
+        .await?;
     if result.success() {
         // `run-shell -C` of a non-command always fails; success is another
         // program answering in tmux's place.
@@ -309,9 +337,14 @@ async fn binary_version(
     executor: &Arc<dyn Executor>,
     configuration: &CoreConfiguration,
     request_id: RequestId,
+    deadline: Option<Instant>,
 ) -> Result<TmuxVersion, Error> {
     let result = executor
-        .execute(CommandRequest::new(request_id, Command::new("-V")))
+        .execute_until(
+            CommandRequest::new(request_id, Command::new("-V")),
+            deadline,
+            configuration.timeout(),
+        )
         .await?;
     if !result.success() {
         return Err(Error::version_probe_failed(

@@ -1226,6 +1226,77 @@ async fn wait_failure_is_typed_and_cleanup_reaps_the_child() {
 
 #[cfg(feature = "test-support")]
 #[tokio::test]
+async fn a_version_probe_timeout_preserves_its_child_cleanup_outcome() {
+    use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
+    use crate::internal::support::versions::{VersionCache, dispatch};
+
+    fs::create_dir_all("/tmp/libtmux-rs-test").unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let executable = directory.path().join("parked-tmux");
+    let probe_pid = directory.path().join("probe.pid");
+    let script = format!(
+        "#!/bin/sh\ncase \" $* \" in *' run-shell '*) ;; *) exit 2 ;; esac\nprintf '%s\\n' \"$$\" > '{}'\nexec sleep 30\n",
+        probe_pid.display()
+    );
+    crate::test::install_executable(&executable, &script).unwrap();
+    let budget = crate::test::scaled(Duration::from_millis(500));
+    let executable = executable.into_os_string();
+    let configuration = CoreConfiguration::resolve(
+        &SocketSelection::Path(directory.path().join("socket")),
+        None,
+        None,
+        executable.clone(),
+        budget,
+        BuildContext::capture(),
+    )
+    .unwrap();
+    let executor = Arc::new(SubprocessExecutor::new(executable, budget).with_test_hooks(
+        TestHooks {
+            reported_group_signal_failure: Some(std::io::ErrorKind::PermissionDenied),
+            ..TestHooks::default()
+        },
+    ));
+    let action = CommandRequest::with_global_argv(
+        RequestId::new(1),
+        configuration.global_argv(),
+        Command::new("kill-server"),
+    );
+    let error = dispatch(
+        executor.clone(),
+        configuration,
+        action,
+        RequestId::new(2),
+        RequestId::new(3),
+        false,
+        Arc::new(VersionCache::default()),
+        None,
+    )
+    .await
+    .expect_err("the version probe parks before the action");
+    executor.shutdown().await.unwrap();
+    assert_process_reaped(
+        fs::read_to_string(probe_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    );
+    let Error::OperationAndCleanup { primary, cleanup } = error else {
+        panic!("expected a probe timeout and its cleanup error, got {error:?}");
+    };
+    assert!(matches!(
+        *primary,
+        Error::Timeout {
+            request_id: 1,
+            before_dispatch: true,
+            ..
+        }
+    ));
+    assert!(matches!(*cleanup, Error::WaitChild { request_id: 2, .. }));
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
 async fn a_qualified_ordinary_timeout_reports_its_child_cleanup_outcome() {
     use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
     use crate::internal::support::versions::{VersionCache, dispatch};
