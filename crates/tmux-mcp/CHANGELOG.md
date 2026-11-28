@@ -22,6 +22,11 @@ which a published crate cannot link by a relative path.
 
 ### Changed
 
+- **Breaking.** `select_window` and `move_window` require the complete `link`
+  returned by `list_windows`, including daemon generation, session, index and
+  window. A withdrawn or reindexed placement returns `link_gone` with
+  `retryable: false`; a destroyed window returns `object_gone`. Successful
+  moves return the fresh destination link.
 - Requires `rmcp` 3.9 or later. Releases before 3.9.0 read Streamable HTTP
   response bodies with no size limit
   ([fix](https://github.com/modelcontextprotocol/rust-sdk/commit/3e0156c1eaf1573a1b878e2a8998d2fa2d0b1439)).
