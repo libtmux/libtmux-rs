@@ -31,9 +31,15 @@ def run_supervisor(argv):
     os.tcsetpgrp(0, child.pid)
     os.killpg(child.pid, signal.SIGCONT)
     (directory / "cli.pid").write_text(str(child.pid))
+    stops = []
     try:
         deadline = time.monotonic() + 6
         while child.poll() is None and time.monotonic() < deadline:
+            # Wait for the kernel to report each job stop to the parent.
+            stop = os.waitid(os.P_PID, child.pid, os.WSTOPPED | os.WNOHANG)
+            if stop is not None:
+                stops.append(stop.si_status)
+                (directory / f"cli-stop-{len(stops)}").touch()
             if (directory / "take-foreground").exists() and not (
                 directory / "foreground-taken"
             ).exists():
@@ -50,6 +56,7 @@ def run_supervisor(argv):
         status = child.wait(timeout=2)
         result = {
             "status": status,
+            "stop_signals": stops,
             "foreground": os.tcgetpgrp(0),
             "expected_foreground": child.pid,
             "termios_restored": termios.tcgetattr(0) == original,
@@ -202,6 +209,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
     sent_input = False
     sent_signal = False
     stop_sent = False
+    first_stop = 0
     stop_observed = None
     background_observed: dict | None = None
     background_phase = 0
@@ -238,16 +246,16 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                 and action in ("terminal-TSTP", "background-resume", "background-read")
                 and not stop_sent
             ):
+                first_stop = len(list(directory.glob("cli-stop-*"))) + 1
                 if action == "background-read":
                     os.kill(int((directory / "cli.pid").read_text()), signal.SIGSTOP)
                 else:
                     os.write(master, b"\x1a")
                 stop_sent = True
-                stop_deadline = time.monotonic() + 1
             if stop_sent and stop_observed is None:
                 cli_pid = int((directory / "cli.pid").read_text())
                 state = process_state(cli_pid)
-                if state and state["state"] == "T":
+                if (directory / f"cli-stop-{first_stop}").exists():
                     stop_observed = {
                         "state": state,
                         "foreground": os.tcgetpgrp(master),
@@ -258,10 +266,6 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                         background_phase = 1
                     else:
                         os.kill(cli_pid, signal.SIGCONT)
-                    resume_deadline = time.monotonic() + 0.5
-                elif time.monotonic() >= stop_deadline:
-                    stop_observed = {"state": state, "failed_to_stop": True}
-                    resume_deadline = time.monotonic()
             if background_phase == 1 and (directory / "foreground-taken").exists():
                 if action == "background-read":
                     (directory / "read-again").touch()
@@ -271,8 +275,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                         continue
                 os.kill(int((directory / "cli.pid").read_text()), signal.SIGCONT)
                 background_phase = 2
-                background_deadline = time.monotonic() + 0.5
-            if background_phase == 2 and time.monotonic() >= background_deadline:
+            if background_phase == 2 and (directory / f"cli-stop-{first_stop + 1}").exists():
                 cli_pid = int((directory / "cli.pid").read_text())
                 background_observed = {
                     "state": process_state(cli_pid),
@@ -284,11 +287,10 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
             if background_phase == 3 and (directory / "foreground-returned").exists():
                 os.kill(int((directory / "cli.pid").read_text()), signal.SIGCONT)
                 background_phase = 4
-                resume_deadline = time.monotonic() + 0.5
             if (
                 stop_observed is not None
                 and not sent_signal
-                and time.monotonic() >= resume_deadline
+                and os.tcgetpgrp(master) in {entry["group"] for entry in before.values() if entry}
                 and (
                     action not in ("background-resume", "background-read") or background_phase == 4
                 )
@@ -311,6 +313,16 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
             "directory": str(directory),
             "terminal": terminal_text.decode(errors="replace"),
         }
+        if stop_sent:
+            observed = report["stop_signals"][first_stop - 1 :]
+            expected = signal.SIGSTOP if action == "background-read" else signal.SIGTSTP
+            assert observed and observed[0] == expected, (action, report, stop_observed)
+            if action in ("background-read", "background-resume"):
+                assert len(observed) == 2 and observed[1] in (signal.SIGTTIN, signal.SIGSTOP), (
+                    action,
+                    report,
+                    background_observed,
+                )
         settle = time.monotonic() + 0.5
         while (
             any((state := process_state(pid)) and state["state"] != "Z" for pid in pids)
@@ -397,7 +409,6 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                 or (
                     background_observed
                     and background_observed["state"] is not None
-                    and background_observed["state"]["state"] == "T"
                     and background_observed["foreground"] == supervisor.pid
                 )
             )
@@ -406,7 +417,6 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                 action != "terminal-TSTP"
                 or (
                     stop_observed
-                    and not stop_observed.get("failed_to_stop")
                     and stop_observed["foreground"] == report["expected_foreground"]
                     and stop_observed["echo"]
                 )
