@@ -43,6 +43,9 @@ changelog marks each break. Pin an exact version to avoid one.
   in HTML and Markdown. Its archive join checks the caller-owned fixture,
   exact recipe digest and both public client feature graphs, rejecting
   `test-support` in the copied or staged reader.
+- The docs preview copies complete multiline subshell recipes. Its Rust
+  gate checks the production code-block renderer before repeating the site
+  build and running copied programs.
 - The docs preview resolves primary home objects and native ID checks for
   both Rust source layouts. Public API extraction follows parsed module
   re-exports, so hidden helper names cannot acquire another declaration's
