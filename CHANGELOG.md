@@ -26,6 +26,10 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- The copied mixed-reader proof uses the source-owned private socket recipe
+  in HTML and Markdown. Its archive join checks the caller-owned fixture,
+  exact recipe digest and both public client feature graphs, rejecting
+  `test-support` in the copied or staged reader.
 - The docs preview resolves primary home objects and native ID checks for
   both Rust source layouts. Public API extraction follows parsed module
   re-exports, so hidden helper names cannot acquire another declaration's
