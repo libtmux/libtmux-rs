@@ -334,6 +334,50 @@ async fn a_cancelled_baseline_is_skipped_before_capture() {
 }
 
 #[tokio::test]
+async fn a_pane_moved_out_of_a_tail_session_is_missed_output_not_a_closed_pane() {
+    use libtmux_tokio::test::TestServer;
+    use libtmux_tokio::{JoinOptions, SplitDirection, SplitOptions};
+
+    let guard = TestServer::new().await.expect("tmux starts");
+    let Some(guard) = crate::test_support::control_fixture(guard).await else {
+        return;
+    };
+    let origin = guard.session("tail-origin").await.expect("session");
+    let destination = guard.session("tail-destination").await.expect("session");
+    let window = origin.windows().await.expect("windows").remove(0);
+    let pane = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("pane is created");
+    let landing = destination.panes().await.expect("panes").remove(0);
+    let tails = tails_with_owner(1);
+    let baseline = tails.read(&pane, None).await.expect("the tail starts");
+
+    pane.clone()
+        .join_into(&landing, JoinOptions::new(SplitDirection::Below))
+        .await
+        .expect("the tailed pane moves");
+
+    libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
+        tails
+            .read(&pane, Some(&baseline.cursor))
+            .await
+            .is_ok_and(|read| read.missed)
+    })
+    .await
+    .expect("losing session coverage invalidates the tail cursor");
+    let read = tails
+        .read(&pane, Some(&baseline.cursor))
+        .await
+        .expect("the retained tail is readable");
+    assert!(read.missed);
+    assert!(!read.closed, "the moved pane remains live");
+
+    drop(tails);
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn opening_is_fail_fast_and_a_failed_replacement_preserves_tails() {
     use libtmux_tokio::ControlClientLimits;
     use libtmux_tokio::test::TestServer;
