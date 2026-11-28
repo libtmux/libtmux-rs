@@ -393,7 +393,9 @@ mod tests {
                         CommandChain::new(
                             Command::new("wait-for").arg("-S").arg("retry-refused-held"),
                         )
-                        .then(Command::new("wait-for").arg("retry-refused-release")),
+                        // run-shell occupies an ordinary dispatch permit. A direct
+                        // wait-for has its own independent parked-client budget.
+                        .then(Command::new("run-shell").arg("tmux wait-for retry-refused-release")),
                     )
                     .await
             })
