@@ -6,6 +6,8 @@ mod error;
 mod framed;
 mod new_session;
 mod operand;
+mod ordinary_creation;
+mod ordinary_read;
 mod receipt;
 mod reply;
 #[doc(hidden)]
@@ -17,6 +19,8 @@ mod version;
 pub use error::{CommandKind, Effect, Error};
 pub use new_session::NewSession;
 pub use operand::{Operand, OperandKind, argv_operand};
+pub use ordinary_creation::CreationNonce;
+pub use ordinary_read::{OrdinaryPaneObservation, OrdinaryPaneProbe};
 pub use receipt::{Capture, CreatedSession, ObservePane, PaneKey};
 pub use reply::Reply;
 pub use target::{

@@ -197,7 +197,11 @@ impl ObservePane {
         Self::decode_rows(socket, &pane, listing.success_bytes()?)
     }
 
-    fn decode_rows(socket: &Path, pane: &PaneId, reply: &[u8]) -> Result<PaneKey, Error> {
+    pub(crate) fn decode_rows(
+        socket: &Path,
+        pane: &PaneId,
+        reply: &[u8],
+    ) -> Result<PaneKey, Error> {
         if reply.is_empty() {
             return Err(Error::PaneNotFound(pane.clone()));
         }

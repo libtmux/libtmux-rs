@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::{
-    Capture, CommandKind, CreatedSession, Error, NewSession, ObservePane, PaneId, PaneKey, framed,
+    Capture, CommandKind, CreatedSession, CreationNonce, Error, NewSession, ObservePane, PaneId,
+    PaneKey, framed,
 };
 
 /// A native driver's collected reply before operation-specific verification.
@@ -117,6 +118,70 @@ impl Reply {
             });
         }
         receipt
+    }
+
+    /// Verify an ordinary creation's unique request-specific first record.
+    ///
+    /// The driver must use the nonce encoded in this request's print projection.
+    /// In the supported built-in command, printing precedes client hook output.
+    /// A later row is never searched for a receipt. A repeated nonce makes the
+    /// reply ambiguous, even when the first record was well formed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unconfirmed effect for absent, incomplete or ambiguous
+    /// markers. A verified acknowledgement retains any typed receipt across
+    /// process failure, a failed follow-up or a late reply.
+    pub fn ordinary_creation(
+        self,
+        request: NewSession,
+        socket: &Path,
+        nonce: CreationNonce,
+    ) -> Result<CreatedSession, Error> {
+        let row = nonce
+            .receipt_row(&self.stdout)
+            .ok_or(Error::UnconfirmedCreation {
+                status: self.status,
+                late: self.late,
+            })?;
+        let receipt = request.decode(socket, &row);
+        if self.status != Some(0) {
+            return Err(Error::CreationFollowup {
+                receipt: receipt.ok(),
+                status: self.status,
+                late: self.late,
+            });
+        }
+        if self.late {
+            return Err(Error::LateCreation {
+                receipt: receipt.ok(),
+            });
+        }
+        receipt
+    }
+
+    /// Retain an ordinary receipt collected before cancellation or reply loss.
+    ///
+    /// Only a complete first record with a unique nonce and valid typed receipt
+    /// changes the effect evidence. Malformed or incomplete output preserves
+    /// the original interruption and its uncertainty.
+    #[must_use]
+    pub fn interrupted_ordinary_creation(
+        socket: &Path,
+        nonce: CreationNonce,
+        stdout: &[u8],
+        cause: Error,
+    ) -> Error {
+        let Some(row) = nonce.receipt_row(stdout) else {
+            return cause;
+        };
+        match NewSession::new("").decode(socket, &row) {
+            Ok(receipt) => Error::CreationInterrupted {
+                receipt,
+                source: Box::new(cause),
+            },
+            Err(_) => cause,
+        }
     }
 
     /// Verify an exact pane observation and discard any late result.

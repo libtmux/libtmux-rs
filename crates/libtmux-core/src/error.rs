@@ -92,6 +92,9 @@ pub enum Error {
     /// The version policy refused one-shot control framing before dispatch.
     #[error("this tmux version is not qualified for one-shot control framing")]
     UnsupportedVersion,
+    /// A version report or feature check refused dispatch with its exact cause.
+    #[error(transparent)]
+    Version(#[from] crate::VersionError),
     /// The deadline elapsed after dispatch; a mutation may have run.
     #[error("deadline elapsed; a dispatched tmux command may have run")]
     Deadline,
@@ -233,6 +236,7 @@ impl Error {
             | Self::BeforeSpawn
             | Self::CancelledBeforeSpawn
             | Self::UnsupportedVersion
+            | Self::Version(_)
             | Self::Spawn(_)
             | Self::WrongEndpoint => Effect::NotSubmitted,
             Self::AfterCreate
