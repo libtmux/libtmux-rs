@@ -18,6 +18,14 @@ which a published crate cannot link by a relative path.
 
 ### Changed
 
+- **Behaviour change.** Tokio channel waits and queued locks have a separate
+  finite budget, `DispatchLimits::max_parked`, shared across clones and
+  control-derived handles. It defaults to 16 and includes retained channel
+  signals. Saturation returns `Error::ParkedLimitExceeded` before spawning
+  a client; signal and unlock keep their ordinary capacity. Fresh discovery
+  of a replacement retires the old generation's clients and signals.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - **Breaking.** The Tokio client no longer exposes `Error::ServerReplaced`.
   An ordinary queue-guard failure returns the native result without claiming
   that nothing ran. `Error::is_transient` no longer treats diagnostics about
