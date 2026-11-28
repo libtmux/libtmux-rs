@@ -157,26 +157,8 @@ impl Server {
     /// Returns an error when the window listing fails.
     pub async fn window_by_id(&self, id: &WindowId) -> Result<Option<Window>, Error> {
         let server = self.for_discovery().await?;
-        let projections = listing::windows(
-            &server.core,
-            listing::Scope::Server,
-            Some(&id.predicate("window_id")),
-        )
-        .await?;
-
-        // A window linked into several sessions has one row per link, and
-        // activity belongs to the link rather than to the window: the same
-        // window can be current in one session and not in another. Taking
-        // whichever row tmux happened to list first would pick by session
-        // name, so the current link wins and the lowest index breaks a tie.
-        projections
-            .into_iter()
-            .min_by_key(|projection| {
-                (
-                    !projection.link().is_active(),
-                    projection.link().identity().window_index(),
-                )
-            })
+        listing::window_by_id(&server.core, id, None)
+            .await?
             .map(|projection| Window::new(Arc::clone(&server.core), projection))
             .transpose()
     }

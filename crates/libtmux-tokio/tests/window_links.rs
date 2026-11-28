@@ -254,6 +254,53 @@ async fn intrinsic_link_and_kill_survive_loss_of_the_discovery_session() {
 }
 
 #[tokio::test]
+async fn intrinsic_window_refresh_follows_surviving_placements() {
+    let guard = TestServer::new().await.unwrap();
+    let source = guard.session("refresh-origin").await.unwrap();
+    let holder = guard.session("refresh-holder").await.unwrap();
+    let mut window = source
+        .new_window(NewWindowOptions::new("shared").index(4))
+        .await
+        .unwrap();
+    let key = window.key().clone();
+    let mut renamed = window.clone();
+    let mut resized = window.clone();
+    window.link_to(&holder, Some(7)).await.unwrap();
+    window.link_to(&holder, Some(9)).await.unwrap();
+    let mut preferred = at(&holder, 9).await.window().clone();
+    preferred.refresh().await.unwrap();
+    let mut withdrawn = window.link();
+    withdrawn.clone().unlink().await.unwrap();
+    let refresh = window.refresh().await.map(|_| ());
+    let rename = renamed.rename("still-shared").await.map(|_| ());
+    let resize = resized.resize(96, 32).await.map(|_| ());
+    let live = at(&holder, 7).await;
+    assert_eq!(live.window().name().as_bytes(), b"still-shared");
+    assert_eq!((live.window().width(), live.window().height()), (96, 32));
+    assert!(
+        refresh.is_ok() && rename.is_ok() && resize.is_ok(),
+        "surviving window: refresh {refresh:?}, rename {rename:?}, resize {resize:?}"
+    );
+    assert_eq!(
+        preferred.index(),
+        9,
+        "refresh keeps an existing exact placement"
+    );
+    assert_eq!(window.key(), &key);
+    assert_eq!(window.session_id(), holder.id());
+    assert!(matches!(
+        withdrawn.select().await,
+        Err(Error::LinkGone { .. })
+    ));
+    window.clone().kill().await.unwrap();
+    assert!(matches!(
+        window.refresh().await,
+        Err(Error::ObjectGone { .. })
+    ));
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_failed_refresh_keeps_the_accepted_move_classification() {
     let guard = TestServer::new().await.unwrap();
     let source = guard.session("refresh-source").await.unwrap();

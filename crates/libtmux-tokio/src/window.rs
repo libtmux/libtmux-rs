@@ -520,24 +520,19 @@ impl Window {
 
     /// Replace this handle's snapshot with the window's current state.
     ///
-    /// The handle keeps following the same link, so a window that moved to a
-    /// different index in the same session is found at its new index.
+    /// Refresh keeps the observed placement if it still exists. Otherwise it
+    /// prefers another link in the same session, then an active link and the
+    /// lowest index among the surviving placements. Previously obtained
+    /// [`WindowLink`] handles continue to address their original placements.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ObjectGone`] when this session no longer links the
+    /// Returns [`Error::ObjectGone`] when the bound daemon has no link to the
     /// window, or a listing error when tmux could not be read.
     pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
-        let session = self.session_id().clone();
-        self.refresh_in(&session).await
-    }
-
-    async fn refresh_in(&mut self, session: &SessionId) -> Result<&mut Self, Error> {
-        let session = session.to_string();
-        let projection = listing::windows(&self.core, listing::Scope::Target(&session), None)
+        let previous = self.projection.link().identity();
+        let projection = listing::window_by_id(&self.core, self.id(), Some(previous))
             .await?
-            .into_iter()
-            .find(|projection| projection.window().window_id() == self.id())
             .ok_or_else(|| Error::ObjectGone {
                 kind: ObjectKind::Window,
                 id: self.id().to_string(),
@@ -551,8 +546,7 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ObjectGone`] when this session no longer links the
-    /// window, or a listing error when tmux could not be read.
+    /// Returns the same errors as [`Self::refresh`].
     pub async fn refreshed(&self) -> Result<Self, Error> {
         let mut refreshed = self.clone();
         refreshed.refresh().await?;

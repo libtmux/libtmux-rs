@@ -163,6 +163,29 @@ pub(crate) async fn windows(
         .map_err(decode_error(LIST_COMMAND))
 }
 
+/// Prefer the observed placement while it exists, then another in that
+/// session. Among equivalent links prefer an active one and the lowest index.
+pub(crate) async fn window_by_id(
+    core: &Core,
+    id: &crate::WindowId,
+    previous: Option<&crate::snapshot::WindowLinkIdentity>,
+) -> Result<Option<WindowProjection>, Error> {
+    let rows = windows(core, Scope::Server, Some(&id.predicate("window_id"))).await?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.window().window_id() == id)
+        .min_by_key(|row| {
+            let link = row.link();
+            let identity = link.identity();
+            let placement = match previous {
+                Some(old) if old == identity => 0,
+                Some(old) if old.session_id() == identity.session_id() => 1,
+                _ => 2,
+            };
+            (placement, !link.is_active(), identity.window_index())
+        }))
+}
+
 /// Resolve one pane and hydrate its containing window from the same tmux row.
 pub(crate) async fn window_for_pane(
     core: &Core,
