@@ -1,6 +1,13 @@
 use std::ffi::{OsStr, OsString};
 
 /// The table where tmux reads or writes an option.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::OptionScope;
+/// assert_ne!(OptionScope::Session, OptionScope::Window);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OptionScope {
@@ -15,6 +22,13 @@ pub enum OptionScope {
 }
 
 /// The side of the original pane where a split places its new pane.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::SplitDirection;
+/// assert_eq!(SplitDirection::Left.flags(), ("-h", true));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SplitDirection {
     /// Above the pane being divided.

@@ -8,46 +8,62 @@ use crate::{
 
 const KEY_FORMAT: &str = "#{pid} #{start_time} #{pane_id}";
 
-/// A pane ID bound to a captured endpoint and the daemon generation observed there.
+/// An object ID together with the endpoint and daemon generation that supplied it.
 ///
-/// Debug output redacts the endpoint. A capture checks the generation again in
-/// the same tmux command queue before reading the pane.
+/// A daemon may reuse the same ID after a restart. Both execution drivers
+/// compare the generation before acting on a key.
 ///
 /// # Examples
 ///
 /// ```
-/// use libtmux_core::NewSession;
-/// use std::path::Path;
-///
-/// let receipt = NewSession::new("work")
-///     .decode(Path::new("/example/socket"), b"123 456 %7 $8 @9\n")?;
-/// assert_eq!(receipt.pane().id().to_string(), "%7");
+/// use libtmux_core::{NewSession, PaneKey};
+/// let created = NewSession::new("work")
+///     .decode("/example/socket".as_ref(), b"123 456 %7 $8 @9\n")?;
+/// let pane: &PaneKey = created.pane();
+/// assert_eq!(pane.id().to_string(), "%7");
 /// # Ok::<(), libtmux_core::Error>(())
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PaneKey {
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ObjectKey<I> {
     server: ServerIdentity,
     generation: ServerGeneration,
-    pane: PaneId,
+    id: I,
 }
 
-impl PaneKey {
-    /// The pane ID reported by the creation or exact listing reply.
+/// A session observed on one daemon generation.
+pub type SessionKey = ObjectKey<SessionId>;
+/// A window observed on one daemon, independent of its links into sessions.
+pub type WindowKey = ObjectKey<WindowId>;
+/// A pane observed on one daemon generation.
+pub type PaneKey = ObjectKey<PaneId>;
+
+impl<I> ObjectKey<I> {
+    /// Restore an identity from an observation on the named daemon.
     #[must_use]
-    pub fn id(&self) -> PaneId {
-        self.pane.clone()
+    pub const fn new(server: ServerIdentity, generation: ServerGeneration, id: I) -> Self {
+        Self { server, generation, id }
     }
 
-    /// The daemon generation that reported this pane.
+    /// The object's tmux ID.
+    #[must_use]
+    pub fn id(&self) -> I where I: Clone {
+        self.id.clone()
+    }
+
+    /// The daemon generation that supplied the ID.
     #[must_use]
     pub const fn generation(&self) -> ServerGeneration {
         self.generation
     }
 
-    /// The captured endpoint associated with this pane.
+    /// The socket endpoint at which the object was observed.
     #[must_use]
     pub const fn server_identity(&self) -> &ServerIdentity {
         &self.server
+    }
+
+    fn on_same_daemon<T>(&self, id: T) -> ObjectKey<T> {
+        ObjectKey::new(self.server.clone(), self.generation, id)
     }
 }
 
@@ -62,7 +78,7 @@ fn decode_key(socket: &Path, row: &[u8]) -> Option<PaneKey> {
     Some(PaneKey {
         server: ServerIdentity::from_socket_path(socket.to_owned()),
         generation: ServerGeneration::from_raw(pid, started),
-        pane,
+        id: pane,
     })
 }
 
@@ -101,6 +117,18 @@ impl CreatedSession {
     #[must_use]
     pub fn window(&self) -> WindowId {
         self.window.clone()
+    }
+
+    /// The created session bound to the daemon that acknowledged it.
+    #[must_use]
+    pub fn session_key(&self) -> SessionKey {
+        self.pane.on_same_daemon(self.session())
+    }
+
+    /// The created window bound to the same daemon as its first pane.
+    #[must_use]
+    pub fn window_key(&self) -> WindowKey {
+        self.pane.on_same_daemon(self.window())
     }
 
     /// The generation-stamped key for the first pane.
@@ -214,7 +242,7 @@ impl ObservePane {
         let mut observed = None;
         for row in rows.split(|&byte| byte == b'\n') {
             let key = decode_key(socket, row).ok_or(Error::InvalidKey)?;
-            if &key.pane != pane || observed.as_ref().is_some_and(|prior| prior != &key) {
+            if &key.id != pane || observed.as_ref().is_some_and(|prior| prior != &key) {
                 return Err(Error::InvalidKey);
             }
             // A pane appears once per session that links its window.
@@ -258,7 +286,7 @@ impl Capture {
         if socket.as_os_str() != key.server.socket_path().as_os_str() {
             return Err(Error::WrongEndpoint);
         }
-        let pane = key.pane.to_string();
+        let pane = key.id.to_string();
         let pid = key.generation.pid();
         let started = key.generation.unix_start_time();
         let predicate = format!(

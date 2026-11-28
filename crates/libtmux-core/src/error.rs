@@ -56,6 +56,19 @@ pub enum Effect {
     Unknown,
 }
 
+impl Effect {
+    /// Stable spelling for machine-readable error reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotSubmitted => "not_submitted",
+            Self::Observation => "observation",
+            Self::Created => "created",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// A rejected request or a failure with classified evidence about its effects.
 ///
 /// Receipt and diagnostic payload bytes are never included in decoding errors.

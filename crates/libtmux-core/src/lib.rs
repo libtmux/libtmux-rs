@@ -39,7 +39,7 @@ pub use ordinary_read::{OrdinaryPaneObservation, OrdinaryPaneProbe};
 #[doc(hidden)]
 pub use placement::assignment;
 pub use placement::{OptionScope, SplitDirection};
-pub use receipt::{Capture, CreatedSession, ObservePane, PaneKey};
+pub use receipt::{Capture, CreatedSession, ObjectKey, ObservePane, PaneKey, SessionKey, WindowKey};
 pub use reply::Reply;
 pub use target::{
     IdParseError, PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName,

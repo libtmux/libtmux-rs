@@ -335,8 +335,8 @@ define_target!(
 /// *mutation* lands on whatever now wears that id.
 ///
 /// The pid alone would not do. A replacement daemon can be handed the pid of
-/// the one it replaced, so the start time is what makes this a generation
-/// rather than a guess.
+/// the one it replaced. tmux reports its start time to the whole second.
+/// Two daemons that reuse a PID within that second are indistinguishable.
 ///
 /// # Examples
 ///
@@ -354,6 +354,22 @@ pub struct ServerGeneration {
 }
 
 impl ServerGeneration {
+    /// Build the same-queue check for an operation that uses this generation.
+    ///
+    /// Run the client with `-N` so an absent daemon stays absent. The refusal
+    /// branch is invalid tmux syntax and stops the remaining commands.
+    #[must_use]
+    pub fn queue_guard(self) -> crate::Command {
+        crate::Command::new("if-shell")
+            .arg("-F")
+            .arg(format!(
+                "#{{&&:#{{==:#{{pid}},{}}},#{{==:#{{start_time}},{}}}}}",
+                self.pid, self.start_time
+            ))
+            .arg("")
+            .arg("}")
+    }
+
     /// Restore a generation decoded from a tmux identity reply.
     ///
     /// Drivers must validate that the timestamp is representable before
