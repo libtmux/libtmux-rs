@@ -55,6 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let created = server.new_session(NewSession::new("readme").command("sleep 30"))?;
     let observed = server.observe_pane(created.pane().id());
     server.kill_created_session(&created)?;
+    server.close_ordinary()?;
     assert_eq!(&observed?, created.pane());
     println!("created and cleaned one session");
     Ok(())

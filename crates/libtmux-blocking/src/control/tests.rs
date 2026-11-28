@@ -17,6 +17,31 @@ fn managed() -> Option<(Fixture, ControlMode)> {
 }
 
 #[test]
+fn ordinary_close_preserves_attached_control_and_refuses_new_qualification() {
+    let Some((fixture, mode)) = managed() else {
+        return;
+    };
+    fixture.server.close_ordinary().unwrap();
+    let reply = mode
+        .send(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("still attached"),
+        )
+        .unwrap();
+    assert_eq!(reply.blocks()[0].output(), b"still attached\n");
+    let error = ControlMode::attach(&fixture.server.clone(), "$0".parse().unwrap()).unwrap_err();
+    assert_eq!(error.effect(), Effect::NotSubmitted);
+    assert!(matches!(
+        std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<libtmux_core::Error>()),
+        Some(libtmux_core::Error::Closed)
+    ));
+    fixture.server.close_ordinary().unwrap();
+    mode.shutdown().unwrap();
+}
+
+#[test]
 fn initial_control_probe_waits_for_a_busy_executable() {
     let fixture = ProtocolFixture::new("ordinary");
     let writer = std::fs::OpenOptions::new()

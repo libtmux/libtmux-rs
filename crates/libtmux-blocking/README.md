@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let created = server.new_session(NewSession::new("readme").command("sleep 30"))?;
     let observed = server.observe_pane(created.pane().id());
     server.kill_created_session(&created)?;
+    server.close_ordinary()?;
     assert_eq!(&observed?, created.pane());
     println!("created and cleaned one session");
     Ok(())
@@ -56,6 +57,23 @@ $ cargo run -- "$directory/socket"
 
 It prints `created and cleaned one session`. The program kills the session it
 created even if observing its pane fails.
+
+## Confirm ordinary subprocess cleanup
+
+[`Server::close_ordinary`] stops ordinary subprocess admission across every
+clone and waits up to one second per call. Admitted requests keep their
+existing deadlines and cancellation tokens. A successful close confirms that
+their children have been reaped; it does not kill the tmux daemon.
+
+After [`libtmux_core::Error::CleanupPending`], call it again to check completion.
+The first cleanup failure is retained in a bounded
+[`libtmux_core::Error::Shutdown`] summary, including after the original request
+has returned. New ordinary requests return [`libtmux_core::Error::Closed`].
+
+Persistent control clients keep independent lifetimes and require their own
+shutdown. New attachments use ordinary subprocesses for qualification, which
+cannot complete after close. Dropping the server does not wait for cleanup;
+admitted workers keep ownership until reaping.
 
 ## Read pane bytes or share its key
 

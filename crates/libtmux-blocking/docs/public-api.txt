@@ -7,6 +7,7 @@ function libtmux_blocking::CancellationToken::is_cancelled: fn(&self) -> bool
 function libtmux_blocking::Server::at: fn(socket: impl AsRef<Path>) -> Result<Self, std::io::Error>
 function libtmux_blocking::Server::capture: fn(&self, pane: &PaneKey) -> Result<Vec<u8>, Error>
 function libtmux_blocking::Server::capture_with: fn(&self, pane: &PaneKey, options: libtmux_blocking::RequestOptions) -> Result<Vec<u8>, Error>
+function libtmux_blocking::Server::close_ordinary: fn(&self) -> Result<(), Error>
 function libtmux_blocking::Server::generation: fn(&self) -> Result<libtmux_core::ServerGeneration, Error>
 function libtmux_blocking::Server::generation_with: fn(&self, options: libtmux_blocking::RequestOptions) -> Result<libtmux_core::ServerGeneration, Error>
 function libtmux_blocking::Server::kill_created_session: fn(&self, receipt: &CreatedSession) -> Result<(), Error>

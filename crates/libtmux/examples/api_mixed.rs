@@ -66,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Error::after_cleanup(Err(error.into()), cleanup)
         }
     };
+    let captured = Error::after_cleanup(captured, blocking.close_ordinary().map_err(Error::from));
     let captured = Error::after_cleanup(captured, runtime.block_on(server.shutdown()));
     match captured? {
         CaptureOutcome::Captured(bytes) => {

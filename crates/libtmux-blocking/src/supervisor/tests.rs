@@ -1,10 +1,12 @@
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use libtmux_core::{Effect, Error};
 
 use super::Children;
-use crate::{CancellationToken, RequestOptions};
+use crate::{CancellationToken, RequestOptions, Server};
 
 #[path = "../../tests/common/supervision.rs"]
 mod fixture;
@@ -14,6 +16,288 @@ fn options(duration: Duration, limit: usize) -> RequestOptions {
         budget: fixture::budget(duration, limit),
         cancellation: CancellationToken::default(),
     }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct CleanupGate {
+    entered: AtomicBool,
+    released: Mutex<bool>,
+    changed: Condvar,
+    pub(super) fail: bool,
+    panic: bool,
+}
+
+impl CleanupGate {
+    pub(super) fn wait(&self) {
+        self.entered.store(true, Ordering::Release);
+        let mut released = self.released.lock().unwrap();
+        while !*released {
+            released = self.changed.wait(released).unwrap();
+        }
+        drop(released);
+        assert!(!self.panic, "injected supervisor panic before cleanup");
+    }
+
+    fn wait_for_owner(&self) {
+        let end = Instant::now() + Duration::from_secs(3);
+        while !self.entered.load(Ordering::Acquire) {
+            assert!(Instant::now() < end, "owner did not enter cleanup");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn release(&self) {
+        *self.released.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+}
+
+struct ReleaseCleanup(Arc<CleanupGate>);
+
+impl Drop for ReleaseCleanup {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ordinary_close_confirms_delayed_cleanup_across_clones() {
+    let fixture = fixture::Fixture::new();
+    let gate = Arc::new(CleanupGate::default());
+    let release = ReleaseCleanup(gate.clone());
+    let children = Children {
+        cleanup_gate: Some(gate.clone()),
+        ..Children::with_limit(1)
+    };
+    let mut server = Server::at(fixture.path("socket")).unwrap();
+    server.children = children.clone();
+    let clone = server.clone();
+    let worker = children.clone();
+    let command = fixture.child(fixture::PARKED);
+    let request = options(Duration::from_secs(5), 4096);
+    let cancellation = request.cancellation.clone();
+    let caller = std::thread::spawn(move || worker.dispatch(command, request, None));
+    fixture.wait_for("pid");
+    cancellation.cancel();
+    gate.wait_for_owner();
+    let result = caller.join().unwrap();
+    assert!(
+        matches!(result, Err(Error::CleanupPending(_))),
+        "{result:?}"
+    );
+    let side_effect =
+        || fixture.child("import pathlib, sys; pathlib.Path(sys.argv[1], 'ran').touch()");
+    assert!(matches!(
+        children.dispatch(side_effect(), options(Duration::from_secs(3), 4096), None),
+        Err(Error::Busy { limit: 1 })
+    ));
+    let started = Instant::now();
+    let pending = server.close_ordinary();
+    assert!(
+        matches!(pending, Err(Error::CleanupPending(_))),
+        "{pending:?}"
+    );
+    assert_eq!(pending.unwrap_err().effect(), Effect::Unknown);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let pid = std::fs::read_to_string(fixture.path("pid")).unwrap();
+    assert!(std::path::Path::new("/proc").join(pid.trim()).exists());
+    assert!(matches!(
+        clone
+            .children
+            .dispatch(side_effect(), options(Duration::from_secs(3), 4096), None),
+        Err(Error::Closed)
+    ));
+    assert!(!fixture.path("ran").exists());
+    let closer = std::thread::spawn(move || clone.close_ordinary());
+    let repeated = server.close_ordinary();
+    assert!(
+        matches!(repeated, Err(Error::CleanupPending(_))),
+        "{repeated:?}"
+    );
+    assert!(matches!(
+        closer.join().unwrap(),
+        Err(Error::CleanupPending(_))
+    ));
+    drop(release);
+    server.close_ordinary().expect("real child is reaped");
+    fixture.assert_reaped("pid");
+    server.close_ordinary().expect("completion is repeatable");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ordinary_close_retains_cleanup_failure_after_the_caller_returns() {
+    let fixture = fixture::Fixture::new();
+    let gate = Arc::new(CleanupGate {
+        fail: true,
+        ..CleanupGate::default()
+    });
+    let release = ReleaseCleanup(gate.clone());
+    let children = Children {
+        cleanup_gate: Some(gate.clone()),
+        ..Children::with_limit(1)
+    };
+    let mut server = Server::at(fixture.path("socket")).unwrap();
+    server.children = children.clone();
+    let command = fixture.child(fixture::PARKED);
+    let request = options(Duration::from_secs(5), 4096);
+    let cancellation = request.cancellation.clone();
+    let caller = std::thread::spawn(move || children.dispatch(command, request, None));
+    fixture.wait_for("pid");
+    cancellation.cancel();
+    gate.wait_for_owner();
+    assert!(matches!(
+        caller.join().unwrap(),
+        Err(Error::CleanupPending(_))
+    ));
+    assert!(matches!(
+        server.close_ordinary(),
+        Err(Error::CleanupPending(_))
+    ));
+    drop(release);
+    for holder in [&server, &server.clone()] {
+        let error = holder
+            .close_ordinary()
+            .expect_err("late cleanup failure survives its caller");
+        let Error::Shutdown(summary) = error else {
+            panic!("{error}")
+        };
+        assert!(
+            summary.contains("injected cleanup signal failure"),
+            "{summary}"
+        );
+        assert!(summary.len() <= 1024, "cleanup history is bounded");
+    }
+    fixture.assert_reaped("pid");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ordinary_close_retains_ownership_and_failure_when_the_worker_panics() {
+    let fixture = fixture::Fixture::new();
+    let gate = Arc::new(CleanupGate {
+        panic: true,
+        ..CleanupGate::default()
+    });
+    let release = ReleaseCleanup(gate.clone());
+    let children = Children {
+        cleanup_gate: Some(gate.clone()),
+        ..Children::with_limit(1)
+    };
+    let mut server = Server::at(fixture.path("socket")).unwrap();
+    server.children = children.clone();
+    let command = fixture.child(fixture::PARKED);
+    let request = options(Duration::from_secs(5), 4096);
+    let cancellation = request.cancellation.clone();
+    let caller = std::thread::spawn(move || children.dispatch(command, request, None));
+    fixture.wait_for("pid");
+    cancellation.cancel();
+    gate.wait_for_owner();
+    assert!(matches!(
+        caller.join().unwrap(),
+        Err(Error::CleanupPending(_))
+    ));
+    assert!(matches!(
+        server.close_ordinary(),
+        Err(Error::CleanupPending(_))
+    ));
+    drop(release);
+    for holder in [&server, &server.clone()] {
+        let error = holder
+            .close_ordinary()
+            .expect_err("worker unwind is retained after reaping");
+        assert!(
+            matches!(error, Error::Shutdown(ref cause) if cause == "subprocess supervisor panicked"),
+            "{error}"
+        );
+    }
+    fixture.assert_reaped("pid");
+}
+
+#[test]
+fn ordinary_close_allows_an_admitted_request_to_finish() {
+    let fixture = fixture::Fixture::new();
+    let children = Children::with_limit(1);
+    let worker = children.clone();
+    let command = fixture.child(fixture::PARKED);
+    let caller = std::thread::spawn(move || {
+        worker.dispatch(command, options(Duration::from_secs(5), 4096), None)
+    });
+    fixture.wait_for("pid");
+    let mut server = Server::at(fixture.path("socket")).unwrap();
+    server.children = children.clone();
+    let closer = server.clone();
+    let close = std::thread::spawn(move || closer.close_ordinary());
+    let end = Instant::now() + Duration::from_secs(3);
+    loop {
+        let refused = children.dispatch(
+            fixture.child("import pathlib, sys; pathlib.Path(sys.argv[1], 'ran').touch()"),
+            options(Duration::from_secs(3), 4096),
+            None,
+        );
+        match refused {
+            Err(Error::Closed) => break,
+            Err(Error::Busy { limit: 1 }) => {
+                assert!(Instant::now() < end, "close did not stop admission");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            other => panic!("request was not refused: {other:?}"),
+        }
+    }
+    assert!(!fixture.path("ran").exists());
+    std::fs::write(fixture.path("release"), b"").unwrap();
+    assert!(caller.join().unwrap().unwrap().0.status.success());
+    close
+        .join()
+        .unwrap()
+        .expect("admitted child finishes without cancellation");
+    assert!(matches!(server.generation(), Err(Error::Closed)));
+    assert!(matches!(
+        server
+            .clone()
+            .new_session(libtmux_core::NewSession::new("closed")),
+        Err(Error::Closed)
+    ));
+    server.close_ordinary().unwrap();
+}
+
+#[test]
+fn ordinary_close_and_concurrent_admission_have_one_order_across_clones() {
+    let fixture = fixture::Fixture::new();
+    let mut server = Server::at(fixture.path("socket")).unwrap();
+    server.children = Children::with_limit(8);
+    let start = Arc::new(std::sync::Barrier::new(9));
+    let workers: Vec<_> = (0..8)
+        .map(|index| {
+            let clone = server.clone();
+            let start = start.clone();
+            let command = fixture.child(&format!(
+                "import pathlib, sys; pathlib.Path(sys.argv[1], 'ran-{index}').touch()"
+            ));
+            std::thread::spawn(move || {
+                start.wait();
+                clone
+                    .children
+                    .dispatch(command, options(Duration::from_secs(3), 4096), None)
+            })
+        })
+        .collect();
+    start.wait();
+    server
+        .close_ordinary()
+        .expect("all earlier admissions finish");
+    for (index, worker) in workers.into_iter().enumerate() {
+        match worker.join().unwrap() {
+            Ok((output, false)) => {
+                assert!(output.status.success());
+                assert!(fixture.path(&format!("ran-{index}")).exists());
+            }
+            Err(Error::Closed) => assert!(!fixture.path(&format!("ran-{index}")).exists()),
+            other => panic!("admission and close disagreed: {other:?}"),
+        }
+    }
+    server.close_ordinary().unwrap();
 }
 
 #[test]

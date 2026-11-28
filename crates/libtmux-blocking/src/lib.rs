@@ -104,9 +104,9 @@ impl Default for RequestOptions {
 
 /// A native blocking client bound to one absolute Unix socket path.
 ///
-/// Clones share subprocess admission. No async runtime is constructed or
-/// required. Creation, observation and capture use ordinary subprocesses;
-/// these methods never acquire a control client implicitly.
+/// Clones share subprocess admission and [`Self::close_ordinary`]. No async
+/// runtime is constructed or required. Creation, observation and capture use
+/// ordinary subprocesses; these methods never acquire a control client implicitly.
 ///
 /// # Examples
 ///
@@ -150,6 +150,43 @@ impl Server {
     pub fn with_executable(mut self, executable: impl Into<OsString>) -> Self {
         self.executable = executable.into();
         self
+    }
+
+    /// Stop ordinary subprocess admission and wait up to one second for cleanup.
+    ///
+    /// All clones permanently stop admitting ordinary subprocesses atomically.
+    /// Admitted workers keep their existing deadlines and cancellation tokens;
+    /// this method does not cancel them. Repeated calls each wait up to one
+    /// second. Success confirms every admitted ordinary child has been reaped.
+    /// The first cleanup failure is retained in a bounded summary and returned
+    /// by every later call, even if its request already returned.
+    ///
+    /// Existing persistent control clients have independent lifetimes and still
+    /// require their own shutdown. New control attachments cannot complete
+    /// qualification after this call because qualification uses ordinary
+    /// subprocesses. Dropping a server does not wait; workers retain ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CleanupPending`] while an admitted worker still owns its
+    /// reservation, or [`Error::Shutdown`] after reaping if cleanup failed or a
+    /// worker panicked. Further ordinary requests return [`Error::Closed`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_blocking::Server;
+    /// use libtmux_core::Error;
+    ///
+    /// let server = Server::at("/tmp/libtmux-rs-dev/closed/socket")?;
+    /// let clone = server.clone();
+    /// server.close_ordinary()?;
+    /// assert!(matches!(clone.generation(), Err(Error::Closed)));
+    /// clone.close_ordinary()?;
+    /// # Ok::<_, Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn close_ordinary(&self) -> Result<(), Error> {
+        self.children.close_ordinary()
     }
 
     /// Create a detached session and retain its generated object identities.
@@ -341,6 +378,7 @@ impl Server {
     ///     let server = Server::at(socket)?;
     ///     let key = server.observe_pane(pane)?;
     ///     let bytes = server.capture(&key)?;
+    ///     server.close_ordinary()?;
     ///     io::stdout().lock().write_all(&bytes)?;
     ///     Ok(())
     /// }
