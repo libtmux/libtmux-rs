@@ -649,11 +649,11 @@ pub enum Error {
     /// attaches again.
     #[cfg(feature = "control-mode")]
     #[non_exhaustive]
-    #[error("a control-mode {frame} grew past its {limit} byte budget")]
+    #[error("control-mode {frame} exceeded its limit of {limit}")]
     ControlModeFrameTooLarge {
-        /// Which frame: a line, or a command's response block.
+        /// The budget counts `command`, `line`, or `reply` bytes, or `blocks` per reply.
         frame: &'static str,
-        /// The budget in bytes.
+        /// The maximum in the units named by `frame`.
         limit: usize,
     },
 

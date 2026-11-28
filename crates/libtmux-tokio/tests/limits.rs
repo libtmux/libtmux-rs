@@ -182,40 +182,27 @@ async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
     let server = guard.server();
     let session = guard.session("frames").await.expect("session");
 
-    // Small enough that an ordinary command's own response block exceeds it,
-    // which is the point: the budget is the only thing bounding a connection
-    // that reads from a process which keeps running.
-    let control = ControlMode::attach_with_limits(
+    // The authenticated connection must read a full identity challenge before
+    // it can accept commands. The nonce alone exceeds this reply byte budget.
+    let error = ControlMode::attach_with_limits(
         server,
         session.id(),
         ControlLimits::default().max_block_bytes(16),
     )
-    .await;
-
-    // Attaching itself reads tmux's opening block, so a 16-byte budget may
-    // fail there; either way the connection refuses rather than growing.
-    match control {
-        Err(error) => assert!(
-            matches!(&error, libtmux_tokio::Error::ControlModeFrameTooLarge { frame, limit, .. }
-                if *frame == "block" && *limit == 16),
-            "got {error:?}",
+    .await
+    .expect_err("the identity reply exceeds 16 bytes");
+    assert!(
+        matches!(
+            &error,
+            libtmux_tokio::Error::ControlModeFrameTooLarge {
+                frame: "reply",
+                limit: 16,
+                ..
+            }
         ),
-        Ok(control) => {
-            let error = control
-                .send(Command::new("list-panes").arg("-a"))
-                .await
-                .expect_err("the answer is past the budget");
-            assert!(
-                matches!(
-                    &error,
-                    libtmux_tokio::Error::ControlModeFrameTooLarge { .. }
-                ),
-                "got {error:?}",
-            );
-            assert_eq!(error.kind(), libtmux_tokio::ErrorKind::Decode);
-            let _ = control.shutdown().await;
-        }
-    }
+        "got {error:?}"
+    );
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::Decode);
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
