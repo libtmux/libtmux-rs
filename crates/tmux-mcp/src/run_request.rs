@@ -467,7 +467,7 @@ mod tests {
 
         // The count is read after `run` returns, so a shutdown that had not
         // completed first would report zero.
-        let (result, shutdowns) = exec::observing_prepared_shutdowns(run(
+        let (result, shutdowns) = Box::pin(exec::observing_prepared_shutdowns(run(
             &pane,
             "printf should-not-run",
             Duration::from_secs(2),
@@ -483,7 +483,7 @@ mod tests {
                 echoes: &echoes,
             },
             async { Err(refusal) },
-        ))
+        )))
         .await;
 
         assert!(matches!(result, Err(RunError::Guard(_))));
