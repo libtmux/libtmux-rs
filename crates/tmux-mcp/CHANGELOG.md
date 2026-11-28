@@ -20,6 +20,12 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Fixed
+
+- MCP clients receive the `tmux-mcp` package name and version at
+  initialization. Previous builds reported the protocol library’s version.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 ### Changed
 
 - **Behaviour change.** Every tool reports `readOnlyHint: false`,
