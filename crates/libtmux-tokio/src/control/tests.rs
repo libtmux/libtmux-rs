@@ -162,6 +162,30 @@ async fn queue_wait_and_admission_count_toward_the_original_deadline() {
 }
 
 #[tokio::test]
+async fn closing_a_failed_watch_keeps_an_independent_reap_error() {
+    let cleanup = Error::wait_child(
+        9,
+        Command::new("attach-session").summary(),
+        std::io::Error::other("child wait failed"),
+    );
+    let (events, _wire) = events(ControlLimits::default(), Err(cleanup));
+    let error = events
+        .shutdown_after_error(Error::control_mode_timeout())
+        .await;
+    let Error::OperationAndCleanup { primary, cleanup } = error else {
+        panic!("the watch timeout and reap error must both be reported");
+    };
+    assert!(matches!(
+        *primary,
+        Error::ControlMode {
+            kind: crate::ControlModeErrorKind::TimedOut,
+            ..
+        }
+    ));
+    assert!(matches!(*cleanup, Error::WaitChild { request_id: 9, .. }));
+}
+
+#[tokio::test]
 async fn cancelling_an_event_wait_keeps_the_next_notice_and_terminal_error() {
     let (mut events, wire) = events(ControlLimits::default(), Err(Error::control_mode_timeout()));
     tokio::select! { biased; _ = events.next_notice() => panic!("no notice yet"), () = std::future::ready(()) => {} }

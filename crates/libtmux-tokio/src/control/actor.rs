@@ -440,14 +440,7 @@ impl Connection {
         let cleanup = self.child.terminate().await;
         self.shared.closed.store(true, Ordering::Release);
         self.shared.changed.notify_waiters();
-        match (outcome, cleanup) {
-            (Err(primary), Err(cleanup)) => Err(Error::OperationAndCleanup {
-                primary: Box::new(primary),
-                cleanup: Box::new(cleanup),
-            }),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Ok(()), Ok(())) => Ok(()),
-        }
+        Error::after_cleanup(outcome, cleanup)
     }
 
     async fn opening(

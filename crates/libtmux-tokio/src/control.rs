@@ -1134,6 +1134,14 @@ fn decode_watched_pane_id(line: &TmuxText) -> Result<PaneId, Error> {
 }
 
 fn retain_cleanup(mut primary: Error, terminal: Error) -> Error {
+    // A completed actor may have had only its child cleanup fail. That
+    // diagnostic is independent of the request or qualification failure.
+    if matches!(terminal, Error::WaitChild { .. }) {
+        return Error::OperationAndCleanup {
+            primary: Box::new(primary),
+            cleanup: Box::new(terminal),
+        };
+    }
     let mut cause = &mut primary;
     while let Error::AfterEffect { source, .. } = cause {
         cause = source.as_mut();

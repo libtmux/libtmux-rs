@@ -532,7 +532,13 @@ impl PersistentChild {
                     {
                         process_group.disarm();
                     }
-                    if let Err(cleanup) = control_cleanup(group, kill, waited) {
+                    if let Err(cleanup) = control_cleanup(
+                        request.request_id(),
+                        request.summary(),
+                        group,
+                        kill,
+                        waited,
+                    ) {
                         return Err(Error::OperationAndCleanup {
                             primary: Box::new(primary),
                             cleanup: Box::new(cleanup),
@@ -592,28 +598,63 @@ impl PersistentChild {
         {
             self.process_group.disarm();
         }
-        control_cleanup(group, kill, waited)
+        control_cleanup(self.request_id, &self.command, group, kill, waited)
+    }
+}
+
+pub(super) fn cleanup_result(
+    request_id: u64,
+    command: &CommandSummary,
+    group: io::Result<()>,
+    kill: io::Result<()>,
+    waited: io::Result<()>,
+) -> Result<(), Error> {
+    let failures: Vec<_> = [
+        ("process-group signal", group),
+        ("direct-child signal", kill),
+        ("child wait", waited),
+    ]
+    .into_iter()
+    .filter_map(|(stage, result)| result.err().map(|source| (stage, source.kind())))
+    .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::wait_child(
+            request_id,
+            command.clone(),
+            io::Error::other(
+                failures
+                    .iter()
+                    .map(|(stage, kind)| format!("{stage} failed ({kind:?})"))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+        ))
     }
 }
 
 #[cfg(feature = "control-mode")]
 fn control_cleanup(
+    request_id: RequestId,
+    command: &CommandSummary,
     group: io::Result<()>,
     kill: io::Result<()>,
     waited: io::Result<std::process::ExitStatus>,
 ) -> Result<(), Error> {
-    for (stage, result) in [
-        ("signal process group", group),
-        ("kill child", kill),
-        ("wait child", waited.map(|_| ())),
-    ] {
-        if let Err(source) = result {
-            if source.raw_os_error() != Some(rustix::io::Errno::CHILD.raw_os_error()) {
-                return Err(Error::control_mode(io::Error::new(source.kind(), stage)));
-            }
+    let settled = |result: io::Result<()>| match result {
+        Err(source) if source.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error()) => {
+            Ok(())
         }
-    }
-    Ok(())
+        other => other,
+    };
+    cleanup_result(
+        request_id.get(),
+        command,
+        settled(group),
+        settled(kill),
+        settled(waited.map(|_| ())),
+    )
 }
 
 #[cfg(feature = "control-mode")]

@@ -28,7 +28,7 @@ use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatu
 use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, ShutdownFuture};
 use crate::internal::operation::{CollectedPrefix, OperationContext};
 use crate::internal::process::{
-    LaunchContext, ProcessAdmission, ProcessGroupGuard, validate_request,
+    LaunchContext, ProcessAdmission, ProcessGroupGuard, cleanup_result, validate_request,
 };
 
 #[derive(Clone)]
@@ -666,10 +666,16 @@ fn start_native_child(
             {
                 process_group.disarm();
             }
-            return Err(with_cleanup(
-                primary,
-                cleanup_result(group, kill, waited.map(|_| ()), context),
-            ));
+            return Error::after_cleanup(
+                Err(primary),
+                cleanup_result(
+                    context.request_id(),
+                    &context.command,
+                    group,
+                    kill,
+                    waited.map(|_| ()),
+                ),
+            );
         }
     };
     let readers = ReaderTasks::spawn(
@@ -1000,7 +1006,7 @@ async fn supervise_outer(
             )
             .await;
             // Reader cancellation settles the collected prefix before its receipt is decoded.
-            Err(with_cleanup(context.interrupted(error), cleanup))
+            Error::after_cleanup(Err(context.interrupted(error)), cleanup)
         }
     };
 
@@ -1236,48 +1242,7 @@ async fn cleanup_child(
             }
         }
     };
-    cleanup_result(group, kill, waited, context)
-}
-
-fn with_cleanup(primary: Error, cleanup: Result<(), Error>) -> Error {
-    match cleanup {
-        Ok(()) => primary,
-        Err(cleanup) => Error::OperationAndCleanup {
-            primary: Box::new(primary),
-            cleanup: Box::new(cleanup),
-        },
-    }
-}
-
-fn cleanup_result(
-    group: io::Result<()>,
-    kill: io::Result<()>,
-    waited: io::Result<()>,
-    context: &RequestContext,
-) -> Result<(), Error> {
-    let failures: Vec<_> = [
-        ("process-group signal", group),
-        ("direct-child signal", kill),
-        ("child wait", waited),
-    ]
-    .into_iter()
-    .filter_map(|(stage, result)| result.err().map(|source| (stage, source.kind())))
-    .collect();
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::wait_child(
-            context.request_id(),
-            context.command.clone(),
-            io::Error::other(
-                failures
-                    .iter()
-                    .map(|(stage, kind)| format!("{stage} failed ({kind:?})"))
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            ),
-        ))
-    }
+    cleanup_result(context.request_id(), &context.command, group, kill, waited)
 }
 
 async fn cancelled(receiver: &mut watch::Receiver<bool>) {
