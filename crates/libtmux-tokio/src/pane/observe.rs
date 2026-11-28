@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::formats::TmuxText;
-use crate::{Command, CommandChain, Error};
+use crate::{Command, Error, TmuxVersion};
 
 use super::{CaptureOptions, CapturedLine, POLL_INTERVAL, Pane, PaneWait, contains};
 
@@ -123,11 +123,13 @@ impl Pane {
     /// [`Pane::capture`] reads the visible screen. This reaches into
     /// scrollback, which is where the output a caller is looking for has
     /// usually gone by the time anyone asks.
+    /// Hook output is excluded. A joined capture with an unqualified client
+    /// and daemon pair requires empty `after-capture-pane` hooks.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the capture, which includes a pane
-    /// that has been closed.
+    /// Returns an error for a closed pane, a failed hook, an incomplete or late
+    /// observation, or joined output that cannot be isolated with this client.
     ///
     /// # Examples
     ///
@@ -156,27 +158,127 @@ impl Pane {
     /// # }
     /// ```
     pub async fn capture_with(&self, options: CaptureOptions) -> Result<Vec<TmuxText>, Error> {
-        // Refusing beats dispatching a flag tmux will reject with a usage
-        // error that names the whole command.
-        let version = self.core.format_version().await?;
+        let deadline = self.core.operation_deadline();
+        let version = self.capture_version_until(deadline).await?;
         let needs_wrap_trim = options.needs_wrap_trim();
-        let command = options.lower(self.id().as_ref(), &version)?;
-        let target = command.target().map(OsStr::to_os_string);
-        let result = self.core.execute(command).await?;
-        if !result.success() {
-            return Err(Error::from_refused_result(
-                "capture-pane",
-                &result,
-                target.as_deref(),
-            ));
-        }
-
-        let lines = split_lines(result.stdout());
+        let (_, bytes) = self.capture_until(options, &version, deadline).await?;
+        let lines = split_lines(&bytes);
         Ok(if needs_wrap_trim {
             lines.into_iter().map(trim_wrap_padding).collect()
         } else {
             lines
         })
+    }
+
+    async fn capture_version_until(
+        &self,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<TmuxVersion, Error> {
+        match deadline {
+            Some(end) => tokio::time::timeout_at(end, self.core.format_version())
+                .await
+                .map_err(|_| libtmux_core::Error::LateObservation {
+                    operation: libtmux_core::CommandKind::CapturePane,
+                })?,
+            None => self.core.format_version().await,
+        }
+    }
+
+    async fn capture_until(
+        &self,
+        options: CaptureOptions,
+        version: &TmuxVersion,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<(bool, Vec<u8>), Error> {
+        let command = options.lower(self.id().as_ref(), version)?;
+        let server = crate::Server::from_core(Arc::clone(&self.core));
+        if !options.join_wrapped || options.pending_escape {
+            let start = options.start.map(|bound| bound.to_string());
+            let end = options.end.map(|bound| bound.to_string());
+            let bytes = server
+                .capture_ordinary_until(
+                    self.key(),
+                    &command,
+                    (start.as_deref(), end.as_deref()),
+                    options.pending_escape,
+                    deadline,
+                )
+                .await?;
+            return Ok((false, bytes));
+        }
+        let binary = async {
+            self.core
+                .capabilities()
+                .await
+                .map(|value| value.tmux_version().clone())
+        };
+        let binary = match deadline {
+            Some(end) => tokio::time::timeout_at(end, binary).await.map_err(|_| {
+                libtmux_core::Error::LateObservation {
+                    operation: libtmux_core::CommandKind::CapturePane,
+                }
+            })??,
+            None => binary.await?,
+        };
+        binary.ensure_supported()?;
+        if capture_pair_qualified(&binary, version) {
+            let mut arguments = libtmux_core::Capture::arguments_with_dead_at_version(
+                server.socket_path(),
+                self.key(),
+                version,
+            )?;
+            arguments.extend(command.logical_words().skip(4).map(OsStr::to_os_string));
+            let (result, late) = self
+                .core
+                .execute_guarded_observation(
+                    arguments,
+                    Command::new("capture-pane").summary(),
+                    crate::internal::operation::OperationContext::observation(deadline),
+                )
+                .await?;
+            if let Some(error) = crate::internal::operation::server_gone_for_observation(
+                server.socket_path(),
+                "capture-pane",
+                &result,
+                late,
+            ) {
+                return Err(error);
+            }
+            let status = result.exit_code();
+            let (stdout, stderr) = result.into_streams();
+            return libtmux_core::Reply::new(status, stdout, stderr.len(), late)
+                .capture_with_dead()
+                .map_err(Into::into);
+        }
+        let observed = server
+            .observe_pane_until(self.id().clone(), deadline)
+            .await?;
+        let mut arguments = observed.capture_look_arguments(server.socket_path(), self.key())?;
+        arguments.extend(command.logical_words().skip(4).map(OsStr::to_os_string));
+        let prefix = libtmux_core::OrdinaryCapturePrefix::new(crate::internal::operation::nonce()?);
+        prefix.insert(&mut arguments, self.id())?;
+        let (result, late) = self
+            .core
+            .execute_operation(
+                arguments,
+                Command::new("capture-pane").summary(),
+                crate::internal::operation::OperationContext::observation(deadline),
+            )
+            .await?;
+        if let Some(error) = crate::internal::operation::server_gone_for_observation(
+            server.socket_path(),
+            "capture-pane",
+            &result,
+            late,
+        ) {
+            return Err(error);
+        }
+        let status = result.exit_code();
+        let (stdout, stderr) = result.into_streams();
+        prefix
+            .decode(status, stdout, &stderr, late)
+            .map(|bytes| (observed.pane_dead(), bytes))
+            .map_err(Into::into)
     }
 
     /// Capture with the per-line flags tmux records, marking shell prompts.
@@ -246,9 +348,9 @@ impl Pane {
     /// subscription would answer sooner and is not available in a default
     /// build.
     ///
-    /// A look costs one `capture-pane` and looks are 120ms apart, which keeps
-    /// a wait under ten dispatches a second and answers within an interval of
-    /// the text appearing. The first look comes before the first sleep, so
+    /// Looks are 120ms apart, keeping a wait under ten looks a second. Each
+    /// includes one capture and may include metadata or qualification reads.
+    /// The first look comes before the first sleep, so
     /// text already there when the wait begins is answered at once, and a
     /// `within` shorter than one interval buys exactly one look.
     ///
@@ -464,44 +566,24 @@ impl Pane {
         // output that scrolled away would read as absent, and a needle
         // spanning a wrap point would never match.
         let options = CaptureOptions::history().join_wrapped();
-        let target = self.id().to_string();
-        let version = self.core.format_version().await?;
-
-        // Capture the dead flag and pane contents in one tmux process. The flag
-        // comes first so the first newline is an unambiguous boundary.
-        let look = CommandChain::new(
-            Command::new("display-message")
-                .arg("-p")
-                .arg("-t")
-                .arg(&target)
-                .arg("-F")
-                .arg("#{pane_dead}"),
-        )
-        .then(options.lower(&target, &version)?);
-
+        let mut observation_deadline = self.core.operation_deadline();
         let deadline = tokio::time::Instant::now().checked_add(within);
+        let version = self.capture_version_until(observation_deadline).await?;
 
         loop {
-            let result = match self.core.execute_chain(look.clone()).await {
+            let (dead, text) = match self
+                .capture_until(options, &version, observation_deadline)
+                .await
+            {
                 Ok(result) => result,
                 Err(error) if is_gone(&error) => return Ok(PaneWait::Dead),
                 Err(error) => return Err(error),
             };
-            if !result.success() {
-                let error =
-                    Error::from_refused_result("capture-pane", &result, Some(OsStr::new(&target)));
-                return if is_gone(&error) {
-                    Ok(PaneWait::Dead)
-                } else {
-                    Err(error)
-                };
-            }
-            let (dead, text) = split_look(result.stdout());
 
             let now = tokio::time::Instant::now();
             // Asked before the deadline is checked, so output already there
             // when the wait began is an answer rather than a timeout.
-            if settled(text, now) {
+            if settled(&text, now) {
                 return Ok(PaneWait::Arrived);
             }
 
@@ -515,6 +597,7 @@ impl Pane {
                 return Ok(PaneWait::TimedOut);
             }
             tokio::time::sleep(POLL_INTERVAL.min(within)).await;
+            observation_deadline = self.core.operation_deadline();
         }
     }
 }
@@ -524,6 +607,15 @@ impl Pane {
 /// Waiting longer cannot change either, so both answer [`PaneWait::Dead`].
 fn is_gone(error: &Error) -> bool {
     error.is_object_gone() || matches!(error, Error::ServerGone { .. })
+}
+
+fn capture_pair_qualified(client: &TmuxVersion, daemon: &TmuxVersion) -> bool {
+    // One-shot EOF and file acknowledgements changed without a protocol bump.
+    client == daemon
+        || matches!(
+            (client.raw(), daemon.raw()),
+            ("3.3a", "3.4") | ("3.7", "3.8") | ("3.8", "3.7")
+        )
 }
 
 /// Split `capture-pane` output into lines.
@@ -563,38 +655,5 @@ fn trim_wrap_padding(line: TmuxText) -> TmuxText {
         line
     } else {
         TmuxText::from(bytes[..content_len].to_vec())
-    }
-}
-
-/// Split one look's output into the pane's dead flag and its capture.
-///
-/// `display-message -p` writes one line, so the flag is everything before the
-/// first newline and the capture is everything after it. tmux terminates every
-/// captured line, so the remainder is what a caller matching against the
-/// scrollback already expects.
-fn split_look(stdout: &[u8]) -> (bool, &[u8]) {
-    match stdout.iter().position(|byte| *byte == b'\n') {
-        Some(end) => (&stdout[..end] == b"1", &stdout[end + 1..]),
-        None => (stdout == b"1", &[]),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::split_look;
-
-    #[test]
-    fn a_look_separates_the_flag_from_the_capture() {
-        assert_eq!(
-            split_look(b"0\nfirst\nsecond\n"),
-            (false, &b"first\nsecond\n"[..])
-        );
-        assert_eq!(split_look(b"1\nfirst\n"), (true, &b"first\n"[..]));
-        // A pane with nothing on screen still answers the flag.
-        assert_eq!(split_look(b"0\n"), (false, &b""[..]));
-        // `display-message` prints nothing for a pane tmux cannot resolve, and
-        // the capture that follows fails, so this shape is only ever read on a
-        // path that already returned an error.
-        assert_eq!(split_look(b""), (false, &b""[..]));
     }
 }

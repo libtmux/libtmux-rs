@@ -1209,13 +1209,49 @@ impl Server {
         key: &libtmux_core::PaneKey,
         escapes: bool,
     ) -> Result<Vec<u8>, Error> {
+        self.capture_grid_until(key, escapes, self.core.operation_deadline())
+            .await
+    }
+
+    pub(crate) async fn capture_grid_until(
+        &self,
+        key: &libtmux_core::PaneKey,
+        escapes: bool,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<Vec<u8>, Error> {
+        let mut command = Command::new("capture-pane")
+            .arg("-p")
+            .arg("-t")
+            .arg(key.id().to_string());
+        if escapes {
+            command = command.arg("-e");
+        }
+        self.capture_ordinary_until(key, &command, (None, None), false, deadline)
+            .await
+    }
+
+    pub(crate) async fn capture_ordinary_until(
+        &self,
+        key: &libtmux_core::PaneKey,
+        command: &Command,
+        range: (Option<&str>, Option<&str>),
+        pending: bool,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<Vec<u8>, Error> {
         if key.server_identity() != self.identity() {
             return Err(libtmux_core::Error::WrongEndpoint.into());
         }
-        let deadline = self.core.operation_deadline();
         let observed = self.observe_pane_until(key.id(), deadline).await?;
-        let arguments =
-            observed.capture_arguments_with_escapes(self.socket_path(), key, escapes)?;
+        let ranged = !pending && (range.0.is_some() || range.1.is_some());
+        let mut arguments = if ranged {
+            observed.capture_range_arguments(self.socket_path(), key)?
+        } else {
+            observed.capture_arguments(self.socket_path(), key)?
+        };
+        arguments.extend(command.logical_words().skip(4).map(OsStr::to_os_string));
+        if pending {
+            arguments.push(OsString::from("-C"));
+        }
         let (result, late) = self
             .core
             .execute_operation(
@@ -1224,11 +1260,24 @@ impl Server {
                 crate::internal::operation::OperationContext::observation(deadline),
             )
             .await?;
+        if let Some(error) = crate::internal::operation::server_gone_for_observation(
+            self.socket_path(),
+            "capture-pane",
+            &result,
+            late,
+        ) {
+            return Err(error);
+        }
         let status = result.exit_code();
         let (stdout, stderr) = result.into_streams();
-        observed
-            .decode_capture(status, stdout, &stderr, late)
-            .map_err(Into::into)
+        if pending {
+            observed.decode_pending_capture(status, stdout, &stderr, late)
+        } else if ranged {
+            observed.decode_capture_range(status, stdout, &stderr, late, range)
+        } else {
+            observed.decode_capture(status, stdout, &stderr, late)
+        }
+        .map_err(Into::into)
     }
 
     #[cfg(feature = "plan")]
@@ -1241,13 +1290,15 @@ impl Server {
             .await
     }
 
-    async fn observe_pane_until(
+    pub(crate) async fn observe_pane_until(
         &self,
         pane: crate::PaneId,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<libtmux_core::OrdinaryPaneObservation, Error> {
-        let probe =
-            libtmux_core::OrdinaryPaneProbe::new(pane, crate::internal::operation::nonce()?);
+        let probe = libtmux_core::OrdinaryPaneProbe::new(
+            pane.clone(),
+            crate::internal::operation::nonce()?,
+        );
         let (result, late) = self
             .core
             .execute_operation(
@@ -1256,6 +1307,21 @@ impl Server {
                 crate::internal::operation::OperationContext::observation(deadline),
             )
             .await?;
+        if !late {
+            if let Some(error) = result.refusal_for("observe pane") {
+                if error.is_object_gone() {
+                    return Err(libtmux_core::Error::PaneNotFound(pane).into());
+                }
+            }
+        }
+        if let Some(error) = crate::internal::operation::server_gone_for_observation(
+            self.socket_path(),
+            "observe pane",
+            &result,
+            late,
+        ) {
+            return Err(error);
+        }
         probe
             .decode(
                 self.socket_path(),

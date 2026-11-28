@@ -145,7 +145,7 @@ impl OrdinaryPaneProbe {
             "-t",
             self.pane.as_ref(),
             &format!(
-                "{}#{{pid}},#{{start_time}},#{{pane_id}},#{{pane_height}},#{{version}}",
+                "{}#{{pid}},#{{start_time}},#{{pane_id}},#{{pane_height}},#{{version}},#{{history_size}},#{{pane_dead}}",
                 self.marker
             ),
         ]
@@ -177,20 +177,34 @@ impl OrdinaryPaneProbe {
         }
         let report = probe_report(stderr, &self.marker).ok_or(Error::InvalidKey)?;
         let fields: Vec<_> = report.split(',').collect();
-        let [pid, started, pane, height, version] = fields.as_slice() else {
+        let [pid, started, pane, height, version, history, dead] = fields.as_slice() else {
             return Err(Error::InvalidKey);
         };
         if parse_number::<u32>(pid).is_none_or(|pid| pid == 0)
             || parse_number::<u64>(started).is_none()
-            || pane.parse::<PaneId>().ok().as_ref() != Some(&self.pane)
         {
+            return Err(Error::InvalidKey);
+        }
+        let qualified = TmuxVersion::parse_output(format!("tmux {version}\n").as_bytes())?;
+        qualified.ensure_supported()?;
+        if [pane, height, history, dead]
+            .iter()
+            .all(|field| field.is_empty())
+        {
+            return Err(Error::PaneNotFound(self.pane.clone()));
+        }
+        if pane.parse::<PaneId>().ok().as_ref() != Some(&self.pane) {
             return Err(Error::InvalidKey);
         }
         let height = parse_number::<u32>(height)
             .filter(|height| *height > 0)
             .ok_or(Error::InvalidKey)?;
-        let qualified = TmuxVersion::parse_output(format!("tmux {version}\n").as_bytes())?;
-        qualified.ensure_supported()?;
+        let history = parse_number::<u32>(history).ok_or(Error::InvalidKey)?;
+        let dead = match *dead {
+            "0" => false,
+            "1" => true,
+            _ => return Err(Error::InvalidKey),
+        };
         let key = ObservePane::decode_rows(
             socket,
             &self.pane,
@@ -199,6 +213,8 @@ impl OrdinaryPaneProbe {
         Ok(OrdinaryPaneObservation {
             key,
             height,
+            history,
+            dead,
             version: (*version).to_owned(),
         })
     }
@@ -217,7 +233,7 @@ impl OrdinaryPaneProbe {
 /// use std::path::Path;
 ///
 /// let probe = OrdinaryPaneProbe::new("%7".parse()?, CreationNonce::from_bytes([0; 16]));
-/// let report = b"unknown command: libtmux-pane:00000000000000000000000000000000:123,456,%7,24,3.4\n";
+/// let report = b"unknown command: libtmux-pane:00000000000000000000000000000000:123,456,%7,24,3.4,0,0\n";
 /// let observed = probe.decode(Path::new("/tmp/recorded.sock"), Some(1), b"", report, false)?;
 /// assert_eq!(observed.key().id().as_ref(), "%7");
 /// assert_eq!(observed.key().generation().pid(), 123);
@@ -227,6 +243,8 @@ impl OrdinaryPaneProbe {
 pub struct OrdinaryPaneObservation {
     key: PaneKey,
     height: u32,
+    history: u32,
+    dead: bool,
     version: String,
 }
 
@@ -237,12 +255,57 @@ impl OrdinaryPaneObservation {
         &self.key
     }
 
+    /// Whether the process was dead in the observed pane metadata.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn pane_dead(&self) -> bool {
+        self.dead
+    }
+
     /// Encode a same-queue generation and height check followed by capture.
     ///
     /// # Errors
     ///
     /// Rejects another endpoint or a key that differs from this observation.
     pub fn capture_arguments(&self, socket: &Path, key: &PaneKey) -> Result<Vec<OsString>, Error> {
+        self.capture_arguments_checked(socket, key, false, false)
+    }
+
+    /// Encode a capture guard that also checks the observed history extent.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another endpoint or a key that differs from this observation.
+    #[doc(hidden)]
+    pub fn capture_range_arguments(
+        &self,
+        socket: &Path,
+        key: &PaneKey,
+    ) -> Result<Vec<OsString>, Error> {
+        self.capture_arguments_checked(socket, key, true, false)
+    }
+
+    /// Encode a capture guard checking the observed process state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another endpoint or a key that differs from this observation.
+    #[doc(hidden)]
+    pub fn capture_look_arguments(
+        &self,
+        socket: &Path,
+        key: &PaneKey,
+    ) -> Result<Vec<OsString>, Error> {
+        self.capture_arguments_checked(socket, key, false, true)
+    }
+
+    fn capture_arguments_checked(
+        &self,
+        socket: &Path,
+        key: &PaneKey,
+        check_history: bool,
+        check_dead: bool,
+    ) -> Result<Vec<OsString>, Error> {
         if socket != key.server_identity().socket_path() {
             return Err(Error::WrongEndpoint);
         }
@@ -253,10 +316,21 @@ impl OrdinaryPaneObservation {
         let pid = key.generation().pid();
         let started = key.generation().unix_start_time();
         let height = self.height;
+        let extent = if check_dead {
+            format!("#{{==:#{{pane_dead}},{}}}", u8::from(self.dead))
+        } else {
+            format!("#{{==:#{{pane_height}},{height}}}")
+        };
         let predicate = format!(
-            "#{{&&:#{{==:#{{pane_id}},{pane}}},#{{&&:#{{==:#{{pid}},{pid}}},#{{&&:#{{==:#{{start_time}},{started}}},#{{==:#{{pane_height}},{height}}}}}}}}}"
+            "#{{&&:#{{==:#{{pane_id}},{pane}}},#{{&&:#{{==:#{{pid}},{pid}}},#{{&&:#{{==:#{{start_time}},{started}}},{extent}}}}}}}"
         );
-        let predicate = format!("#{{&&:{predicate},#{{==:#{{version}},{}}}}}", self.version);
+        let mut predicate = format!("#{{&&:{predicate},#{{==:#{{version}},{}}}}}", self.version);
+        if check_history {
+            predicate = format!(
+                "#{{&&:{predicate},#{{==:#{{history_size}},{}}}}}",
+                self.history
+            );
+        }
         Ok([
             "-N",
             "if-shell",
@@ -304,27 +378,98 @@ impl OrdinaryPaneObservation {
     pub fn decode_capture(
         &self,
         status: Option<i32>,
-        mut stdout: Vec<u8>,
+        stdout: Vec<u8>,
         stderr: &[u8],
         late: bool,
     ) -> Result<Vec<u8>, Error> {
-        if status == Some(1) && stdout.is_empty() && stderr == b"syntax error\n" {
-            return Err(Error::StalePane);
+        Self::decode_capture_rows(status, stdout, stderr, late, u64::from(self.height))
+    }
+
+    /// Isolate an unjoined capture using the same numeric bounds as tmux.
+    ///
+    /// The submitted range must match these bounds and its guard must check
+    /// the history extent through `capture_range_arguments`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale, failed, late or incomplete output without screen bytes.
+    #[doc(hidden)]
+    pub fn decode_capture_range(
+        &self,
+        status: Option<i32>,
+        stdout: Vec<u8>,
+        stderr: &[u8],
+        late: bool,
+        range: (Option<&str>, Option<&str>),
+    ) -> Result<Vec<u8>, Error> {
+        let top = self.capture_bound(range.0, true);
+        let bottom = self.capture_bound(range.1, false);
+        let rows = top.abs_diff(bottom) + 1;
+        Self::decode_capture_rows(status, stdout, stderr, late, rows)
+    }
+
+    /// Decode a one-row `capture-pane -pPC` without its hook output.
+    ///
+    /// # Errors
+    ///
+    /// Rejects failed, late, truncated or invalid octal output without bytes.
+    #[doc(hidden)]
+    pub fn decode_pending_capture(
+        &self,
+        status: Option<i32>,
+        stdout: Vec<u8>,
+        stderr: &[u8],
+        late: bool,
+    ) -> Result<Vec<u8>, Error> {
+        let wire = Self::decode_capture_rows(status, stdout, stderr, late, 1)?;
+        let mut decoded = Vec::with_capacity(wire.len());
+        let mut input = wire[..wire.len() - 1].iter().copied();
+        while let Some(byte) = input.next() {
+            if byte == b'\\' {
+                let high = input.next().filter(|byte| (b'0'..=b'3').contains(byte));
+                let middle = input.next().filter(|byte| (b'0'..=b'7').contains(byte));
+                let low = input.next().filter(|byte| (b'0'..=b'7').contains(byte));
+                let (Some(high), Some(middle), Some(low)) = (high, middle, low) else {
+                    return Err(Error::FramedRead);
+                };
+                decoded.push((high - b'0') * 64 + (middle - b'0') * 8 + (low - b'0'));
+            } else {
+                decoded.push(byte);
+            }
         }
-        if status != Some(0) {
-            return Err(Error::Command {
-                operation: CommandKind::CapturePane,
-                status,
-                diagnostic_len: stderr.len(),
-                late,
-            });
+        if !decoded.ends_with(b"\n") {
+            decoded.push(b'\n');
         }
-        if late {
-            return Err(Error::LateObservation {
-                operation: CommandKind::CapturePane,
-            });
+        Ok(decoded)
+    }
+
+    fn capture_bound(&self, bound: Option<&str>, start: bool) -> u64 {
+        let history = u64::from(self.history);
+        let last = history + u64::from(self.height) - 1;
+        if bound == Some("-") {
+            return if start { 0 } else { last };
         }
-        let index = usize::try_from(self.height - 1).map_err(|_| Error::FramedRead)?;
+        // tmux accepts positive numeric bounds only through SHRT_MAX.
+        let line = bound
+            .and_then(|text| text.parse::<i32>().ok())
+            .filter(|line| *line <= i32::from(i16::MAX));
+        let Some(line) = line else {
+            return if start { history } else { last };
+        };
+        (i64::from(self.history) + i64::from(line))
+            .clamp(0, i64::from(self.history) + i64::from(self.height) - 1)
+            .unsigned_abs()
+    }
+
+    fn decode_capture_rows(
+        status: Option<i32>,
+        mut stdout: Vec<u8>,
+        stderr: &[u8],
+        late: bool,
+        rows: u64,
+    ) -> Result<Vec<u8>, Error> {
+        crate::ordinary_capture::check_capture_status(status, &stdout, stderr, late)?;
+        let index = usize::try_from(rows - 1).map_err(|_| Error::FramedRead)?;
         let end = stdout
             .iter()
             .enumerate()
@@ -350,7 +495,7 @@ mod tests {
 
     fn observation(height: u32) -> OrdinaryPaneObservation {
         let diagnostic = format!(
-            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,{height},3.3a\n"
+            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,{height},3.3a,0,0\n"
         );
         probe()
             .decode(
@@ -404,8 +549,7 @@ mod tests {
 
     #[test]
     fn metadata_is_accepted_only_from_the_exact_hook_free_probe() {
-        let expected =
-            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,3,3.3a\n";
+        let expected = "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,3,3.3a,0,0\n";
         let observed = probe()
             .decode(
                 Path::new("/example/socket"),
@@ -418,10 +562,10 @@ mod tests {
         assert_eq!(observed.key().id().to_string(), "%7");
         assert_eq!(observed.key().generation().pid(), 123);
         for diagnostic in [
-            "unknown command: libtmux-pane:99999999999999999999999999999999:123,456,%7,3,3.3a\n",
-            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%8,3,3.3a\n",
-            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,0,3.3a\n",
-            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,3,3.3a\nextra\n",
+            "unknown command: libtmux-pane:99999999999999999999999999999999:123,456,%7,3,3.3a,0,0\n",
+            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%8,3,3.3a,0,0\n",
+            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,0,3.3a,0,0\n",
+            "unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,3,3.3a,0,0\nextra\n",
         ] {
             assert!(
                 probe()
@@ -462,7 +606,7 @@ mod tests {
     #[test]
     fn unsupported_versions_are_not_qualified_by_valid_metadata() {
         let diagnostic =
-            b"unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,3,3.3\n";
+            b"unknown command: libtmux-pane:12121212121212121212121212121212:123,456,%7,3,3.3,0,0\n";
         assert!(matches!(
             probe().decode(
                 Path::new("/example/socket"),
@@ -472,6 +616,16 @@ mod tests {
                 false
             ),
             Err(Error::Version(error)) if matches!(*error, crate::VersionError::UnsupportedTmuxVersion { .. })
+        ));
+    }
+
+    #[test]
+    fn an_exact_empty_pane_report_preserves_the_absent_target() {
+        let report =
+            b"unknown command: libtmux-pane:12121212121212121212121212121212:123,456,,,3.3a,,\n";
+        assert!(matches!(
+            probe().decode(Path::new("/example/socket"), Some(1), b"", report, false),
+            Err(Error::PaneNotFound(pane)) if pane.to_string() == "%7"
         ));
     }
 
@@ -518,10 +672,18 @@ mod tests {
                     .is_err()
             );
         }
+        let refused = observation(3)
+            .decode_capture(Some(1), Vec::new(), b"syntax error\n", false)
+            .unwrap_err();
         assert!(matches!(
-            observation(3).decode_capture(Some(1), Vec::new(), b"syntax error\n", false),
-            Err(Error::StalePane)
+            refused,
+            Error::Command {
+                operation: CommandKind::CapturePane,
+                status: Some(1),
+                ..
+            }
         ));
+        assert_eq!(refused.effect(), crate::Effect::Observation);
     }
 
     #[test]
@@ -539,5 +701,69 @@ mod tests {
             observation.capture_arguments(Path::new("/other/socket"), observation.key()),
             Err(Error::WrongEndpoint)
         ));
+    }
+
+    #[test]
+    fn ordinary_ranges_follow_native_clamping_and_exclude_hooks() {
+        let mut observed = observation(3);
+        observed.history = 4;
+        for (range, rows) in [
+            ((None, None), 3),
+            ((Some("-"), None), 7),
+            ((Some("-2"), Some("1")), 4),
+            ((Some("3"), Some("-3")), 6),
+            ((Some("2147483647"), Some("99")), 3),
+            ((Some("-2147483648"), Some("0")), 5),
+            ((Some("0"), Some("0")), 1),
+        ] {
+            let expected = b"row\n".repeat(rows);
+            let wire = [expected.as_slice(), b"private-hook\n"].concat();
+            assert_eq!(
+                observed
+                    .decode_capture_range(Some(0), wire, b"", false, range)
+                    .unwrap(),
+                expected,
+                "{range:?}"
+            );
+        }
+        let guarded = observed
+            .capture_range_arguments(Path::new("/example/socket"), observed.key())
+            .unwrap();
+        assert!(guarded[5].to_str().unwrap().contains("#{history_size},4"));
+        let viewport = observed
+            .capture_arguments(Path::new("/example/socket"), observed.key())
+            .unwrap();
+        assert!(!viewport[5].to_str().unwrap().contains("history_size"));
+    }
+
+    #[test]
+    fn pending_octal_bytes_are_lossless_and_keep_native_final_newlines() {
+        for (wire, expected) in [
+            (
+                b"\\033]part\\000after\\134slash\nprivate-hook\n".as_slice(),
+                b"\x1b]part\0after\\slash\n".as_slice(),
+            ),
+            (b"\\377\\012\nprivate-hook\n", b"\xff\n"),
+            (b"\nprivate-hook\n", b"\n"),
+        ] {
+            assert_eq!(
+                observation(3)
+                    .decode_pending_capture(Some(0), wire.to_vec(), b"", false)
+                    .unwrap(),
+                expected
+            );
+        }
+        for wire in [
+            b"\\12\n".as_slice(),
+            b"\\400\n",
+            b"\\0g0\n",
+            b"missing newline",
+        ] {
+            assert!(
+                observation(3)
+                    .decode_pending_capture(Some(0), wire.to_vec(), b"", false)
+                    .is_err()
+            );
+        }
     }
 }

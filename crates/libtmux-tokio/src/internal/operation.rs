@@ -120,6 +120,35 @@ pub(crate) fn nonce() -> Result<CreationNonce, Error> {
     Ok(CreationNonce::from_bytes(bytes))
 }
 
+pub(crate) fn server_gone_for_observation(
+    socket: &Path,
+    command: &'static str,
+    result: &crate::CommandResult,
+    late: bool,
+) -> Option<Error> {
+    if late || result.exit_code() != Some(1) || !result.stdout().is_empty() {
+        return None;
+    }
+    let diagnostic = result.stderr().strip_suffix(b"\n")?;
+    let socket = socket.as_os_str().as_encoded_bytes();
+    let kind = if diagnostic.strip_prefix(b"no server running on ") == Some(socket) {
+        crate::ServerGoneKind::NotRunning
+    } else {
+        let path = diagnostic.strip_prefix(b"error connecting to ")?;
+        if ![
+            b" (No such file or directory)".as_slice(),
+            b" (Connection refused)",
+        ]
+        .iter()
+        .any(|suffix| path.strip_suffix(*suffix) == Some(socket))
+        {
+            return None;
+        }
+        crate::ServerGoneKind::Unreachable
+    };
+    Some(Error::ServerGone { command, kind })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -127,6 +156,85 @@ mod tests {
 
     use super::*;
     use crate::{Command, ErrorKind};
+
+    #[test]
+    fn only_timely_empty_endpoint_diagnostics_settle_server_absence() {
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::process::ExitStatus;
+
+        use crate::command::{CommandResult, ProcessStatus, RequestId};
+
+        let result = |status, stdout: &[u8], stderr: &[u8]| {
+            CommandResult::new(
+                RequestId::new(1),
+                Command::new("capture-pane").summary(),
+                ProcessStatus::from_exit_status(ExitStatus::from_raw(status)),
+                stdout.to_vec(),
+                stderr.to_vec(),
+            )
+        };
+        let socket = Path::new("/private/capture.sock");
+        for diagnostic in [
+            b"no server running on /private/capture.sock\n".as_slice(),
+            b"error connecting to /private/capture.sock (No such file or directory)\n",
+            b"error connecting to /private/capture.sock (Connection refused)\n",
+        ] {
+            assert!(
+                server_gone_for_observation(
+                    socket,
+                    "capture-pane",
+                    &result(256, b"", diagnostic),
+                    false
+                )
+                .is_some()
+            );
+        }
+        for (status, stdout, diagnostic, late) in [
+            (
+                0,
+                b"".as_slice(),
+                b"no server running on /private/capture.sock\n".as_slice(),
+                false,
+            ),
+            (
+                256,
+                b"",
+                b"no server running on /private/capture.sock\n",
+                true,
+            ),
+            (
+                256,
+                b"hook bytes",
+                b"no server running on /private/capture.sock\n",
+                false,
+            ),
+            (256, b"", b"no server running on /another/socket\n", false),
+            (
+                256,
+                b"",
+                b"no server running on /private/capture.sock\nmore\n",
+                false,
+            ),
+            (256, b"", b"server exited unexpectedly\n", false),
+            (
+                256,
+                b"",
+                b"error connecting to /private/capture.sock (Permission denied)\n",
+                false,
+            ),
+            (256, b"", b"protocol version mismatch\n", false),
+        ] {
+            assert!(
+                server_gone_for_observation(
+                    socket,
+                    "capture-pane",
+                    &result(status, stdout, diagnostic),
+                    late
+                )
+                .is_none()
+            );
+        }
+    }
 
     fn timeout() -> Error {
         Error::timeout(

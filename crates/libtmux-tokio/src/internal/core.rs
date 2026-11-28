@@ -649,6 +649,30 @@ impl Core {
         Ok((result, operation.is_late()))
     }
 
+    pub(crate) async fn execute_guarded_observation(
+        &self,
+        arguments: Vec<OsString>,
+        summary: crate::CommandSummary,
+        operation: super::operation::OperationContext,
+    ) -> Result<(CommandResult, bool), Error> {
+        // The qualified core request already fences its generation and version.
+        // Extra ordinary guards would add unaccounted control reply frames.
+        let request = CommandRequest::native_argv(
+            self.next_request_id(),
+            &self.driver.configuration.global_argv,
+            arguments,
+            summary,
+        );
+        super::process::validate_request(&self.driver.configuration.launch, &request)
+            .map_err(super::operation::OperationContext::before_dispatch)?;
+        let result = self
+            .driver
+            .ordinary_executor
+            .execute_operation(request, operation.clone())
+            .await?;
+        Ok((result, operation.is_late()))
+    }
+
     /// Start a dispatch with no deadline of its own, and name it.
     ///
     /// For `wait-for` only, where older tmux releases retain a disconnected
