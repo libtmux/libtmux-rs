@@ -194,6 +194,25 @@ fn child_helper() {
                 .expect("grandchild starts");
             write_pid_file(pid_path, Some(child.id()));
         }
+        b"descendant-without-pipes" => {
+            let path = Path::new(arguments.first().expect("PID path"));
+            let child = process::Command::new(std::env::current_exe().expect("test executable"))
+                .args(["--exact", CHILD_TEST, "--nocapture", "--"])
+                .arg(path.parent().expect("private fixture directory"))
+                .env(CHILD_ENV, "grandchild-until-fixture-closes")
+                .stdin(process::Stdio::null())
+                .stdout(process::Stdio::null())
+                .stderr(process::Stdio::null())
+                .spawn()
+                .expect("grandchild starts in the owned group");
+            write_pid_file(path.as_os_str(), Some(child.id()));
+        }
+        b"grandchild-until-fixture-closes" => {
+            let directory = Path::new(arguments.first().expect("private fixture directory"));
+            while directory.is_dir() {
+                std::thread::sleep(POLL_INTERVAL);
+            }
+        }
         b"grandchild" => loop {
             std::thread::park();
         },
@@ -629,6 +648,22 @@ async fn exited_leader_anchors_group_while_descendant_holds_pipes() {
     assert_process_reaped(pids[0]);
     assert_process_gone(pids[1]).await;
     executor.shutdown().await.expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn successful_exit_releases_descendants_that_closed_their_pipes() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("child.pid");
+    let executor = executor("descendant-without-pipes", TEST_TIMEOUT);
+    let result = executor
+        .execute(request(26, [path.as_os_str().to_owned()]))
+        .await
+        .expect("client completed");
+    assert!(result.success());
+    let pids = read_pids(&path, 2).await;
+    executor.shutdown().await.expect("shutdown succeeds");
+    assert_process_reaped(pids[0]);
+    assert_process_gone(pids[1]).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

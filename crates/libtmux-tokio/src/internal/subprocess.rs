@@ -1060,7 +1060,10 @@ async fn supervise_inner(
 
     let wait_result = loop {
         let outcome = tokio::select! {
-            result = child.wait() => Some(result),
+            result = async {
+                process_group.finish_group().await?;
+                child.wait().await
+            } => Some(result),
             () = cancelled(cancellation) => None,
             () = deadline_elapsed(deadline) => {
                 return InnerOutcome::Failed(Error::timeout(

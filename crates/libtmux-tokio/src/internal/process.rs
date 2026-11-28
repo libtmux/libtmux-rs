@@ -11,7 +11,7 @@ use std::process::Stdio;
 #[cfg(feature = "control-mode")]
 use std::sync::{Mutex, MutexGuard};
 
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
@@ -287,6 +287,29 @@ impl ProcessGroupGuard {
             }
         }
         Ok(())
+    }
+
+    /// Stop remaining group members while the waitable leader still owns its PID.
+    pub(crate) async fn finish_group(&self) -> io::Result<()> {
+        let leader = self
+            .process_group
+            .ok_or_else(|| io::Error::other("subprocess group identity is unavailable"))?;
+        let mut changed = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
+        loop {
+            match waitid(
+                WaitId::Pid(leader),
+                WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+            ) {
+                Ok(Some(_)) => return self.signal_checked(),
+                Ok(None) => {
+                    changed.recv().await.ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::BrokenPipe, "child status signal closed")
+                    })?;
+                }
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     pub(crate) fn disarm(&mut self) {
