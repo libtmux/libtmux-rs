@@ -929,12 +929,9 @@ async fn a_pane_created_after_narrowing_is_muted_too() {
 
 /// Watching one pane must not touch a pane in an unrelated session.
 ///
-/// A control client is sent only its attached session's output, so
-/// `watch_only` never needed to look past it; listing `list-panes -a`
-/// (every pane on the server) instead made it mute an unrelated session's
-/// pane too, and on tmux 3.7+ `mute_pane`'s `off` stops tmux reading a
-/// muted pane's pty for every client, not just this connection -- freezing
-/// the other session's pane for as long as this stream stayed open.
+/// Listing beyond the watched session can mute an unrelated pane. On tmux
+/// 3.7+, this can stop pty reads while all attached clients are control
+/// clients unable to consume it.
 #[tokio::test]
 async fn watching_one_pane_does_not_touch_an_unrelated_session() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -2017,6 +2014,179 @@ async fn layout_events_and_snapshots_agree_on_format() {
     );
 
     events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn an_open_pane_stream_reports_a_move_out_of_its_session() {
+    use libtmux_tokio::{JoinOptions, SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
+    let origin = guard.session("stream-origin").await.expect("session");
+    let destination = guard.session("stream-destination").await.expect("session");
+    let window = origin.windows().await.expect("windows").remove(0);
+    let watched = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("pane is created");
+    let landing = destination.panes().await.expect("panes").remove(0);
+    let mut output = watched.stream_output().await.expect("the pane streams");
+    settle_stream(&watched, &mut output, "before-session-move").await;
+    let watched_id = watched.id().to_string();
+
+    watched
+        .join_into(&landing, JoinOptions::new(SplitDirection::Below))
+        .await
+        .expect("the watched pane moves");
+
+    for (scope, present) in [("-s", false), ("-a", true)] {
+        let listed = output
+            .sender()
+            .send(
+                Command::new("list-panes")
+                    .arg(scope)
+                    .arg("-F")
+                    .arg("#{pane_id}"),
+            )
+            .await
+            .expect("panes list over the watched connection");
+        assert!(listed.succeeded());
+        assert_eq!(
+            listed
+                .output()
+                .iter()
+                .any(|id| id.as_bytes() == watched_id.as_bytes()),
+            present,
+            "{scope} distinguishes session coverage from pane existence",
+        );
+    }
+
+    let error = tokio::time::timeout(Duration::from_secs(8), output.next_chunk())
+        .await
+        .expect("leaving the watched session ends the stream")
+        .expect("the stream reports its terminal cause")
+        .expect_err("the moved pane is no longer covered");
+    assert!(matches!(
+        error,
+        libtmux_tokio::Error::PaneOutputEnded {
+            cause: libtmux_tokio::control::PaneOutputEnd::PaneOutsideSession,
+        }
+    ));
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::Transport);
+    assert!(!error.is_object_gone(), "the moved pane still exists");
+    assert!(output.next_chunk().await.is_none());
+
+    output.shutdown().await.expect("the stream shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn opening_a_pane_stream_checks_its_current_session_membership() {
+    use libtmux_tokio::{SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
+    let origin = guard.session("opening-origin").await.expect("session");
+    let destination = guard.session("opening-destination").await.expect("session");
+    let window = origin.windows().await.expect("windows").remove(0);
+    let watched = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("pane is created");
+    let landing = destination.panes().await.expect("panes").remove(0);
+    guard
+        .server()
+        .set_hook(
+            "client-attached",
+            format!("join-pane -d -s {} -t {}", watched.id(), landing.id()),
+        )
+        .await
+        .expect("the attach hook moves the pane before narrowing");
+
+    let error = watched
+        .stream_output()
+        .await
+        .expect_err("a pane outside the newly attached session cannot be watched");
+    assert!(matches!(
+        error,
+        libtmux_tokio::Error::PaneOutputEnded {
+            cause: libtmux_tokio::control::PaneOutputEnd::PaneOutsideSession,
+        }
+    ));
+    assert!(!error.is_object_gone(), "the pane moved rather than died");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_pane_stream_keeps_coverage_until_its_last_session_link_is_unlinked() {
+    use libtmux_tokio::{JoinOptions, SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
+    let origin = guard.session("linked-origin").await.expect("session");
+    let destination = guard.session("linked-destination").await.expect("session");
+    let origin_window = origin.windows().await.expect("windows").remove(0);
+    let destination_window = destination.windows().await.expect("windows").remove(0);
+    let watched = origin_window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("pane is created");
+    let landing = destination_window.panes().await.expect("panes").remove(0);
+    let mut output = watched.stream_output().await.expect("the pane streams");
+    settle_stream(&watched, &mut output, "before-linked-move").await;
+
+    for index in [7, 8] {
+        destination_window
+            .link_to(&origin, Some(index))
+            .await
+            .expect("the landing window is linked into the watched session");
+    }
+    let watched = watched
+        .join_into(&landing, JoinOptions::new(SplitDirection::Below))
+        .await
+        .expect("the pane moves into a linked window");
+    settle_stream(&watched, &mut output, "after-linked-move").await;
+
+    origin
+        .window_at(7)
+        .await
+        .expect("windows list")
+        .expect("the first link exists")
+        .link()
+        .unlink()
+        .await
+        .expect("one link is unlinked");
+    settle_stream(&watched, &mut output, "one-link-remains").await;
+
+    origin
+        .window_at(8)
+        .await
+        .expect("windows list")
+        .expect("the last link exists")
+        .link()
+        .unlink()
+        .await
+        .expect("the last link is unlinked");
+    let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
+    assert!(
+        matches!(
+            ended,
+            Ok(Some(Err(libtmux_tokio::Error::PaneOutputEnded {
+                cause: libtmux_tokio::control::PaneOutputEnd::PaneOutsideSession,
+            })))
+        ),
+        "unlinking the last current-session link ends coverage: {ended:?}"
+    );
+
+    output.shutdown().await.expect("the stream shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

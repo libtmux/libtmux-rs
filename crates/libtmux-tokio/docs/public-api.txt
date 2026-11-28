@@ -1548,6 +1548,7 @@ variant libtmux_tokio::WindowPlacement::After
 variant libtmux_tokio::WindowPlacement::Before
 variant libtmux_tokio::control::PaneOutputEnd::ConnectionEnded
 variant libtmux_tokio::control::PaneOutputEnd::PaneGone
+variant libtmux_tokio::control::PaneOutputEnd::PaneOutsideSession
 variant libtmux_tokio::control::Subscription::AllPanes
 variant libtmux_tokio::control::Subscription::AllWindows
 variant libtmux_tokio::control::Subscription::Pane

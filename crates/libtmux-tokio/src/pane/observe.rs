@@ -15,6 +15,16 @@ impl Pane {
     /// Open a control-mode connection to the session currently holding the pane.
     /// The stream receives new output as tmux delivers it, including text that
     /// scrolls away before a [`Pane::capture`].
+    /// A checked move outside the connection's current session ends the
+    /// stream with [`crate::control::PaneOutputEnd::PaneOutsideSession`].
+    /// Windows linked into that session retain coverage. Leaving and returning
+    /// between checks can go undetected, so topology checks do not establish
+    /// uninterrupted coverage.
+    ///
+    /// Other panes in the session are muted on this private connection. If
+    /// every attached client is a control client unable to consume one of
+    /// those panes, tmux may stop reading its pty. An attached human client
+    /// keeps those reads enabled.
     ///
     /// The bytes are the pane's own, terminal escapes included. tmux reports
     /// them in whatever sized chunks it has, so a caller wanting lines has to
@@ -32,7 +42,8 @@ impl Pane {
     ///
     /// Returns [`Error::ObjectGone`] when the pane no longer exists, a listing
     /// error when tmux could not be read, or an error when the control-mode
-    /// connection cannot be opened.
+    /// connection cannot be opened. If the pane moves or dies during opening,
+    /// returns [`Error::PaneOutputEnded`] with the checked cause.
     ///
     /// # Cancel safety
     ///
@@ -93,7 +104,14 @@ impl Pane {
 
         // One session can hold many panes, and the connection carries all of
         // them, so narrowing happens before the caller reads.
-        if let Err(error) = sender.watch_only(std::slice::from_ref(self.id())).await {
+        let watched = sender
+            .watch_pane(self.id())
+            .await
+            .and_then(|ending| match ending {
+                Some(cause) => Err(Error::PaneOutputEnded { cause }),
+                None => Ok(()),
+            });
+        if let Err(error) = watched {
             drop(sender);
             return Err(events.shutdown_after_error(error).await);
         }

@@ -10,6 +10,7 @@ is shaped the way it is.
 - [tmux merges the server and session environments only when it starts a process](#tmux-merges-the-server-and-session-environments-only-when-it-starts-a-process)
 - [tmux 3.3 through 3.4 send `run-shell` output to a pane](#tmux-33-through-34-send-run-shell-output-to-a-pane)
 - [Muting a control-mode pane kills the server before tmux 3.7](#muting-a-control-mode-pane-kills-the-server-before-tmux-37)
+- [A live pane can leave a control connection's output coverage](#a-live-pane-can-leave-a-control-connections-output-coverage)
 - [Asking for the clipboard can kill tmux before 3.6a](#asking-for-the-clipboard-can-kill-tmux-before-36a)
 - [A one-binding key listing goes to the message log on tmux 3.7 through 3.7c](#a-one-binding-key-listing-goes-to-the-message-log-on-tmux-37-through-37c)
 - [Older tmux releases retain disconnected `wait-for` clients](#older-tmux-releases-retain-disconnected-wait-for-clients)
@@ -135,8 +136,10 @@ unexpectedly`.
 
 Pausing also takes the pane out of the stream, and `control_pause_pane`
 discards the pane's queued blocks as it pauses, on every supported release, so
-no stale offset is left behind. It costs back-pressure, because tmux keeps
-draining a paused pane's terminal where a pane that is off lets the write block.
+no stale offset is left behind. tmux keeps draining a paused pane's terminal.
+A pane that is off can stop pty reads when all attached clients are control
+clients unable to consume it. An attached human client clears that condition
+in `server_client_check_pane_buffer`.
 Below 3.7 the crate gives up that back-pressure to keep the server up.
 
 tmux 3.7 added the same discard to `control_set_pane_off`. The range was
@@ -153,6 +156,37 @@ dead server the same way it reports a refused command, so the assertion blamed
 the arguments. `TestServer::daemon_state` was added for this: a test cannot
 tell the two apart from the reply, but the fixture is the daemon's parent and
 can.
+
+## A live pane can leave a control connection's output coverage
+
+On tmux 3.7 and 3.8, moving a watched pane into a window outside the control
+client's current session stops its output notifications while the pane and
+connection remain live. A same-connection `list-panes -s` omits the pane;
+`list-panes -a` still includes it. Linking the destination window into the
+current session restores membership, including when another link to that
+window is unlinked.
+
+`PaneOutput` rechecks session membership after topology notices or a subscriber
+gap, and ends with `PaneOutputEnd::PaneOutsideSession` when the pane exists
+only outside that session. The opening path makes the same check. A server-wide
+absence is `PaneOutputEnd::PaneGone`. The stream keeps each pending check until
+its result has been consumed, coalescing later notices into another check.
+
+`an_open_pane_stream_reports_a_move_out_of_its_session` reproduces the silent
+open stream. `opening_a_pane_stream_checks_its_current_session_membership`
+moves the pane from a `client-attached` hook. The linked-window regression
+keeps receiving through one remaining link and ends after the last unlink.
+A departure and return between checks can go undetected; these observations
+do not prove uninterrupted output coverage.
+
+Upstream's [`control_write_output`][control-output] checks the session's window
+links. [`server_client_check_pane_buffer`][pane-buffer] disables pty reads only
+when its client scan leaves every attached client unable to consume the pane.
+Resuming starts at tmux's current offset, so only pending pty data can become a
+backlog; data already read while muted is not replayed.
+
+[control-output]: https://github.com/tmux/tmux/blob/3daf2632b4ce37df86796eda1a840a150b7b7b5f/control.c#L618-L639
+[pane-buffer]: https://github.com/tmux/tmux/blob/3daf2632b4ce37df86796eda1a840a150b7b7b5f/server-client.c#L2116-L2205
 
 ## Asking for the clipboard can kill tmux before 3.6a
 

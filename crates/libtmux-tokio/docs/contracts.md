@@ -101,6 +101,28 @@ queue. A configured capture hook yields `Error::JoinedCaptureHook` from
 `libtmux-core`. Using a matching tmux executable allows joined capture with
 that hook. A failed observation returns no pane bytes.
 
+## Pane stream coverage
+
+`Pane::stream_output` checks membership in its private control connection's
+current session over that connection. Topology notices and subscriber gaps
+repeat the check.
+`list-panes -s` includes every window link in the session, including duplicate
+links. A pane absent there but still listed server-wide ends the stream with
+`PaneOutputEnd::PaneOutsideSession`, classified as `ErrorKind::Transport`.
+`PaneOutputEnd::PaneGone` requires absence from the server-wide listing and is
+classified as `ErrorKind::ObjectGone`. Opening uses the same checks.
+
+These are sampled observations. A pane can leave and return between checks,
+and notifications can be lost during a subscriber gap. A successful check
+does not establish uninterrupted output coverage or recover missed bytes.
+Reopen the stream after inspecting the pane's current location.
+
+Muting another pane affects this connection's output. tmux can also stop
+reading that pane's pty if all attached clients are control clients unable
+to consume it. An attached human client keeps reads enabled. Resuming can
+deliver pending pty bytes, but does not replay bytes tmux already read while
+the connection was muted.
+
 ## Commands nested in another command
 
 The guard reads the command it is given and nothing nested in it. A refused

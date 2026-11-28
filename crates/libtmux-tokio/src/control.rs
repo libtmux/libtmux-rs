@@ -40,7 +40,6 @@
 use std::future::{Future as _, poll_fn};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -769,14 +768,13 @@ impl ControlSender {
     /// connection's own back-pressure, and [`ControlEvents`] sees
     /// [`Event::Paused`] for it.
     ///
-    /// At or above that release, taking the pane out of the stream also stops
-    /// tmux reading its pty at all -- for every attached client, not only this
-    /// connection, and for a one-shot reader such as `capture-pane` too --
-    /// until [`Self::unmute_pane`] or [`Self::resume_pane`] turns it back on.
-    /// A human attached to the same pane sees it stop updating, and the pane's
-    /// own program can block on `write` once the kernel's pty buffer fills.
-    /// What arrives once resumed is therefore a backlog, not a gap: see
-    /// [`Self::unmute_pane`].
+    /// At or above that release, tmux may also stop reading the pane's pty
+    /// when every attached client is a control client unable to consume it.
+    /// The pane's program can then block once the kernel's pty buffer fills.
+    /// An attached human client keeps pty reads enabled, as does a control
+    /// client still able to consume the pane. Output read while this stream
+    /// is muted is skipped; only bytes still pending in the pty can arrive
+    /// after [`Self::unmute_pane`] or [`Self::resume_pane`].
     ///
     /// # Errors
     ///
@@ -802,9 +800,10 @@ impl ControlSender {
     /// was skipped, so the caller sees a gap, not a backlog.
     ///
     /// At or above that release, [`Self::mute_pane`] took the pane out of the
-    /// stream instead, which also stopped tmux reading its pty; this turns
-    /// that back on, and everything written while muted arrives at once, as a
-    /// backlog rather than a gap.
+    /// stream instead. Resuming starts at tmux's current output offset. If
+    /// pty reads stopped because no attached client could consume the pane,
+    /// pending pty bytes can arrive as a backlog. Bytes already read while
+    /// muted are not replayed, so resuming does not establish continuity.
     ///
     /// This sends both tmux commands in one dispatch rather than choosing
     /// between them, so it is exactly [`Self::resume_pane`] -- either name
@@ -975,15 +974,11 @@ impl ControlSender {
 
     /// Receive output from these panes and no others.
     ///
-    /// Lists panes in the session this connection attached to -- over this
-    /// same connection, so the answer cannot disagree with it -- then mutes
-    /// every one not named. See [`Self::mute_pane`] for why this beats
-    /// filtering what arrives, and why the listing must not reach past this
-    /// connection's own session: `off` stops tmux reading a muted pane's pty
-    /// for every client, not just this connection, so muting a pane outside
-    /// this session would widen the change to whatever else is watching it,
-    /// and a control client is sent only its attached session's output in
-    /// the first place, so panes outside it were never part of this stream.
+    /// Lists panes in this connection's current session over the same
+    /// connection, then mutes every one not named. A control client receives
+    /// only output from panes whose windows are linked into that session.
+    /// Listing beyond it would mute unrelated panes and could affect their
+    /// pty reads under the conditions [`Self::mute_pane`] describes.
     ///
     /// A pane created after this call is not muted, because tmux publishes no
     /// notification for a pane appearing. Repeat this whenever
@@ -1001,6 +996,10 @@ impl ControlSender {
     /// call can leave some muted and others not. Muting is idempotent, so
     /// calling again finishes the job.
     pub async fn watch_only(&self, panes: &[PaneId]) -> Result<(), Error> {
+        self.watch_only_inner(panes).await.map(|_| ())
+    }
+
+    async fn watch_only_inner(&self, panes: &[PaneId]) -> Result<(bool, bool), Error> {
         let listed = self
             .send(
                 Command::new("list-panes")
@@ -1012,6 +1011,7 @@ impl ControlSender {
             .require_success("list-panes")?;
 
         let mut effect_seen = false;
+        let mut present = false;
         for line in listed.output() {
             let found = decode_watched_pane_id(line).map_err(|error| {
                 if effect_seen {
@@ -1020,7 +1020,9 @@ impl ControlSender {
                     error
                 }
             })?;
-            if !panes.contains(&found) {
+            if panes.contains(&found) {
+                present = true;
+            } else {
                 self.mute_pane(&found).await.map_err(|error| {
                     if effect_seen {
                         error.after_effect("watch-only")
@@ -1032,7 +1034,26 @@ impl ControlSender {
             }
         }
 
-        Ok(())
+        Ok((present, effect_seen))
+    }
+
+    pub(crate) async fn watch_pane(&self, pane: &PaneId) -> Result<Option<PaneOutputEnd>, Error> {
+        let (present, effect_seen) = self.watch_only_inner(std::slice::from_ref(pane)).await?;
+        if present {
+            return Ok(None);
+        }
+        let exists = self.pane_exists(pane).await.map_err(|error| {
+            if effect_seen {
+                error.after_effect("watch-only")
+            } else {
+                error
+            }
+        })?;
+        Ok(Some(if exists {
+            PaneOutputEnd::PaneOutsideSession
+        } else {
+            PaneOutputEnd::PaneGone
+        }))
     }
 
     /// Report whether tmux still lists this pane, anywhere on the server.
@@ -1305,9 +1326,6 @@ impl Stream for ControlEvents {
     }
 }
 
-const NARROW_IDLE: u8 = 0;
-const NARROW_RUNNING: u8 = 1;
-const NARROW_DIRTY: u8 = 2;
 const PANE_NOTICE_BATCH: usize = 64;
 
 /// An observed terminal condition for one pane output stream.
@@ -1321,8 +1339,10 @@ const PANE_NOTICE_BATCH: usize = 64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PaneOutputEnd {
-    /// A checked listing no longer contains the watched pane.
+    /// A checked server-wide listing no longer contains the watched pane.
     PaneGone,
+    /// The pane exists but is absent from the control connection's current session.
+    PaneOutsideSession,
     /// The control connection ended; this does not establish whether the pane lives.
     ConnectionEnded,
 }
@@ -1334,6 +1354,13 @@ pub enum PaneOutputEnd {
 /// A pane ending, server exit or connection failure is reported once before
 /// the stream ends. Grid capture uses an independent generation-bound request;
 /// it does not establish continuity or an ordering point in this event stream.
+///
+/// Topology notices and subscriber gaps trigger a checked listing in the
+/// control connection's current session. A pane absent there but present on
+/// the server ends with [`PaneOutputEnd::PaneOutsideSession`]. Window links
+/// count as membership.
+/// A pane can leave and return between checks without being detected; these
+/// checks cannot establish uninterrupted output coverage.
 #[derive(Debug)]
 pub struct PaneOutput {
     pane: PaneId,
@@ -1341,8 +1368,8 @@ pub struct PaneOutput {
     closed: bool,
     ending: Option<PaneOutputEnd>,
     sender: ControlSender,
-    narrowing: Arc<AtomicU8>,
-    narrow_handle: Option<tokio::task::JoinHandle<Result<bool, Error>>>,
+    narrow_dirty: bool,
+    narrow_handle: Option<tokio::task::JoinHandle<Result<Option<PaneOutputEnd>, Error>>>,
     capture: Option<(Server, libtmux_core::PaneKey)>,
 }
 
@@ -1354,7 +1381,7 @@ impl PaneOutput {
             closed: false,
             ending: None,
             sender,
-            narrowing: Arc::new(AtomicU8::new(NARROW_IDLE)),
+            narrow_dirty: false,
             narrow_handle: None,
             capture: None,
         }
@@ -1366,35 +1393,15 @@ impl PaneOutput {
     }
 
     fn narrow(&mut self) {
-        #[allow(deprecated)]
-        let transition =
-            self.narrowing
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
-                    NARROW_IDLE => Some(NARROW_RUNNING),
-                    NARROW_RUNNING => Some(NARROW_DIRTY),
-                    _ => None,
-                });
-        if !matches!(transition, Ok(NARROW_IDLE)) {
+        // Keep the handle until its result is consumed, including after the
+        // task finishes; a later notice must not replace an observed end.
+        if self.narrow_handle.is_some() {
+            self.narrow_dirty = true;
             return;
         }
         let sender = self.sender.clone();
         let pane = self.pane.clone();
-        let narrowing = Arc::clone(&self.narrowing);
-        self.narrow_handle = Some(tokio::spawn(async move {
-            loop {
-                sender.watch_only(std::slice::from_ref(&pane)).await?;
-                match narrowing.compare_exchange(
-                    NARROW_RUNNING,
-                    NARROW_IDLE,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                ) {
-                    Ok(_) => break,
-                    Err(_) => narrowing.store(NARROW_RUNNING, Ordering::Release),
-                }
-            }
-            sender.pane_exists(&pane).await
-        }));
+        self.narrow_handle = Some(tokio::spawn(async move { sender.watch_pane(&pane).await }));
     }
 
     /// The pane this stream watches.
@@ -1537,8 +1544,13 @@ impl Stream for PaneOutput {
         if let Some(mut handle) = this.narrow_handle.take() {
             match Pin::new(&mut handle).poll(context) {
                 Poll::Pending => this.narrow_handle = Some(handle),
-                Poll::Ready(Ok(Ok(true))) => {}
-                Poll::Ready(Ok(Ok(false))) => this.end_after_notices(PaneOutputEnd::PaneGone),
+                Poll::Ready(Ok(Ok(None))) => {
+                    if std::mem::take(&mut this.narrow_dirty) {
+                        this.narrow();
+                        context.waker().wake_by_ref();
+                    }
+                }
+                Poll::Ready(Ok(Ok(Some(cause)))) => this.end_after_notices(cause),
                 // A watch RPC receives a copy of an actor failure. Drain the
                 // original through the event receiver, after any queued bytes.
                 Poll::Ready(Ok(Err(error))) if this.actor_reports(&error) => {
@@ -1570,6 +1582,10 @@ impl Stream for PaneOutput {
                     dropped,
                     included_pause,
                 })) => {
+                    if this.ending.is_none() {
+                        this.narrow();
+                        context.waker().wake_by_ref();
+                    }
                     return Poll::Ready(Some(Err(Error::ControlGap {
                         dropped,
                         included_pause,
@@ -1583,10 +1599,14 @@ impl Stream for PaneOutput {
                         && (event.may_have_added_a_pane()
                             || matches!(
                                 event,
-                                Event::WindowClosed { .. } | Event::UnlinkedWindowClosed { .. }
+                                Event::WindowPaneChanged { .. }
+                                    | Event::SessionWindowChanged { .. }
+                                    | Event::WindowClosed { .. }
+                                    | Event::UnlinkedWindowClosed { .. }
                             ))
                     {
                         this.narrow();
+                        context.waker().wake_by_ref();
                     }
                 }
                 Some(Err(error)) => return this.terminal(Some(error)),

@@ -293,6 +293,134 @@ async fn a_failed_pane_watch_drains_buffered_output_and_delivers_the_actor_error
 }
 
 #[tokio::test]
+async fn a_pending_membership_result_survives_a_later_topology_notice() {
+    let (events, wire) = events(ControlLimits::default(), Ok(()));
+    let (commands, _queued) = mpsc::channel(1);
+    let mut output = PaneOutput::new(
+        "%3".parse().unwrap(),
+        events,
+        sender(commands, Duration::from_secs(1)),
+    );
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let (finished, done) = tokio::sync::oneshot::channel();
+    output.narrow_handle = Some(tokio::spawn(async move {
+        wait.await.unwrap();
+        finished.send(()).unwrap();
+        Ok(Some(super::PaneOutputEnd::PaneOutsideSession))
+    }));
+    wire.feed(b"%window-pane-changed @1 %4\n%output %3 preceding\n")
+        .unwrap();
+    assert_eq!(output.next_chunk().await.unwrap().unwrap(), b"preceding");
+
+    release.send(()).unwrap();
+    done.await.unwrap();
+    wire.finish();
+    assert!(matches!(
+        output.next_chunk().await,
+        Some(Err(Error::PaneOutputEnded {
+            cause: super::PaneOutputEnd::PaneOutsideSession,
+        }))
+    ));
+    assert!(output.next_chunk().await.is_none());
+    output.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_window_pane_change_checks_membership_without_another_notice() {
+    let (events, wire) = events(ControlLimits::default(), Ok(()));
+    let (commands, mut queued) = mpsc::channel(1);
+    let mut output = PaneOutput::new(
+        "%3".parse().unwrap(),
+        events,
+        sender(commands, Duration::from_secs(1)),
+    );
+    let mut stopped = output.events.stop.subscribe();
+    wire.feed(b"%window-pane-changed @1 %4\n").unwrap();
+    let (ended, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(output.next_chunk(), async {
+            let local = queued.recv().await.unwrap();
+            assert_eq!(local.line, "list-panes -s -F \"#{pane_id}\"");
+            local
+                .result
+                .send(Ok(reply(b"%begin 1 2 1\n%end 1 2 1\n")))
+                .unwrap();
+            let global = queued.recv().await.unwrap();
+            assert_eq!(global.line, "list-panes -a -F \"#{pane_id}\"");
+            global
+                .result
+                .send(Ok(reply(b"%begin 1 3 1\n%3\n%end 1 3 1\n")))
+                .unwrap();
+            stopped.changed().await.unwrap();
+            wire.finish();
+        })
+    })
+    .await
+    .expect("membership completes without a later notice to wake the stream");
+    assert!(matches!(
+        ended,
+        Some(Err(Error::PaneOutputEnded {
+            cause: super::PaneOutputEnd::PaneOutsideSession,
+        }))
+    ));
+    output.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_subscriber_gap_rechecks_membership_after_an_outstanding_check() {
+    let (events, wire) = events(ControlLimits::default().max_events(1), Ok(()));
+    let (commands, mut queued) = mpsc::channel(1);
+    let mut output = PaneOutput::new(
+        "%3".parse().unwrap(),
+        events,
+        sender(commands, Duration::from_secs(1)),
+    );
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let (finished, done) = tokio::sync::oneshot::channel();
+    output.narrow_handle = Some(tokio::spawn(async move {
+        wait.await.unwrap();
+        finished.send(()).unwrap();
+        Ok(None)
+    }));
+    wire.feed(b"%output %9 unrelated\n%window-pane-changed @1 %4\n")
+        .unwrap();
+    assert!(matches!(
+        output.next_chunk().await,
+        Some(Err(Error::ControlGap { dropped: 1, .. }))
+    ));
+
+    release.send(()).unwrap();
+    done.await.unwrap();
+    let mut stopped = output.events.stop.subscribe();
+    let (ended, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(output.next_chunk(), async {
+            let local = queued.recv().await.unwrap();
+            assert_eq!(local.line, "list-panes -s -F \"#{pane_id}\"");
+            local
+                .result
+                .send(Ok(reply(b"%begin 1 2 1\n%end 1 2 1\n")))
+                .unwrap();
+            let global = queued.recv().await.unwrap();
+            assert_eq!(global.line, "list-panes -a -F \"#{pane_id}\"");
+            global
+                .result
+                .send(Ok(reply(b"%begin 1 3 1\n%3\n%end 1 3 1\n")))
+                .unwrap();
+            stopped.changed().await.unwrap();
+            wire.finish();
+        })
+    })
+    .await
+    .expect("the gap schedules another check after the pending result");
+    assert!(matches!(
+        ended,
+        Some(Err(Error::PaneOutputEnded {
+            cause: super::PaneOutputEnd::PaneOutsideSession,
+        }))
+    ));
+    output.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unrelated_notices_yield_before_the_next_pane_chunk() {
     use futures_core::Stream as _;
     use std::pin::Pin;

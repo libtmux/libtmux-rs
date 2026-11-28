@@ -79,7 +79,8 @@ impl Error {
             #[cfg(feature = "control-mode")]
             Self::PaneOutputEnded { cause } => match cause {
                 crate::control::PaneOutputEnd::PaneGone => ErrorKind::ObjectGone,
-                crate::control::PaneOutputEnd::ConnectionEnded => ErrorKind::Transport,
+                crate::control::PaneOutputEnd::PaneOutsideSession
+                | crate::control::PaneOutputEnd::ConnectionEnded => ErrorKind::Transport,
             },
             Self::CoreOperation { source } => super::operation::core_kind(source),
             Self::OperationFailure {
