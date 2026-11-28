@@ -18,6 +18,11 @@ which a published crate cannot link by a relative path.
 
 ### Added
 
+- `libtmux::options` exposes the shared option catalogue for offline lookup
+  and validation. `libtmux::protocol` contains receipt markers and version
+  probes for transport implementers.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - The mixed-client example borrows an explicit socket and passes a blocking
   creation receipt to Tokio. It cleans only the verified session and retains
   operation and cleanup failures together. Its external fixture recipe
