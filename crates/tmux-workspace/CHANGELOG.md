@@ -16,6 +16,15 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Changed
+
+- **Breaking.** `BuildError::CreationUnconfirmed { name, source }` replaces
+  `BuildError::SessionExists`. Without a verified creation receipt, a build
+  preserves the original unknown effect and requested session name, adopts
+  no existing session and runs no later steps. Inspect the server before
+  repeating the build.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 ## 0.1.2 - 2026-11-01
 
 No entries for `tmux-workspace`.
