@@ -59,7 +59,7 @@ created even if observing its pane fails.
 `Vec<u8>`. Write those bytes with `std::io::Write::write_all` to preserve them.
 A key from another socket or a replaced daemon is refused.
 
-The [mixed-client program](https://github.com/libtmux/libtmux-rs/blob/a60922ba2afedcdd9350e5c495611b99379ac0d4/crates/libtmux/examples/api_mixed.rs)
+The [mixed-client program](https://libtmux.org/en/rs/latest/reference/libtmux_blocking-server-new_session/)
 creates a session with this client and passes its pane key directly to a Tokio
 capture on the same socket. Use the `libtmux` facade for both namespaces.
 The [runtime architecture decision](https://github.com/libtmux/libtmux-rs/pull/186)

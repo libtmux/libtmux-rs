@@ -81,8 +81,44 @@ $ cargo run -- "$directory/socket"
 It prints `created and cleaned one session`. The program kills the session it
 created even if observing its pane fails.
 
-The [mixed-client program](examples/api_mixed.rs) passes the same pane key
-to a Tokio capture. Enable `tokio` when you need that client.
+### Capture with both clients
+
+The [mixed-client program](examples/api_mixed.rs) creates a session with the
+blocking client and passes its pane key to Tokio for capture. The program
+accepts an absolute socket path and removes only its own verified session.
+It also recovers a verified receipt from a creation error before cleanup.
+It preserves an operation failure together with any cleanup failure.
+
+Run it from this checkout with an external private fixture. The subshell
+owns that daemon, checks that the reader preserved its fixture session,
+and retires it before returning:
+
+```sh
+(
+  set -eu
+  mkdir -p /tmp/libtmux-rs-dev
+  directory=$(mktemp -d /tmp/libtmux-rs-dev/mixed.XXXXXX)
+  socket="$directory/socket"
+  cleanup() {
+    tmux -S "$socket" kill-server >/dev/null 2>&1 || return
+    attempts=0
+    while tmux -N -S "$socket" list-sessions >/dev/null 2>&1; do
+      attempts=$((attempts + 1))
+      [ "$attempts" -lt 100 ] || return 1
+      sleep 0.01
+    done
+    rm -f "$socket"
+    rmdir "$directory"
+  }
+  trap cleanup EXIT
+  tmux -S "$socket" -f /dev/null new-session -d -s fixture
+  cargo run --quiet -p libtmux --example api_mixed --features tokio -- "$socket"
+  [ "$(tmux -S "$socket" list-sessions -F '#{session_name}')" = fixture ]
+)
+```
+
+It prints `mixed runtime`. The [standalone consumer manifest](examples/api/consumer.toml)
+selects only `blocking` and `tokio`; the reader needs no test fixture feature.
 
 ## Describe a session
 

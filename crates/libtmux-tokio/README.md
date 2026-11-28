@@ -61,8 +61,48 @@ See the [migration notes](docs/migration.md) when upgrading from an earlier alph
 
 ## Quick start
 
-Add the crate, and Tokio to drive it. `test-support` supplies the isolated
-server used by the examples:
+Connect to a running tmux server by passing its absolute socket path. Add the
+client and Tokio:
+
+```toml
+[dependencies]
+libtmux-tokio = "0.1.2"
+tokio = { version = "1", features = ["rt", "time"] }
+```
+
+Save this as `src/main.rs`. It prints the session names and confirms client
+cleanup. It borrows the daemon and leaves its sessions alone.
+
+<!-- tokio-example -->
+
+```rust,no_run
+use std::io::{self, Write};
+use libtmux_tokio::{Error, Server};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let socket = std::env::args_os().nth(1).ok_or("pass an absolute socket path")?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let sessions = runtime.block_on(async {
+        let server = Server::builder().socket_path(socket).build()?;
+        Error::after_cleanup(server.sessions().await, server.shutdown().await)
+    })?;
+    let mut stdout = io::stdout().lock();
+    for session in sessions {
+        stdout.write_all(session.name().as_bytes())?;
+        stdout.write_all(b"\n")?;
+    }
+    Ok(())
+}
+```
+
+<!-- /tokio-example -->
+
+Run `cargo run -- /absolute/path/to/socket` with an endpoint you already use.
+The program creates no daemon or session and needs no `test-support` feature.
+
+### Isolated servers for tests
+
+`test-support` supplies an isolated server for the test examples below:
 
 ```toml
 [dependencies]
@@ -98,10 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-- **Throwaway tmux.** Every example on this page runs on a socket of its own,
-  not yours.
-- **Your own server.** Use `libtmux_tokio::Server::new()?` in place of the guard, and
-  omit `guard.shutdown()`. It needs no `test-support` feature.
+- **Throwaway tmux.** The fixture examples use their own private sockets.
+- **Your own server.** Use the supplied-endpoint program above for normal
+  connections. `Server::shutdown` closes the client without killing the daemon.
 - **Which server.** With neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET`
   set, `Server::new` names no socket and tmux chooses the server.
 
@@ -780,13 +819,15 @@ below, so a caller who wants them all does not have to list them.
 | `query` | Typed filter expressions over listings. On by default |
 | `plan` | Recording tmux work before running it, and choosing what it costs |
 | `control-mode` | One persistent tmux connection, so the server reports changes as they happen rather than being polled |
-| `blocking` | A runtime for calling from code that is not async |
 | `derive` | `#[derive(Filterable)]`, for filtering your own structs with the same expressions |
 | `serde` | Versioned serialization for [`FilterExpr<T>`], for sending expressions over a wire |
 | `schema` | JSON Schema for serialized plans and portable filter expressions |
 | `tracing` | Sanitized command instrumentation: a `tmux_command` span per dispatch |
 | `test-support` | The real-tmux test guard, for your own tests |
 | `full` | Every capability above, but not `test-support` |
+
+Use `libtmux-blocking`, or the default `libtmux` facade, for a native
+synchronous client. `libtmux-tokio` has no `blocking` feature.
 
 ## If you know the Python libtmux
 
