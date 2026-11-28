@@ -129,7 +129,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: libtmux/docs
-          ref: c39c570da700424e24b4b19b7dc36194548e50cf
+          ref: 5a763a4aabd017cefb88456169e96296f0ac9237
           path: .native-proof-docs
           sparse-checkout: scripts/example_tmux_sandbox.py
           sparse-checkout-cone-mode: false
