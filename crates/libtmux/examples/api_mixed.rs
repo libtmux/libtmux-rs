@@ -4,33 +4,33 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use libtmux::tokio::{Error, PaneWait, Server};
-use libtmux::{CommandKind, CreatedSession, NewSession, blocking};
+use libtmux::{CreatedSession, NewSession, blocking};
 use tokio::runtime::Builder;
 
-async fn capture(server: &Server, receipt: &CreatedSession) -> Result<Vec<u8>, Error> {
+enum CaptureOutcome {
+    PaneAbsent,
+    NotReady(PaneWait),
+    Captured(Vec<u8>),
+}
+
+async fn capture(server: &Server, receipt: &CreatedSession) -> Result<CaptureOutcome, Error> {
     let key = receipt.pane();
     let session = server.inspect_session(receipt).await?;
-    let pane = session
+    let Some(pane) = session
         .panes()
         .await?
         .into_iter()
         .find(|pane| pane.key() == key)
-        .ok_or_else(|| libtmux::Error::PaneNotFound(key.id()))?;
-    match pane
+    else {
+        return Ok(CaptureOutcome::PaneAbsent);
+    };
+    let readiness = pane
         .wait_for_text("mixed runtime", Duration::from_secs(5))
-        .await?
-    {
-        PaneWait::Arrived => {}
-        PaneWait::Dead => return Err(libtmux::Error::PaneNotFound(key.id()).into()),
-        PaneWait::TimedOut => {
-            return Err(libtmux::Error::LateObservation {
-                operation: CommandKind::CapturePane,
-            }
-            .into());
-        }
-        _ => return Err(libtmux::Error::FramedRead.into()),
+        .await?;
+    if readiness != PaneWait::Arrived {
+        return Ok(CaptureOutcome::NotReady(readiness));
     }
-    server.capture(key).await
+    Ok(CaptureOutcome::Captured(server.capture(key).await?))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -67,6 +67,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let captured = Error::after_cleanup(captured, runtime.block_on(server.shutdown()));
-    io::stdout().lock().write_all(&captured?)?;
-    Ok(())
+    match captured? {
+        CaptureOutcome::Captured(bytes) => {
+            io::stdout().lock().write_all(&bytes)?;
+            Ok(())
+        }
+        CaptureOutcome::PaneAbsent => Err("the created pane was absent from its session".into()),
+        CaptureOutcome::NotReady(readiness) => {
+            Err(format!("pane readiness returned {readiness:?}").into())
+        }
+    }
 }
