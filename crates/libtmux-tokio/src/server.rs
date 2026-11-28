@@ -1106,8 +1106,15 @@ impl Server {
         options: impl Into<NewSession>,
     ) -> Result<libtmux_core::CreatedSession, Error> {
         let deadline = self.core.operation_deadline();
+        self.new_session_until(options.into(), deadline).await
+    }
+
+    pub(crate) async fn new_session_until(
+        &self,
+        options: NewSession,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<libtmux_core::CreatedSession, Error> {
         let nonce = crate::internal::operation::nonce()?;
-        let options = options.into();
         let operation = crate::internal::operation::OperationContext::creation(
             self.socket_path(),
             nonce,
@@ -2183,12 +2190,6 @@ impl Server {
             core: Arc::new(self.core.over_control_mode(sender.clone(), capabilities)),
         })
     }
-
-    /// Whether this handle came from [`Self::over_control_mode`].
-    #[cfg(all(feature = "control-mode", feature = "plan"))]
-    pub(crate) fn routes_over_control_mode(&self) -> bool {
-        self.core.routes_over_control_mode()
-    }
 }
 
 impl PartialEq for Server {
@@ -2469,7 +2470,9 @@ mod tests {
             sessions_stdout: session_listing_stdout(),
             followup: SessionFollowup::DispatchError,
         });
-        let server = Server::from_executor_for_test(executor.clone());
+        let server = Server::from_executor_for_test(executor.clone())
+            .bound_to(crate::ServerGeneration::from_raw(42, 1))
+            .expect("the fixture daemon generation");
         let mut session = server
             .sessions()
             .await
@@ -2501,7 +2504,9 @@ mod tests {
             sessions_stdout: session_listing_stdout(),
             followup: SessionFollowup::EmptyListing,
         });
-        let server = Server::from_executor_for_test(executor.clone());
+        let server = Server::from_executor_for_test(executor.clone())
+            .bound_to(crate::ServerGeneration::from_raw(42, 1))
+            .expect("the fixture daemon generation");
         let session = server
             .sessions()
             .await

@@ -710,13 +710,12 @@ async fn a_pause_holds_the_plan_on_every_planner() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// tmux answers a delayed `run-shell` on a connection before the delay ends,
-/// so both control-mode routes refuse a pause rather than report it done.
+/// tmux acknowledges a delayed control command immediately. Each public plan
+/// entry point must wait for the ordinary client to finish that step.
 #[cfg(feature = "control-mode")]
 #[tokio::test]
-async fn a_pause_is_refused_over_control_mode() {
+async fn a_pause_on_an_attached_server_waits_for_the_delay() {
     use libtmux_tokio::control::ControlMode;
-    use libtmux_tokio::{ControlModeErrorKind, Error};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let Some(guard) = versions::control_fixture(guard).await else {
@@ -737,18 +736,19 @@ async fn a_pause_is_refused_over_control_mode() {
         .expect("the connection reaches this server");
 
     let mut plan = Plan::new();
-    plan.add(Pause::new(Duration::from_millis(50)));
-    let blocking = |outcome: Result<PlanResult, Error>| {
-        matches!(
-            outcome,
-            Err(Error::ControlMode {
-                kind: ControlModeErrorKind::BlockingCommand,
-                ..
-            })
-        )
-    };
-    assert!(blocking(sender.run_plan(&plan).await));
-    assert!(blocking(routed.run_plan(&plan, Planner::Sequential).await));
+    let pause = Duration::from_millis(100);
+    plan.add(Pause::new(pause));
+    for direct_sender in [false, true] {
+        let started = std::time::Instant::now();
+        let result = if direct_sender {
+            sender.run_plan(&plan).await
+        } else {
+            routed.run_plan(&plan, Planner::Sequential).await
+        }
+        .expect("the qualified client waits");
+        assert!(result.is_complete(), "{result:?}");
+        assert!(started.elapsed() >= pause);
+    }
 
     events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");

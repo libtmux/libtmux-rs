@@ -327,7 +327,10 @@ impl Server {
 
 #[cfg(feature = "control-mode")]
 impl crate::control::ControlSender {
-    /// Execute a shared plan on this control connection.
+    /// Execute each plan operation against the attached daemon.
+    ///
+    /// Commands that wait or print ambiguous payloads use a separate native client.
+    /// Each operation retains its own outcome.
     ///
     /// # Errors
     ///
@@ -352,11 +355,6 @@ impl Execution<'_> {
     /// command tmux *refuses* is reported through the returned [`PlanResult`],
     /// not as an error, because a plan may expect one.
     ///
-    /// On a handle from `Server::over_control_mode`, a plan holding a
-    /// [`super::Pause`] fails with
-    /// [`crate::ControlModeErrorKind::BlockingCommand`] before anything is
-    /// sent, as [`Self::run_over_control_mode`] does.
-    ///
     /// # Cancel safety
     ///
     /// The effect can be partial: steps already dispatched stay done, and the
@@ -365,10 +363,6 @@ impl Execution<'_> {
     async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
-        #[cfg(feature = "control-mode")]
-        if server.routes_over_control_mode() {
-            self.refuse_pause_over_control_mode()?;
-        }
         self.validate_option_scopes()?;
         self.validate_layouts(server).await?;
         let mut server = server.clone();
@@ -776,20 +770,6 @@ fn bound_id<T: std::str::FromStr>(
 
 #[cfg(feature = "control-mode")]
 impl Execution<'_> {
-    /// Refuse a plan holding a pause on a control-mode connection.
-    ///
-    /// tmux ends a delayed `run-shell` block the moment it queues the delay
-    /// (`cmdq_fire_command` writes the guard when `exec` returns
-    /// `CMD_RETURN_WAIT`), then holds the connection's next command until the
-    /// delay is over: the pause would report done before it was, and a pause
-    /// at the end would not be waited for at all.
-    fn refuse_pause_over_control_mode(&self) -> Result<(), Error> {
-        if self.steps().iter().any(|op| matches!(op, Op::Pause(_))) {
-            return Err(Error::control_mode_blocking());
-        }
-        Ok(())
-    }
-
     fn validate_control_layouts(
         &self,
         sender: &crate::control::ControlSender,
@@ -804,35 +784,9 @@ impl Execution<'_> {
         Ok(())
     }
 
-    /// Run this plan over an open control-mode connection.
-    ///
-    /// Control mode is the one transport that separates *how many commands*
-    /// from *how many processes*: every operation is its own protocol block
-    /// over one connection, so a plan costs one process however long it is and
-    /// every operation still reports its own outcome. That is the combination
-    /// a subprocess cannot offer -- there, sharing an invocation is what buys
-    /// the process back, and it is exactly what costs the attribution.
-    ///
-    /// There is no planner argument because there is nothing to trade: blocks
-    /// are per command already.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the connection is closed, a command cannot be
-    /// written, a slot dependency is invalid, or a creating operation does not
-    /// return valid IDs, or a layout is invalid. Validation happens before the
-    /// first recorded command. Version-sensitive layouts may query metadata. A command
-    /// tmux refuses is reported in the [`PlanResult`].
-    ///
-    /// Layouts are checked against the connected daemon's version before
-    /// any operation runs. Classic layouts also require enough cells for
-    /// the panes created by preceding operations.
-    ///
-    /// A plan holding a [`super::Pause`] fails with
-    /// [`crate::ControlModeErrorKind::BlockingCommand`] before anything is
-    /// sent: tmux answers a delayed `run-shell` on a connection at once and
-    /// holds the next command instead, so the pause would report done before
-    /// it was.
+    /// Keep separate outcomes for operations submitted through an attached client.
+    /// Creation consumes its action receipt. Grid capture and client-blocking
+    /// operations use ordinary clients on the qualified daemon.
     ///
     /// # Cancel safety
     ///
@@ -848,8 +802,9 @@ impl Execution<'_> {
     ) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
-        self.refuse_pause_over_control_mode()?;
+        self.validate_option_scopes()?;
         self.validate_control_layouts(sender)?;
+        let server = sender.native_server().over_control_mode(sender).await?;
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());
@@ -914,13 +869,13 @@ impl Execution<'_> {
             }
 
             let sensitive_input = command.summary().sensitive_argument_count() > 0;
-            let block = sender
-                .send(command)
+            let result = server
+                .cmd(command)
                 .await
                 .map_err(|error| after_plan_effect(error, effect_seen))?;
             dispatches += 1;
 
-            let succeeded = block.succeeded();
+            let succeeded = result.success();
             let outcome = if succeeded {
                 Outcome::Complete
             } else {
@@ -929,20 +884,7 @@ impl Execution<'_> {
             outcomes[index] = outcome;
             let effect_through_step = effect_seen || (succeeded && !op.effects().read_only);
 
-            let output = block
-                .output()
-                .iter()
-                .flat_map(|line| {
-                    let mut bytes = line.as_bytes().to_vec();
-                    bytes.push(b'\n');
-                    bytes
-                })
-                .collect::<Vec<u8>>();
-            let (stdout, stderr) = if succeeded {
-                (output, Vec::new())
-            } else {
-                (Vec::new(), output)
-            };
+            let (stdout, stderr) = result.into_streams();
             if succeeded {
                 let step = Step::single(index);
                 bind(&mut bound, self.steps(), &step, &stdout)
