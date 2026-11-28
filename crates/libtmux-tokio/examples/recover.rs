@@ -81,13 +81,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Kept deliberately: `unlink` consumes the handle, and the second attempt
     // is the one with something to say.
     let same_link = from_home.clone();
-    from_home.unlink().await?;
+    from_home.link().unlink().await?;
 
     // Unlinking the same link twice: the second attempt fails, and what it
     // says decides whether the caller should stop. The window is still
     // running under the other session's link, so an error that read as "gone"
     // here would tell a caller to discard a handle that still works.
-    match same_link.unlink().await {
+    match same_link.link().unlink().await {
         Ok(()) => println!("  unlinked the same link twice, which would be a bug"),
         Err(error) => {
             println!("  second unlink says: {error}");
