@@ -50,6 +50,12 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- Two control-routed servers sharing an ordinary executor receive distinct
+  request IDs. Shutting down a routed server drains that pool and refuses
+  later calls and attachments through related views. The independently
+  held control sender remains with its connection owner.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - `Window::refresh`, `rename` and `resize` follow a surviving window across
   the withdrawal of its discovery link. Session and window lookups from
   `TMUX_PANE` retain the pane's daemon generation.
