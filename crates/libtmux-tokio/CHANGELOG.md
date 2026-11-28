@@ -38,6 +38,10 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- Pane streams drain queued bytes before reporting connection loss. An idle
+  control connection that closes without `%exit` yields a terminal error.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - If a subprocess call and its cleanup both fail, `Error::OperationAndCleanup`
   retains the command error and the failed cleanup stage.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
