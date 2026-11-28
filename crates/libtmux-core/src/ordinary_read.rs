@@ -7,6 +7,93 @@ use crate::{
     CommandKind, CreationNonce, Error, ObservePane, PaneId, PaneKey, TmuxVersion, parse_number,
 };
 
+/// Reads the PID and whole-second start time of a running daemon.
+///
+/// The ordinary client uses a nonce-bound diagnostic from `run-shell -C`.
+/// This avoids running the user's `after-display-message` hook while
+/// discovering the generation of a handle.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::{CreationNonce, OrdinaryGenerationProbe};
+///
+/// let probe = OrdinaryGenerationProbe::new(CreationNonce::from_bytes([0x42; 16]));
+/// assert_eq!(probe.arguments()[0], "-N");
+/// ```
+pub struct OrdinaryGenerationProbe {
+    marker: String,
+}
+
+impl std::fmt::Debug for OrdinaryGenerationProbe {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("OrdinaryGenerationProbe(<redacted>)")
+    }
+}
+
+impl OrdinaryGenerationProbe {
+    /// Prepare a request with fresh driver-supplied entropy.
+    #[must_use]
+    pub fn new(nonce: CreationNonce) -> Self {
+        Self {
+            marker: format!("libtmux-generation:{}:", nonce.encoded()),
+        }
+    }
+
+    /// Encode a non-starting client for an already-running daemon.
+    #[must_use]
+    pub fn arguments(&self) -> Vec<OsString> {
+        [
+            "-N",
+            "run-shell",
+            "-C",
+            &format!("{}#{{pid}},#{{start_time}}", self.marker),
+        ]
+        .map(OsString::from)
+        .into()
+    }
+
+    /// Read exactly one matching diagnostic with two decimal fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an observation error on a late, interrupted, unrelated or malformed reply.
+    pub fn decode(
+        &self,
+        status: Option<i32>,
+        stdout: &[u8],
+        stderr: &[u8],
+        late: bool,
+    ) -> Result<crate::ServerGeneration, Error> {
+        if late {
+            return Err(Error::LateObservation {
+                operation: CommandKind::ServerGeneration,
+            });
+        }
+        if status != Some(1) || !stdout.is_empty() {
+            return Err(Error::FramedRead);
+        }
+        let (pid, started) = probe_report(stderr, &self.marker)
+            .and_then(|report| report.split_once(','))
+            .ok_or(Error::InvalidKey)?;
+        let pid = parse_number::<u32>(pid)
+            .filter(|pid| *pid > 0)
+            .ok_or(Error::InvalidKey)?;
+        let started = parse_number::<i64>(started)
+            .filter(|seconds| crate::snapshot::unix_time(*seconds).is_some())
+            .ok_or(Error::InvalidKey)?;
+        Ok(crate::ServerGeneration::from_raw(pid, started))
+    }
+}
+
+fn probe_report<'a>(stderr: &'a [u8], marker: &str) -> Option<&'a str> {
+    let bytes = stderr
+        .strip_suffix(b"\n")?
+        .strip_prefix(b"unknown command: ")?
+        .strip_prefix(marker.as_bytes())?;
+    std::str::from_utf8(bytes).ok()
+}
+
 /// A hook-free metadata request bound to a nonce chosen by the native driver.
 ///
 /// The driver supplies fresh OS entropy for each request. The intentionally
@@ -89,12 +176,7 @@ impl OrdinaryPaneProbe {
         if status != Some(1) || !stdout.is_empty() {
             return Err(Error::FramedRead);
         }
-        let report = stderr
-            .strip_suffix(b"\n")
-            .and_then(|bytes| bytes.strip_prefix(b"unknown command: "))
-            .and_then(|bytes| bytes.strip_prefix(self.marker.as_bytes()))
-            .ok_or(Error::InvalidKey)?;
-        let report = std::str::from_utf8(report).map_err(|_| Error::InvalidKey)?;
+        let report = probe_report(stderr, &self.marker).ok_or(Error::InvalidKey)?;
         let fields: Vec<_> = report.split(',').collect();
         let [pid, started, pane, height, version] = fields.as_slice() else {
             return Err(Error::InvalidKey);
@@ -258,6 +340,45 @@ mod tests {
                 false,
             )
             .unwrap()
+    }
+
+    #[test]
+    fn generation_requires_one_complete_nonce_bound_report() {
+        let probe = OrdinaryGenerationProbe::new(CreationNonce::from_bytes([0x42; 16]));
+        let report = |body: &str| format!("unknown command: {}{body}\n", probe.marker);
+        let clean = report("123,456");
+        assert_eq!(
+            probe.decode(Some(1), b"", clean.as_bytes(), false).unwrap(),
+            crate::ServerGeneration::from_raw(123, 456)
+        );
+        for bad in [
+            "0,456",
+            "1,+42",
+            "9223372036854775807,1",
+            "7,1 ",
+            "7,1\n2,8",
+            "7,1,2",
+        ] {
+            assert!(
+                probe
+                    .decode(Some(1), b"", report(bad).as_bytes(), false)
+                    .is_err(),
+                "{bad:?}"
+            );
+        }
+        for (status, output, diagnostic, late) in [
+            (Some(0), &b""[..], clean.as_bytes(), false),
+            (Some(1), &b"hook"[..], clean.as_bytes(), false),
+            (
+                Some(1),
+                &b""[..],
+                b"unknown command: other:123,456\n",
+                false,
+            ),
+            (Some(1), &b""[..], clean.as_bytes(), true),
+        ] {
+            assert!(probe.decode(status, output, diagnostic, late).is_err());
+        }
     }
 
     #[test]

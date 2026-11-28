@@ -486,22 +486,14 @@ Three tmux behaviours make that hazardous:
 - a replacement reissues ids from the start, so its first pane is `%0` too;
 - neither the path nor the id carries any mark of which daemon it belongs to.
 
-A handle held across a restart still resolves, to a different object
-that now has the same id. A stale read is harmless; a stale `kill-pane` or
-`send-keys` lands on the new object.
+An unqualified ID can address the replacement daemon. A discovered handle
+carries the issuing daemon's PID and whole-second start time. Both fields
+are server-scoped. A PID reused within the same second is indistinguishable.
 
-`ServerGeneration` is `(pid, start_time)`, read with one `display-message`. The
-pid alone is not enough, because a replacement daemon can be handed the pid of
-the one it replaced. Both fields are server-scoped (`start_time` is identical
-across every session of one daemon, unlike `session_created`), and both have
-been in the format catalog since 3.2a with `ListScope::All`, so a later change
-can project them into every listing row and give each snapshot its generation
-at no extra round trip.
-
-The caller checks the generation explicitly. Verifying on every dispatch would
-double the command count for a hazard that exists only when a caller holds a
-handle across a restart, so a caller wraps `require_generation` around work
-that must not be misapplied.
+The native drivers read the pair with a nonce-bound `run-shell -C` diagnostic.
+Using `display-message` here would run the user's `after-display-message` hook
+on each discovery. A dependent command checks the expected pair in the same
+tmux queue as its action. This also protects deferred cleanup after a restart.
 
 The socket's inode would be a cheaper token, and measurement ruled it out: the
 inode is unchanged across a restart, because tmux reuses the file instead of

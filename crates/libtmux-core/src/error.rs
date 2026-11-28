@@ -15,6 +15,8 @@ use crate::{CreatedSession, PaneId};
 pub enum CommandKind {
     /// Create a detached session and its first window and pane.
     NewSession,
+    /// Observe the current daemon PID and start time.
+    ServerGeneration,
     /// List observed sessions.
     ListSessions,
     /// List observed windows across all sessions.
@@ -35,6 +37,7 @@ impl fmt::Display for CommandKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NewSession => "new-session",
+            Self::ServerGeneration => "server generation",
             Self::ListSessions => "list-sessions",
             Self::ListWindows => "list-windows",
             Self::ListClients => "list-clients",

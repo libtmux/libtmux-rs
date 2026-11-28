@@ -219,6 +219,38 @@ impl Server {
         Ok((version, true))
     }
 
+    /// Read the current daemon's PID and whole-second start time.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the endpoint is absent or tmux cannot report its generation.
+    pub fn generation(&self) -> Result<libtmux_core::ServerGeneration, Error> {
+        self.generation_with(RequestOptions::default())
+    }
+
+    /// Read the daemon generation within the supplied deadline and byte budget.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same failures as [`Self::generation`], and cancellation.
+    pub fn generation_with(
+        &self,
+        options: RequestOptions,
+    ) -> Result<libtmux_core::ServerGeneration, Error> {
+        let probe = libtmux_core::OrdinaryGenerationProbe::new(fresh_nonce(&options)?);
+        let (version, _) = self
+            .creation_version(&options)
+            .map_err(|error| error.during_read(CommandKind::ServerGeneration))?;
+        let (output, late) = self
+            .output(
+                version.fence_ordinary_argv(probe.arguments()),
+                options,
+                None,
+            )
+            .map_err(|error| error.during_read(CommandKind::ServerGeneration))?;
+        probe.decode(output.status.code(), &output.stdout, &output.stderr, late)
+    }
+
     /// Read owned observations of every session, window, pane or client.
     ///
     /// A snapshot keeps the field values returned by this listing. Linked

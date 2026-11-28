@@ -1993,17 +1993,10 @@ impl Server {
 
     /// Which tmux daemon is answering on this endpoint.
     ///
-    /// A socket path does not identify a daemon. tmux reuses the socket file
-    /// across restarts -- it survives `kill-server`, and a replacement daemon
-    /// binds the same inode -- so an endpoint that looks unchanged can be a
-    /// different server holding different objects under the same ids. A pane
-    /// handle for `%0` taken before a restart addresses the *replacement's*
-    /// `%0` afterwards, which for a mutation is the wrong object rather than a
-    /// missing one.
-    ///
-    /// Capture this before work that must not be misapplied, and check it with
-    /// [`Self::require_generation`] before acting on a handle that has been
-    /// held across time.
+    /// tmux can reuse object IDs after a restart on the same socket. Handles
+    /// obtained through discovery carry the generation. Their queue guard
+    /// checks it again before a command uses the ID. The PID and start time
+    /// cannot distinguish daemons that reuse a PID within the same second.
     ///
     /// # Errors
     ///
@@ -2031,26 +2024,20 @@ impl Server {
     /// # }
     /// ```
     pub async fn generation(&self) -> Result<ServerGeneration, Error> {
-        // Both are server-scoped and available in every list profile since
-        // 3.2a. The start time is what defeats pid reuse: a replacement daemon
-        // can be handed the pid of the one it replaced.
-        let answer = self.format(None, "#{pid} #{start_time}").await?;
-        let text = answer.to_string_lossy();
-        let mut parts = text.split_whitespace();
-        let pid = parts.next().and_then(|pid| pid.parse::<u32>().ok());
-        let start_time = parts
-            .next()
-            .and_then(|start| start.parse::<i64>().ok())
-            .filter(|start| crate::snapshot::unix_time(*start).is_some());
-
-        let (Some(pid), Some(start_time)) = (pid, start_time) else {
-            return Err(Error::UnreadableFormatValue {
-                format: "#{pid} #{start_time}",
-                detail: crate::IdParseError::new('#'),
-            });
-        };
-
-        Ok(ServerGeneration::from_raw(pid, start_time))
+        let deadline = self.core.operation_deadline();
+        let probe =
+            libtmux_core::OrdinaryGenerationProbe::new(crate::internal::operation::nonce()?);
+        let (result, late) = self
+            .core
+            .execute_operation(
+                probe.arguments(),
+                Command::new("run-shell").summary(),
+                crate::internal::operation::OperationContext::observation(deadline),
+            )
+            .await?;
+        probe
+            .decode(result.exit_code(), result.stdout(), result.stderr(), late)
+            .map_err(Into::into)
     }
 
     /// Fail unless the daemon answering is still the one that was captured.

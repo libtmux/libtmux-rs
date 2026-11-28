@@ -160,6 +160,29 @@ fn real_tmux_creation_observation_and_capture_share_object_identity() {
 }
 
 #[test]
+fn observing_a_generation_leaves_the_display_hook_untouched() {
+    let fixture = Fixture::new();
+    let expected = fixture.screen().generation();
+    fixture.checked([
+        "set-hook",
+        "-g",
+        "after-display-message",
+        "set-environment -g HOOK_FIRED yes",
+    ]);
+    assert_eq!(fixture.server.generation().unwrap(), expected);
+    let variable = || {
+        fixture
+            .command()
+            .args(["show-environment", "-g", "HOOK_FIRED"])
+            .output()
+            .unwrap()
+    };
+    assert!(!variable().status.success());
+    fixture.checked(["display-message", "-p", "#{pid}"]);
+    assert_eq!(variable().stdout, b"HOOK_FIRED=yes\n");
+}
+
+#[test]
 fn successful_capture_hook_output_cannot_become_screen_bytes() {
     let fixture = Fixture::new();
     let key = fixture.screen();
