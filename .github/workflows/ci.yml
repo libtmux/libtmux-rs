@@ -85,7 +85,7 @@ jobs:
   required:
     name: required
     if: ${{ always() }}
-    needs: [plan, check, api, fuzz, bench, python-bridge, compat]
+    needs: [plan, check, api, fuzz, bench, python-bridge, compat, native-clients]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,6 +102,29 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
           ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}
         run: uv run scripts/ci-plan/ci_plan.py verify
+
+  native-clients:
+    name: Native Rust clients
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          update: "true"
+          args: install --yes --no-install-recommends tmux
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: uv
+      - name: Exercise shared operations on an isolated daemon
+        run: cargo test --locked -p libtmux-tokio --all-features --test shared_operations
+      - name: Exercise native process registration and cleanup
+        run: cargo test --locked -p libtmux-tokio --all-features --lib internal::subprocess::tests::typed_
+      - name: Run independent readers against staged crates
+        run: uv run scripts/check-package-contents/installed_clients.py
 
   # Everything `just check` runs: formatting, Clippy, tests, doctests, docs,
   # the feature powerset, cargo-deny, both MSRV floors, and packaging.
