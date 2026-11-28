@@ -17,27 +17,26 @@ fn managed() -> Option<(Fixture, ControlMode)> {
 }
 
 #[test]
-fn native_attachment_challenges_identity_and_preserves_reply_blocks() {
-    let Some((_fixture, mode)) = managed() else {
+fn native_attachment_challenges_identity_and_drains_controlled_nested_hooks() {
+    let Some((fixture, mode)) = managed() else {
         return;
     };
     assert!(mode.sender.shared.lock().tracker.is_qualified());
+    fixture.checked([
+        "set-hook",
+        "-g",
+        "after-capture-pane",
+        "if-shell -F 1 'display-message -p outer ; display-message -p inner'",
+    ]);
     let reply = mode
-        .send(
-            Command::new("if-shell")
-                .arg("-F")
-                .arg("1")
-                .arg("display-message -p outer ; display-message -p inner"),
-        )
+        .send(Command::new("capture-pane").arg("-b").arg("private"))
         .unwrap();
     assert!(reply.succeeded());
-    let bytes: Vec<_> = reply
-        .blocks()
-        .iter()
-        .flat_map(|block| block.output().iter().copied())
-        .collect();
-    assert_eq!(bytes, b"outer\ninner\n");
-    let failed = mode.send(Command::new("libtmux-no-such-command")).unwrap();
+    assert_eq!(reply.blocks().len(), 1);
+    assert!(reply.blocks()[0].output().is_empty());
+    let failed = mode
+        .send(Command::new("select-pane").arg("-t").arg("%4294967295"))
+        .unwrap();
     assert!(!failed.succeeded());
     let next = mode
         .send(Command::new("display-message").arg("-p").arg("next"))
@@ -47,20 +46,23 @@ fn native_attachment_challenges_identity_and_preserves_reply_blocks() {
 }
 
 #[test]
-fn notification_shaped_payload_is_not_a_flow_notification() {
-    let Some((_fixture, mode)) = managed() else {
+fn notification_shaped_hook_payload_is_not_a_flow_notification() {
+    let Some((fixture, mode)) = managed() else {
         return;
     };
     mode.sender.shared.lock().tracker.discard_notices();
+    fixture.checked([
+        "set-hook",
+        "-g",
+        "after-capture-pane",
+        "display-message -pl '%pause %0'",
+    ]);
     let reply = mode
-        .send(
-            Command::new("display-message")
-                .arg("-p")
-                .arg("-l")
-                .arg("%pause %0"),
-        )
+        .send(Command::new("capture-pane").arg("-b").arg("private"))
         .unwrap();
-    assert_eq!(reply.blocks()[0].output(), b"%pause %0\n");
+    assert!(reply.succeeded());
+    assert_eq!(reply.blocks().len(), 1);
+    assert!(reply.blocks()[0].output().is_empty());
     let mut state = mode.sender.shared.lock();
     while let Some(notice) = state.tracker.next_notice() {
         assert!(!matches!(
@@ -78,27 +80,37 @@ fn cancellation_drains_its_place_before_later_submission() {
         return;
     };
     fixture.checked(["wait-for", "-L", "private-drain"]);
+    fixture.checked([
+        "set-hook",
+        "-g",
+        "after-capture-pane",
+        "wait-for -L private-drain",
+    ]);
     let (sender, _events) = mode.split();
     let clone = sender.clone();
     let options = RequestOptions::default();
     let cancellation = options.cancellation.clone();
     let task = std::thread::spawn(move || {
         clone.send_with(
-            Command::new("wait-for").arg("-L").arg("private-drain"),
+            Command::new("capture-pane")
+                .arg("-b")
+                .arg("private-drain-buffer"),
             options,
         )
     });
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if sender.shared.available.load(Ordering::Acquire)
-            < sender.shared.limits.max_pending_requests
+        let buffers = fixture.checked(["list-buffers", "-F", "#{buffer_name}"]);
+        if buffers
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .any(|name| name == b"private-drain-buffer")
         {
             break;
         }
         assert!(Instant::now() < deadline);
         std::thread::sleep(INTERVAL);
     }
-    std::thread::sleep(Duration::from_millis(30));
     cancellation.cancel();
     let error = task.join().unwrap().unwrap_err();
     assert_eq!(error.effect(), Effect::Unknown);
@@ -239,6 +251,96 @@ struct ProtocolFixture {
     server: Server,
 }
 
+#[test]
+fn public_unshareable_commands_are_refused_before_admission() {
+    let fixture = ProtocolFixture::new("ordinary");
+    let mode = fixture.attach(ControlLimits::default());
+    for (command, refusal) in [
+        (
+            Command::new("if-shell")
+                .arg("true")
+                .arg("display-message -p unowned"),
+            ControlCommandRefusal::BlockingCommand,
+        ),
+        (
+            Command::new("run-shell").arg("-b").arg("printf unowned"),
+            ControlCommandRefusal::UnrepresentableCommand,
+        ),
+        (
+            Command::new("wait-for").arg("-L").arg("unowned"),
+            ControlCommandRefusal::BlockingCommand,
+        ),
+        (
+            Command::new("capture-pane").arg("-p"),
+            ControlCommandRefusal::UnrepresentableCommand,
+        ),
+        (
+            Command::new("display-message")
+                .arg("-p")
+                .arg("#{pane_title}"),
+            ControlCommandRefusal::UnrepresentableCommand,
+        ),
+        (
+            Command::new("refresh-client")
+                .arg("-B")
+                .arg("bad name::#{pane_id}"),
+            ControlCommandRefusal::InvalidSubscriptionName,
+        ),
+        (
+            Command::new("unqualified-alias"),
+            ControlCommandRefusal::UnrepresentableCommand,
+        ),
+    ] {
+        let error = mode.send(command).unwrap_err();
+        assert_eq!(error.effect(), Effect::NotSubmitted);
+        assert_eq!(error.policy_refusal(), Some(refusal));
+        assert_eq!(
+            mode.sender.shared.available.load(Ordering::Acquire),
+            mode.sender.shared.limits.max_pending_requests
+        );
+    }
+    assert!(!fixture.root.path().join("submitted").exists());
+    assert!(
+        mode.send(Command::new("display-message").arg("-p").arg("safe"))
+            .unwrap()
+            .succeeded()
+    );
+    assert!(fixture.root.path().join("submitted").exists());
+    mode.shutdown().unwrap();
+}
+
+#[test]
+fn public_control_renders_and_bounds_bytes_before_semantic_policy() {
+    let fixture = ProtocolFixture::new("ordinary");
+    let mode = fixture.attach(ControlLimits {
+        max_line_bytes: 256,
+        ..ControlLimits::default()
+    });
+    for (command, fault) in [
+        (
+            Command::new("if-shell").arg("line\nseparator"),
+            ControlFault::InvalidCommand,
+        ),
+        (
+            Command::new("if-shell").arg("x".repeat(256)),
+            ControlFault::CommandLimit { limit: 256 },
+        ),
+        (
+            Command::new("display-message")
+                .arg("-p")
+                .arg("\\".repeat(120)),
+            ControlFault::CommandLimit { limit: 256 },
+        ),
+    ] {
+        let error = mode.send(command).unwrap_err();
+        assert_eq!(error.effect(), Effect::NotSubmitted);
+        assert_eq!(error.fault(), Some(fault));
+        assert_eq!(error.policy_refusal(), None);
+    }
+    assert!(!fixture.root.path().join("submitted").exists());
+    mode.shutdown().unwrap();
+}
+
 impl ProtocolFixture {
     fn new(scenario: &str) -> Self {
         use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
@@ -299,8 +401,12 @@ fn cancelled_reply_flood_still_closes_at_the_original_byte_limit() {
     options.budget.bytes_per_stream = 512;
     let cancellation = options.cancellation.clone();
     let sender = mode.sender.clone();
-    let task =
-        std::thread::spawn(move || sender.send_with(Command::new("display-message"), options));
+    let task = std::thread::spawn(move || {
+        sender.send_with(
+            Command::new("display-message").arg("-p").arg("safe"),
+            options,
+        )
+    });
     fixture.wait_for("started");
     cancellation.cancel();
     assert_eq!(task.join().unwrap().unwrap_err().effect(), Effect::Unknown);
@@ -328,11 +434,13 @@ fn partial_writes_cancel_then_close_and_reap_without_replay() {
     let sender = mode.sender.clone();
     let task = std::thread::spawn(move || {
         sender.send_with(
-            Command::new("display-message").arg("x".repeat(512 * 1024)),
+            Command::new("display-message")
+                .arg("-p")
+                .arg("x".repeat(512 * 1024)),
             options,
         )
     });
-    std::thread::sleep(Duration::from_millis(30));
+    fixture.wait_for("started");
     cancellation.cancel();
     assert_eq!(task.join().unwrap().unwrap_err().effect(), Effect::Unknown);
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -357,7 +465,7 @@ fn last_handle_drop_stops_the_owned_client() {
     drop(events);
     assert_eq!(
         sender
-            .send(Command::new("display-message"))
+            .send(Command::new("display-message").arg("-p").arg("safe"))
             .unwrap()
             .blocks()[0]
             .output(),
@@ -387,20 +495,39 @@ fn queued_cancellation_retains_admission_until_it_is_proved_unsubmitted() {
         ..ControlLimits::default()
     });
     let first = mode.sender.clone();
-    let active = std::thread::spawn(move || first.send(Command::new("park")));
+    let active = std::thread::spawn(move || {
+        first.send(Command::new("display-message").arg("-p").arg("park"))
+    });
     fixture.wait_for("started");
     let options = RequestOptions::default();
     let cancellation = options.cancellation.clone();
     let second = mode.sender.clone();
-    let queued =
-        std::thread::spawn(move || second.send_with(Command::new("must-not-run"), options));
+    let queued = std::thread::spawn(move || {
+        second.send_with(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("must-not-run"),
+            options,
+        )
+    });
     let deadline = Instant::now() + Duration::from_secs(2);
     while mode.sender.shared.available.load(Ordering::Acquire) != 0 {
         assert!(Instant::now() < deadline);
         std::thread::sleep(INTERVAL);
     }
-    let full = mode.send(Command::new("over-capacity")).unwrap_err();
+    let full = mode
+        .send(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("over-capacity"),
+        )
+        .unwrap_err();
     assert_eq!(full.effect(), Effect::NotSubmitted);
+    assert!(matches!(
+        std::error::Error::source(&full)
+            .and_then(|source| source.downcast_ref::<libtmux_core::Error>()),
+        Some(libtmux_core::Error::Busy { limit: 2 })
+    ));
     cancellation.cancel();
     assert_eq!(
         queued.join().unwrap().unwrap_err().effect(),
@@ -409,7 +536,10 @@ fn queued_cancellation_retains_admission_until_it_is_proved_unsubmitted() {
     std::fs::write(fixture.root.path().join("release"), b"go").unwrap();
     assert!(active.join().unwrap().unwrap().succeeded());
     assert_eq!(
-        mode.send(Command::new("later")).unwrap().blocks()[0].output(),
+        mode.send(Command::new("display-message").arg("-p").arg("later"))
+            .unwrap()
+            .blocks()[0]
+            .output(),
         b"OK\n"
     );
     assert!(!fixture.root.path().join("unexpected").exists());
@@ -455,6 +585,8 @@ for line in sys.stdin:
         block()
         os.write(1, f'unknown command: libtmux-control-fence:{fence.group(1)}\n'.encode())
         if challenged and scenario == 'stall-writes':
+            sys.stdin.read(1)
+            (root / 'started').touch()
             time.sleep(30)
     elif scenario == 'flood':
         os.write(1, f'%begin 0 {number} 1\n'.encode())
@@ -469,6 +601,7 @@ for line in sys.stdin:
             time.sleep(0.002)
         block(b'OK\n')
     else:
+        (root / 'submitted').touch()
         if 'must-not-run' in line:
             (root / 'unexpected').touch()
         block(b'OK\n')

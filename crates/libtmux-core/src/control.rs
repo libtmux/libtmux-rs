@@ -5,11 +5,17 @@ use std::time::Duration;
 
 use crate::{Command, CreationNonce, PaneId};
 
+#[doc(hidden)]
+pub mod arguments;
 mod events;
+mod policy;
 mod qualification;
 mod tracker;
 
 pub use events::Event;
+pub use policy::{ControlCommandRefusal, require_shared_control};
+#[doc(hidden)]
+pub use policy::valid_subscription_name;
 pub use qualification::{ControlIdentity, ControlProbe};
 #[doc(hidden)]
 pub use tracker::Tracker;
@@ -167,11 +173,28 @@ pub struct FrameHeader {
 /// # Examples
 ///
 /// ```
-/// use libtmux_core::control::ControlBlock;
+/// use libtmux_core::{CreationNonce, control::{Completion, ControlLimits,
+///     RequestKind, Tracker}};
 ///
-/// # fn inspect(block: &ControlBlock) {
-/// let bytes: &[u8] = block.output();
-/// # let _ = bytes;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut tracker = Tracker::new("$0".parse()?, ControlLimits::default());
+/// tracker.feed(b"%begin 1 1 0\n%end 1 1 0\n%session-changed $0 demo\n")?;
+/// assert!(matches!(tracker.next_completion(), Some(Completion::Opened)));
+/// tracker.register(7, CreationNonce::from_bytes([0x10; 16]), RequestKind::Ordinary)?;
+/// tracker.feed(concat!(
+///     "%begin 1 2 1\n%3\n%end 1 2 1\n",
+///     "%begin 1 3 1\n%end 1 3 1\n",
+///     "unknown command: libtmux-control-fence:",
+///     "10101010101010101010101010101010\n",
+/// ).as_bytes())?;
+/// let Some(Completion::Reply { reply, .. }) = tracker.next_completion() else {
+///     return Err("reply not drained".into());
+/// };
+/// let block = reply.blocks().first().ok_or("missing input block")?;
+/// assert_eq!(block.output(), b"%3\n");
+/// assert!(block.succeeded());
+/// assert_eq!(block.header().number, 2);
+/// # Ok(())
 /// # }
 /// ```
 #[derive(Clone, Eq, PartialEq)]
@@ -220,10 +243,29 @@ impl fmt::Debug for ControlBlock {
 /// # Examples
 ///
 /// ```
-/// use libtmux_core::control::ControlReply;
+/// use libtmux_core::{CreationNonce, control::{Completion, ControlLimits,
+///     RequestKind, Tracker}};
 ///
-/// # fn inspect(reply: &ControlReply) {
-/// for block in reply.blocks() { let _ = block.succeeded(); }
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut tracker = Tracker::new("$0".parse()?, ControlLimits::default());
+/// tracker.feed(b"%begin 1 1 0\n%end 1 1 0\n%session-changed $0 demo\n")?;
+/// assert!(matches!(tracker.next_completion(), Some(Completion::Opened)));
+/// tracker.register(7, CreationNonce::from_bytes([0x10; 16]), RequestKind::Ordinary)?;
+/// tracker.feed(concat!(
+///     "%begin 1 2 1\naccepted\n%end 1 2 1\n",
+///     "%begin 1 3 0\nhook failed\n%error 1 3 0\n",
+///     "%begin 1 4 1\n%end 1 4 1\n",
+///     "unknown command: libtmux-control-fence:",
+///     "10101010101010101010101010101010\n",
+/// ).as_bytes())?;
+/// let Some(Completion::Reply { reply, .. }) = tracker.next_completion() else {
+///     return Err("reply not drained".into());
+/// };
+/// assert_eq!(reply.blocks().len(), 1);
+/// assert!(reply.blocks()[0].succeeded());
+/// assert_eq!(reply.hook_failures(), 1);
+/// assert!(!reply.succeeded());
+/// # Ok(())
 /// # }
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]

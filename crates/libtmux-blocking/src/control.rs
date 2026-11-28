@@ -22,7 +22,8 @@ mod pin;
 
 pub use error::ControlError;
 pub use libtmux_core::control::{
-    ControlBlock, ControlFault, ControlLimits, ControlNotice, ControlReply, Event,
+    ControlBlock, ControlCommandRefusal, ControlFault, ControlLimits, ControlNotice, ControlReply,
+    Event,
 };
 
 const INTERVAL: Duration = Duration::from_millis(5);
@@ -214,7 +215,7 @@ impl ControlMode {
 /// use libtmux_core::Command;
 /// use libtmux_blocking::control::ControlSender;
 /// # fn example(sender: &ControlSender) -> Result<(), Box<dyn std::error::Error>> {
-/// let reply = sender.send(Command::new("list-sessions"))?;
+/// let reply = sender.send(Command::new("list-sessions").arg("-F").arg("#{session_id}"))?;
 /// # let _ = reply;
 /// # Ok(())
 /// # }
@@ -241,6 +242,8 @@ impl ControlSender {
     /// Refusal before the owner commits to writing is `NotSubmitted`.
     /// Cancellation or a lost drain after that point is `Unknown`; the
     /// connection drains the tombstone under its original limits or closes.
+    /// Scripts, unqualified waits and arbitrary output are refused with
+    /// [`ControlError::policy_refusal`] before admission.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "dispatch consumes one logical command and its request policy"
@@ -276,6 +279,8 @@ impl ControlSender {
         }
         let nonce = fresh_nonce(options)?;
         let bytes = wire(command, nonce, self.shared.limits.max_line_bytes)?;
+        let words: Vec<_> = command.logical_words().collect();
+        libtmux_core::control::require_shared_control(&words)?;
         if self.shared.stop.load(Ordering::Acquire) {
             return Err(ControlError::protocol(ControlFault::Closed, false));
         }
@@ -585,7 +590,7 @@ fn wire(command: &Command, nonce: CreationNonce, limit: usize) -> Result<Vec<u8>
     let mut minimum = 0usize;
     for word in command.logical_words() {
         let bytes = word.as_encoded_bytes();
-        if bytes.iter().any(|byte| matches!(byte, 0 | b'\r' | b'\n')) {
+        if word.to_str().is_none() || bytes.iter().any(|byte| matches!(byte, 0 | b'\r' | b'\n')) {
             return Err(ControlError::protocol(ControlFault::InvalidCommand, false));
         }
         minimum = minimum.saturating_add(bytes.len().saturating_add(1));
@@ -597,17 +602,11 @@ fn wire(command: &Command, nonce: CreationNonce, limit: usize) -> Result<Vec<u8>
         }
     }
     let mut line = command
-        .control_mode_line()
-        .ok_or_else(|| ControlError::protocol(ControlFault::InvalidCommand, false))?;
+        .control_mode_line_bounded(limit.saturating_sub(1))
+        .ok_or_else(|| ControlError::protocol(ControlFault::CommandLimit { limit }, false))?;
     let fence = fence_command(nonce)
-        .control_mode_line()
-        .ok_or_else(|| ControlError::protocol(ControlFault::InvalidCommand, false))?;
-    if line.len().saturating_add(1) > limit || fence.len().saturating_add(1) > limit {
-        return Err(ControlError::protocol(
-            ControlFault::CommandLimit { limit },
-            false,
-        ));
-    }
+        .control_mode_line_bounded(limit.saturating_sub(1))
+        .ok_or_else(|| ControlError::protocol(ControlFault::CommandLimit { limit }, false))?;
     line.push('\n');
     line.push_str(&fence);
     line.push('\n');

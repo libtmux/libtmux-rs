@@ -1,7 +1,11 @@
 use std::fmt;
 use std::sync::Arc;
 
-use libtmux_core::{Effect, Error, control::ControlFault, supervision::CleanupErrors};
+use libtmux_core::{
+    Effect, Error,
+    control::{ControlCommandRefusal, ControlFault},
+    supervision::CleanupErrors,
+};
 
 /// A persistent-client failure retaining submission and cleanup evidence.
 ///
@@ -23,6 +27,7 @@ pub struct ControlError(Arc<Failure>);
 enum Failure {
     Admission(ControlError),
     Core(Error),
+    Policy(ControlCommandRefusal),
     Native {
         source: std::io::Error,
         effect: Effect,
@@ -43,7 +48,7 @@ impl ControlError {
     #[must_use]
     pub fn effect(&self) -> Effect {
         match self.0.as_ref() {
-            Failure::Admission(_) => Effect::NotSubmitted,
+            Failure::Admission(_) | Failure::Policy(_) => Effect::NotSubmitted,
             Failure::Core(error) => error.effect(),
             Failure::Native { effect, .. } | Failure::Protocol { effect, .. } => *effect,
             Failure::Cleanup { primary, .. } | Failure::CleanupPending(primary) => primary.effect(),
@@ -58,6 +63,18 @@ impl ControlError {
             Failure::Admission(primary)
             | Failure::Cleanup { primary, .. }
             | Failure::CleanupPending(primary) => primary.fault(),
+            _ => None,
+        }
+    }
+
+    /// Why the public command was refused before occupying a request slot.
+    #[must_use]
+    pub fn policy_refusal(&self) -> Option<ControlCommandRefusal> {
+        match self.0.as_ref() {
+            Failure::Policy(refusal) => Some(*refusal),
+            Failure::Admission(primary)
+            | Failure::Cleanup { primary, .. }
+            | Failure::CleanupPending(primary) => primary.policy_refusal(),
             _ => None,
         }
     }
@@ -130,11 +147,18 @@ impl From<Error> for ControlError {
     }
 }
 
+impl From<ControlCommandRefusal> for ControlError {
+    fn from(refusal: ControlCommandRefusal) -> Self {
+        Self(Arc::new(Failure::Policy(refusal)))
+    }
+}
+
 impl fmt::Display for ControlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0.as_ref() {
             Failure::Admission(error) => error.fmt(formatter),
             Failure::Core(error) => error.fmt(formatter),
+            Failure::Policy(refusal) => refusal.fmt(formatter),
             Failure::Native { .. } => formatter.write_str("native control transport failed"),
             Failure::Protocol { fault, .. } => fault.fmt(formatter),
             Failure::Cleanup { primary, .. } => {
@@ -152,6 +176,7 @@ impl std::error::Error for ControlError {
         Some(match self.0.as_ref() {
             Failure::Admission(error) => error,
             Failure::Core(error) => error,
+            Failure::Policy(refusal) => refusal,
             Failure::Native { source, .. } => source,
             Failure::Protocol { fault, .. } => fault,
             Failure::Cleanup { primary, .. } | Failure::CleanupPending(primary) => primary,

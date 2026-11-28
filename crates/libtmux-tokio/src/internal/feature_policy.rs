@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt as _;
+
+use libtmux_core::control::arguments::{flags, native, positionals};
 
 use crate::{Error, ReleaseVersion, TmuxVersion};
 
@@ -9,16 +10,11 @@ use crate::internal::support::capabilities::{
     NAME_SEPARATORS_REJECTED, SPLIT_WINDOW_PERCENT_SIZE,
 };
 
-struct Arguments<'a, T> {
-    flags: Vec<(u8, Option<&'a [u8]>)>,
-    positional: &'a [T],
-}
-
 pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> Result<(), Error> {
     let Some((name, arguments)) = command.split_first() else {
         return Ok(());
     };
-    let name = name.as_ref().as_bytes();
+    let name = name.as_ref().as_encoded_bytes();
     if native(name, b"delete-buffer", b"deleteb", 3) {
         if flags(arguments, b"b").iter().any(|(flag, _)| *flag == b'b') {
             version.require("exact named-buffer deletion", BUFFER_DELETE_NAMED.since)?;
@@ -58,19 +54,20 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
     } else if native(name, b"rename-session", b"rename", 7)
         || native(name, b"rename-window", b"renamew", 8)
     {
-        let Arguments { positional, .. } = scan(arguments, b"t");
+        let positional = positionals(arguments, b"t");
         if let Some(new_name) = positional.first() {
-            refuse_name_bytes(version, new_name.as_ref().as_bytes())?;
+            refuse_name_bytes(version, new_name.as_ref().as_encoded_bytes())?;
         }
     } else if native(name, b"select-layout", b"selectl", 8) {
         if version
             .behavior_release()
             .is_some_and(|release| release < LAYOUT_WITHOUT_CHECKSUM.since)
         {
-            let Arguments { flags, positional } = scan(arguments, b"t");
+            let flags = flags(arguments, b"t");
+            let positional = positionals(arguments, b"t");
             if !flags.iter().any(|(flag, _)| b"Enp".contains(flag)) {
                 if let Some(layout) = positional.first() {
-                    let bytes = layout.as_ref().as_bytes();
+                    let bytes = layout.as_ref().as_encoded_bytes();
                     let serialized = bytes.len() > 5
                         && bytes[4] == b','
                         && bytes[..4].iter().all(u8::is_ascii_hexdigit);
@@ -158,61 +155,6 @@ pub(crate) fn refuse_interval(
         });
     }
     Ok(())
-}
-
-pub(crate) fn native(name: &[u8], full: &[u8], alias: &[u8], shortest: usize) -> bool {
-    name == alias || (name.len() >= shortest && full.starts_with(name))
-}
-
-// Inspect only native argv flags. Positionals, including tmux command strings
-// nested in another command (`if-shell`, `run-shell -C`, brace blocks),
-// retain tmux's parser; their contents never become policy input.
-pub(crate) fn flags<'a>(
-    arguments: &'a [impl AsRef<OsStr>],
-    valued: &[u8],
-) -> Vec<(u8, Option<&'a [u8]>)> {
-    scan(arguments, valued).flags
-}
-
-pub(crate) fn positionals<'a, T: AsRef<OsStr>>(arguments: &'a [T], valued: &[u8]) -> &'a [T] {
-    scan(arguments, valued).positional
-}
-
-fn scan<'a, T: AsRef<OsStr>>(arguments: &'a [T], valued: &[u8]) -> Arguments<'a, T> {
-    let mut flags = Vec::new();
-    let mut position = 0;
-    while let Some(argument) = arguments.get(position) {
-        let bytes = argument.as_ref().as_bytes();
-        if bytes == b"--" {
-            position += 1;
-            break;
-        }
-        if bytes.len() < 2 || bytes[0] != b'-' {
-            break;
-        }
-        position += 1;
-        for (index, flag) in bytes[1..].iter().copied().enumerate() {
-            if valued.contains(&flag) {
-                let rest = &bytes[index + 2..];
-                let value = if rest.is_empty() {
-                    let value = arguments
-                        .get(position)
-                        .map(|value| value.as_ref().as_bytes());
-                    position += usize::from(value.is_some());
-                    value
-                } else {
-                    Some(rest)
-                };
-                flags.push((flag, value));
-                break;
-            }
-            flags.push((flag, None));
-        }
-    }
-    Arguments {
-        flags,
-        positional: &arguments[position..],
-    }
 }
 
 #[cfg(test)]
