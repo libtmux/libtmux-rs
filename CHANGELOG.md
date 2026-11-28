@@ -26,6 +26,12 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- The root, facade and blocking crate READMEs start with a native blocking
+  program that creates, observes and kills its own session on an explicit
+  private socket. `installed_clients.py` now compiles and runs the displayed
+  facade README program from its archive with default features, records its
+  digest and checks stdout and cleanup. The no-default facade docs retain a
+  runnable shared-type example.
 - `installed_clients.py` records a stdio witness for a saved MCP window link
   after withdrawal. The archive-installed tools must refuse it while the
   surviving link and session focus stay unchanged; only `select_window` is
