@@ -414,7 +414,7 @@ impl TmuxTools {
         let key = self.server.generation().await.ok().and_then(|generation| {
             crate::echo::EchoKey::new(generation, self.server.socket_path(), target.id().as_ref())
         });
-        let view = reporting(
+        let view = Box::pin(reporting(
             reporter,
             "still watching for the pattern",
             exec::wait_for_text(
@@ -429,7 +429,7 @@ impl TmuxTools {
                     key: key.as_ref(),
                 },
             ),
-        )
+        ))
         .await
         .map_err(|e| tmux_error(&e))?;
 

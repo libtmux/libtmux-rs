@@ -663,7 +663,7 @@ async fn wait_on_output(
                 outcome = WaitOutcome::PaneClosed;
                 break;
             }
-            Ok(Some(Err(Error::PaneOutputEnded { .. }))) | Ok(None) => {
+            Ok(Some(Err(Error::PaneOutputEnded { .. })) | None) => {
                 // The stream ending says the wait can no longer see the pane,
                 // not that the pane stopped: a detached control client ends
                 // it too. Only a pane that cannot be read, or one tmux holds
@@ -689,20 +689,7 @@ async fn wait_on_output(
     }
 
     let pane_id = output.pane().to_string();
-    // Ordinary EOF (`Closed`) is tolerated: the pane stopped being read, so
-    // that alone is not a failure. Any other shutdown error -- frame budget,
-    // timeout, executor shutdown -- is real and discards the view above.
-    if let Err(error) = output.shutdown().await
-        && !matches!(
-            error,
-            Error::ControlMode {
-                kind: ControlModeErrorKind::Closed,
-                ..
-            }
-        )
-    {
-        return Err(error);
-    }
+    finish_wait_stream(output).await?;
 
     // A chunk can arrive in the same instant the deadline elapses; without
     // this, that race would report `Deadline` while `text` already holds a
@@ -730,6 +717,18 @@ async fn wait_on_output(
         text: String::from_utf8_lossy(&text).into_owned(),
         bytes,
     })
+}
+
+/// A detached client can close normally while the pane keeps running.
+async fn finish_wait_stream(output: libtmux_tokio::control::PaneOutput) -> Result<(), Error> {
+    match output.shutdown().await {
+        Ok(())
+        | Err(Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Reclassify a timed-out wait as matched when the buffer it is about to
