@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "tools/mcp-swap"]
+members = ["crates/*", "tools/mcp-swap", "tools/readme-tests"]
 # Nightly-only and needs a sanitizer linker flag, so it is not a member.
 exclude = ["fuzz"]
 default-members = ["crates/*", "tools/mcp-swap"]

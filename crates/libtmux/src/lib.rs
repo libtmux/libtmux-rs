@@ -24,7 +24,3 @@ pub use libtmux_tokio as tokio;
 /// use libtmux::NewSessionOptions;
 /// ```
 mod retired_imports {}
-
-#[cfg(all(doctest, feature = "test-support", feature = "query"))]
-#[doc = include_str!("../docs/workspace-readme.md")]
-struct WorkspaceReadme;

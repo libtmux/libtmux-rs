@@ -334,18 +334,11 @@ planner how it would group them before anything runs:
 - [`Planner::Marked`] also folds in the first commands sent to a new pane.
 
 ```rust
-# // `plan` is behind a Cargo feature, so the example is compiled only when it
-# // is on.
-# #[cfg(not(feature = "plan"))]
-# fn main() {}
-# #[cfg(feature = "plan")]
 use libtmux::tokio::plan::{
     NewSession, Plan, Planner, SendKeys, SplitWindow, StepReason,
 };
-# #[cfg(feature = "plan")]
 use libtmux::tokio::test::TestServer;
 
-# #[cfg(feature = "plan")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
@@ -382,7 +375,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 A qualified control sender can execute the same plan with `sender.run_plan(&plan)`. More:
-[the `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux).
+[the `libtmux` guide](crates/libtmux-tokio/README.md#choosing-how-commands-reach-tmux).
 
 ## Watch tmux change
 
@@ -394,20 +387,13 @@ numeric or ID projection. [`Server::over_control_mode`] lets a typed handle
 share the connection. The example waits for tmux to report the window count.
 
 ```rust
-# // `control` is behind `control-mode`, so the example is compiled only when
-# // that feature is on.
-# #[cfg(not(feature = "control-mode"))]
-# fn main() {}
-# #[cfg(feature = "control-mode")]
 use libtmux::tokio::control::{ControlMode, Event, Subscription};
-# #[cfg(feature = "control-mode")]
 use libtmux::tokio::test::TestServer;
 
-# #[cfg(feature = "control-mode")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
-# let version = guard.server().capabilities().await?.tmux_version().clone();
+# let version = guard.server().daemon_version().await?;
 # if !version.has_behavior(&libtmux::tokio::since::CONTROL_ACQUISITION) {
 #     guard.shutdown().await?;
 #     return Ok(());
@@ -444,7 +430,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 It prints `windows = 1`. tmux reports a value at most once a second, and says
 what it became, not the steps between. More:
-[the `libtmux` guide](crates/libtmux/README.md#watch-tmux-change).
+[the `libtmux` guide](crates/libtmux-tokio/README.md#watch-tmux-change).
 
 ## Load workspaces from YAML
 

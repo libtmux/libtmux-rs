@@ -1,7 +1,7 @@
 # Contributing
 
-This repository is a Cargo workspace of seven publishable crates and one private
-developer tool. The gates below are what a change has to pass. It was
+This repository is a Cargo workspace of seven publishable crates and two private
+packages. The gates below are what a change has to pass. It was
 extracted from the Python libtmux repository; its `mypy` convention does not
 apply here, and its `uv`, `pytest` and `ruff` conventions apply only to the
 support scripts under `scripts/`.
@@ -41,7 +41,7 @@ justfile only groups Cargo commands.
 $ cargo build --workspace --all-features
 ```
 
-Eight workspace packages; seven are publishable:
+Seven crates ship. The last two packages in the table are for development.
 
 | Crate | What it is |
 | --- | --- |
@@ -53,6 +53,7 @@ Eight workspace packages; seven are publishable:
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
 | `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
+| `tools/readme-tests` | Executes the Rust examples in the repository README |
 
 `tools/mcp-swap` is for a maintainer who wants an agent CLI to run the
 checkout's `tmux-mcp`. Preview what it would change, then switch:
@@ -137,9 +138,7 @@ These pages are compiled along with them, so their Rust examples are tests:
   `crates/libtmux-blocking/src/lib.rs`.
 - `crates/libtmux-tokio/README.md`, by the same include in
   `crates/libtmux-tokio/src/lib.rs`.
-- `README.md`, through the packaged `crates/libtmux/docs/workspace-readme.md`
-  symlink and `WorkspaceReadme` in the facade crate. Its `test-support` and
-  `query` features enable the examples without rendering a second README.
+- The root `README.md` runs as doctests in the private `readme-tests` package.
 - `crates/tmux-workspace/docs/library.md`, by the same top-of-crate include
   in `crates/tmux-workspace/src/lib.rs`: that page is the library's
   documentation.

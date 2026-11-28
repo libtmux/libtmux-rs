@@ -12,7 +12,7 @@ was asked for.
 
 ## What is here
 
-One Cargo workspace with seven publishable crates and a private developer tool:
+One Cargo workspace with seven publishable crates and two private packages:
 
 | Crate | What it is |
 | --- | --- |
@@ -24,6 +24,7 @@ One Cargo workspace with seven publishable crates and a private developer tool:
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
 | `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
+| `tools/readme-tests` | Executes the Rust examples in the repository README |
 
 `tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
 the workspace's, because it moves at its own pace and its dependencies need a

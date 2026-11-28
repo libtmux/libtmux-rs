@@ -21,7 +21,6 @@ include = [
     "/docs/adr/*.md",
     "/docs/design.md",
     "/docs/migration.md",
-    "/docs/workspace-readme.md",
     "/examples/**/*.rs",
     "/examples/api/*.json",
     "/examples/api/*.toml",
