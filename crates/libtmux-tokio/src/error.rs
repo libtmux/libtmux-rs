@@ -587,6 +587,17 @@ pub enum Error {
         found: crate::ServerGeneration,
     },
 
+    /// The shared budget for parked clients and retained channel signals is full.
+    ///
+    /// No client was submitted. An existing wait can still join its channel,
+    /// consume a retained signal, or signal or unlock through the ordinary lane.
+    /// [`crate::DispatchLimits::max_parked`] sets the budget.
+    #[error("the parked tmux limit of {limit} is full; nothing was sent")]
+    ParkedLimitExceeded {
+        /// The maximum number of reserved parked places.
+        limit: usize,
+    },
+
     /// tmux produced more output than the dispatch was allowed to read.
     ///
     /// Not a truncation. A shortened tmux listing decodes cleanly and says
@@ -1631,6 +1642,10 @@ impl fmt::Debug for Error {
                 .field("request_id", request_id)
                 .field("command", command)
                 .field("in_flight", in_flight)
+                .finish(),
+            Self::ParkedLimitExceeded { limit } => formatter
+                .debug_struct("ParkedLimitExceeded")
+                .field("limit", limit)
                 .finish(),
             Self::ServerGenerationChanged { expected, found } => formatter
                 .debug_struct("ServerGenerationChanged")

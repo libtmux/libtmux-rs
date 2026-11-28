@@ -404,7 +404,7 @@ struct DriverState {
     ///
     /// Shared by every clone of a [`crate::Server`], because the clients are
     /// this process's and a channel is one name on the tmux server.
-    channel_waits: ChannelWaits,
+    channel_waits: Arc<ChannelWaits>,
     #[cfg(feature = "control-mode")]
     persistent_clients: PersistentClients,
     /// PIDs of control clients this process itself spawned with
@@ -435,6 +435,7 @@ impl Core {
     }
 
     fn with_executor(configuration: CoreConfiguration, executor: Arc<dyn Executor>) -> Self {
+        let parked_limit = configuration.dispatch_limits.max_parked;
         #[cfg(feature = "control-mode")]
         let control_client_limits = configuration.control_client_limits;
         let driver = DriverState {
@@ -444,7 +445,7 @@ impl Core {
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
             server_version: Arc::default(),
-            channel_waits: ChannelWaits::default(),
+            channel_waits: Arc::new(ChannelWaits::new(parked_limit)),
             #[cfg(feature = "control-mode")]
             persistent_clients: PersistentClients::new(control_client_limits),
             #[cfg(feature = "control-mode")]
@@ -531,7 +532,7 @@ impl Core {
             capabilities: OnceCell::new_with(Some(capabilities)),
             next_request_id: AtomicU64::new(1),
             server_version: Arc::clone(&self.driver.server_version),
-            channel_waits: ChannelWaits::default(),
+            channel_waits: Arc::clone(&self.driver.channel_waits),
             persistent_clients: PersistentClients::new(
                 self.driver.configuration.control_client_limits,
             ),
@@ -657,6 +658,7 @@ impl Core {
     pub(crate) fn dispatch_without_deadline(
         &self,
         command: Command,
+        reservation: Arc<tokio::sync::OwnedSemaphorePermit>,
     ) -> (RequestId, crate::internal::executor::DispatchFuture) {
         #[cfg(feature = "control-mode")]
         let control_line = self.driver.executor.renders_control_line().then(|| {
@@ -672,7 +674,7 @@ impl Core {
             &self.driver.configuration.global_argv,
             command,
         )
-        .without_deadline();
+        .without_deadline(reservation);
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
         let request_id = request.request_id();
@@ -709,7 +711,7 @@ impl Core {
         request: CommandRequest,
         absent_cleanup: bool,
     ) -> crate::internal::executor::DispatchFuture {
-        let request = request.for_generation(self.generation);
+        let mut request = request.for_generation(self.generation);
         let executor = &self.driver.executor;
         #[cfg(feature = "control-mode")]
         let executor = if executor.renders_control_line()
@@ -733,6 +735,15 @@ impl Core {
             let transport = "subprocess";
             return crate::internal::executor::DispatchSpan::new(&request, transport)
                 .run(async { Err(error) });
+        }
+        if request.parked_reservation().is_none() && request.requires_parked_admission() {
+            match self.driver.channel_waits.reserve() {
+                Ok(reservation) => request = request.with_parked_reservation(reservation),
+                Err(error) => {
+                    return crate::internal::executor::DispatchSpan::new(&request, "subprocess")
+                        .run(async { Err(error) });
+                }
+            }
         }
         #[cfg(test)]
         if !self.check_versions {
@@ -859,6 +870,7 @@ impl Core {
             .await?;
         let mut stopped = reservation.stopped();
         let prepare = async {
+            let observation = self.channel_waits().begin_observation();
             let native = SubprocessExecutor::new(
                 self.driver.configuration.executable(),
                 self.driver.configuration.timeout,
@@ -930,6 +942,8 @@ impl Core {
                 )));
             }
             let version = pinned.version().clone();
+            self.channel_waits()
+                .observed_generation(observation, pinned.generation())?;
             self.driver.server_version.remember(version.clone());
             global_argv.push(OsString::from("-N"));
             global_argv.push(OsString::from("-C"));

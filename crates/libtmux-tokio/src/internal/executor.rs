@@ -117,6 +117,7 @@ impl OutcomeRecorder {
                     || matches!(
                         error,
                         Error::InvalidCommandInput { .. }
+                            | Error::ParkedLimitExceeded { .. }
                             | Error::Timeout {
                                 before_dispatch: true,
                                 ..

@@ -272,12 +272,9 @@ impl SubprocessExecutor {
         };
         trace_requested(&context);
 
-        // A request with no deadline is parked on a tmux channel rather than
-        // working, and holds its client until something signals or unlocks
-        // that channel -- which takes a dispatch of its own. Counting it
-        // against the ceiling would let enough parked clients block the very
-        // commands that release them.
-        let permit = if request.is_unbounded() {
+        // Parked admission leaves ordinary capacity for signal and unlock.
+        let parked_permit = request.parked_reservation().cloned();
+        let permit = if parked_permit.is_some() {
             None
         } else {
             match self.acquire_permit(&context).await {
@@ -354,6 +351,7 @@ impl SubprocessExecutor {
             stdout_discarded,
             Arc::clone(&self.configuration),
             permit,
+            parked_permit,
             registry,
             cancellation_receiver,
             context.clone(),
@@ -415,6 +413,7 @@ async fn spawn_and_supervise(
     stdout_discarded: bool,
     configuration: Arc<Configuration>,
     permit: Option<OwnedSemaphorePermit>,
+    parked_permit: Option<Arc<OwnedSemaphorePermit>>,
     registry: RegistryGuard,
     cancellation: watch::Receiver<bool>,
     context: RequestContext,
@@ -440,13 +439,14 @@ async fn spawn_and_supervise(
                 spawn_context.timeout,
             )));
         }
-        if spawn_context.operation.is_some() {
+        if spawn_context.operation.is_some() || parked_permit.is_some() {
             return start_native_child(
                 process,
                 stdout_discarded,
                 &spawn_configuration,
                 Reservation {
                     _permit: permit,
+                    _parked_permit: parked_permit,
                     registry,
                 },
                 &spawn_context,
@@ -498,6 +498,7 @@ async fn spawn_and_supervise(
             synchronous_reap_on_drop: spawn_configuration.synchronous_reap_on_supervisor_drop,
             _reservation: Some(Reservation {
                 _permit: permit,
+                _parked_permit: parked_permit,
                 registry,
             }),
         };
@@ -917,13 +918,13 @@ struct ChildOwnership {
     readers: ReaderTasks,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_drop: bool,
-    // Admission follows the process and readers into supervisor cleanup, and
-    // a parked client holds none.
+    // Both admission lanes follow the process and readers into cleanup.
     _reservation: Option<Reservation>,
 }
 
 struct Reservation {
     _permit: Option<OwnedSemaphorePermit>,
+    _parked_permit: Option<Arc<OwnedSemaphorePermit>>,
     // Registry removal follows child and reader cleanup.
     #[allow(
         dead_code,

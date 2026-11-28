@@ -20,7 +20,12 @@ impl Server {
         if self.core.expected_generation().is_some() {
             return Ok(self.clone());
         }
-        self.bound_to(self.generation().await?)
+        let observation = self.core.channel_waits().begin_observation();
+        let generation = self.generation().await?;
+        self.core
+            .channel_waits()
+            .observed_generation(observation, generation)?;
+        self.bound_to(generation)
     }
 
     /// List each underlying window once, including windows linked into multiple sessions.

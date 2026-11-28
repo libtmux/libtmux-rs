@@ -529,6 +529,46 @@ async fn cancelled_dispatch_keeps_capacity_until_its_child_is_reaped() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_parked_dispatch_keeps_its_slot_until_the_child_is_reaped() {
+    let waits = crate::internal::wait_for::ChannelWaits::new(1);
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned witness");
+    let pid_path = directory.path().join("parked-holder.pid");
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let executor = executor("block", TEST_TIMEOUT).with_test_hooks(TestHooks {
+        supervisor_failure_reached: Some(Arc::clone(&reached)),
+        supervisor_failure_release: Some(Arc::clone(&release)),
+        ..TestHooks::default()
+    });
+    let holder = tokio::spawn(
+        executor.execute(
+            request(44, [pid_path.as_os_str().to_os_string()])
+                .without_deadline(waits.reserve().expect("first parked slot")),
+        ),
+    );
+    let child_pid = read_pids(&pid_path, 1).await[0];
+    reached.notified().await;
+    holder.abort();
+    assert!(
+        holder
+            .await
+            .expect_err("caller was cancelled")
+            .is_cancelled()
+    );
+    let occupied = matches!(
+        waits.reserve(),
+        Err(Error::ParkedLimitExceeded { limit: 1 })
+    );
+    let still_running = test_kill_process(pid(child_pid)).is_ok();
+    release.notify_one();
+    executor.shutdown().await.expect("cleanup reaps the child");
+    assert_process_reaped(child_pid);
+    assert!(still_running, "the check preceded child cleanup");
+    assert!(occupied, "the live parked child still owned its slot");
+    assert!(waits.reserve().is_ok(), "reaping returned the parked slot");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn aborting_the_awaiting_task_cancels_and_reaps() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let pid_path = directory.path().join("abort.pid");

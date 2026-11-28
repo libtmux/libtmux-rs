@@ -16,6 +16,30 @@ assert_impl_all!(ProcessStatus: Send, Sync);
 assert_not_impl_any!(CommandResult: Display);
 assert_not_impl_any!(CommandRequest: Clone);
 
+#[test]
+fn parked_admission_follows_native_channel_flags_and_flat_chains() {
+    for (words, parked) in [
+        (vec!["wait-for", "channel"], true),
+        (vec!["wait", "-L", "channel"], true),
+        (vec!["wait-f", "--", "-S"], true),
+        (vec!["wait-for", "-SL", "channel"], true),
+        (vec!["wait-for", "-S", "channel"], false),
+        (vec!["wait-for", "-U", "channel"], false),
+        (vec!["wait-for", "-S", "--", "-L"], false),
+        (vec!["run-shell", "-C", "wait-for channel"], false),
+    ] {
+        let command = words[1..].iter().fold(Command::new(words[0]), Command::arg);
+        let request = CommandRequest::new(RequestId::new(1), command)
+            .for_generation(Some(crate::ServerGeneration::from_raw(12, 1)));
+        assert_eq!(request.requires_parked_admission(), parked, "{words:?}");
+    }
+    let chain = CommandChain::new(Command::new("display-message").arg("first"))
+        .then(Command::new("wait-for").arg("channel"));
+    let request = CommandRequest::chain_with_global_argv(RequestId::new(1), &[], chain);
+    assert!(request.requires_parked_admission());
+    assert!(!request.is_unbounded(), "raw waits retain their deadline");
+}
+
 fn argv_bytes(request: &CommandRequest) -> Vec<Vec<u8>> {
     request
         .argv()

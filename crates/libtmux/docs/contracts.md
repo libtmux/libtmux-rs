@@ -118,6 +118,18 @@ deadline, 30 seconds by default and configurable through
 [`ServerBuilder::default_timeout`]. The deadline starts before the command
 waits for dispatch capacity.
 
+Parked channel clients use a separate `DispatchLimits::max_parked` budget,
+16 by default, shared across clones and handles derived over control mode.
+It covers clients through reaping and signals retained for later waits.
+At capacity, `Error::ParkedLimitExceeded` refuses a new client immediately;
+same-channel joins, signal and unlock can still proceed. Consuming a kept
+signal returns its place. Fresh discovery of a different daemon retires
+the prior generation's state and clients without delivering old signals.
+
+Literal raw `wait-for` commands and flat chains use this budget while
+retaining the ordinary request deadline. Alias bodies and nested scripts
+keep native semantics, the ordinary deadline and ordinary capacity.
+
 Dropping the command future, reaching its timeout, or shutting the server down
 signals the group and waits for the direct child while the runtime is alive.
 The signal reaches the tmux client, and leaves the tmux server alone. A command

@@ -8,6 +8,7 @@ describes the responsibilities of all four crates.
 
 - [Choose a connection](#choose-a-connection)
 - [Recover a creation receipt](#recover-a-creation-receipt)
+- [Bound parked clients](#bound-parked-clients)
 
 ## Choose a connection
 
@@ -22,3 +23,22 @@ A failing after-hook can make tmux exit unsuccessfully after it created the
 session. The error retains any confirmed creation receipt, including the
 pane key. Use that receipt to inspect or clean up the session. Repeating
 the creation when its effect is unknown can create a second session.
+
+## Bound parked clients
+
+`DispatchLimits::max_parked` defaults to 16 places shared by a server's clones
+and its control-derived handles. Channel waits and queued locks use this
+budget, leaving ordinary dispatch capacity available for signal and unlock.
+Each place follows its client through reaping.
+
+A timed-out wait stays on its channel. A later wait joins that client, and a
+signal received with no caller left is retained until consumed. Retained
+signals keep their places. Saturation refuses new clients with
+`Error::ParkedLimitExceeded`; it never evicts a current generation's signal.
+Fresh discovery of a replacement retires the prior generation's state and
+cancels its parked clients. Their places return after reaping, and old
+signals cannot satisfy waits on the replacement.
+
+Literal raw `wait-for` commands and flat chains use parked capacity while
+keeping the ordinary request deadline. Alias bodies and nested scripts are
+not inspected; they retain their ordinary deadline and dispatch capacity.

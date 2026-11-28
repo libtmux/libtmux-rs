@@ -93,21 +93,23 @@ impl Default for OutputLimits {
 /// into process, descriptor, and memory pressure on the machine, and tmux
 /// itself serializes on the far side regardless.
 ///
-/// The client [`Server::wait_for_channel`](crate::Server::wait_for_channel)
-/// parks on a channel is the exception, and is not counted: it is waiting
-/// rather than working, and what releases it is a dispatch of its own.
+/// Parked channel clients have a separate budget so that signalling and
+/// unlocking can still run. A retained channel signal keeps its parked slot
+/// until a wait consumes it; saturation never evicts a signal.
 ///
 /// # Examples
 ///
 /// ```
 /// use libtmux_tokio::DispatchLimits;
 ///
-/// let limits = DispatchLimits::default().max_in_flight(4);
+/// let limits = DispatchLimits::default().max_in_flight(4).max_parked(8);
 /// assert_eq!(limits.in_flight(), 4);
+/// assert_eq!(limits.parked(), 8);
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchLimits {
     pub(crate) max_in_flight: usize,
+    pub(crate) max_parked: usize,
     pub(crate) acquire_timeout: Option<Duration>,
 }
 
@@ -118,6 +120,9 @@ impl DispatchLimits {
     /// buys queueing rather than throughput.
     pub const DEFAULT_IN_FLIGHT: usize = 16;
 
+    /// How many parked clients or retained channel signals are allowed by default.
+    pub const DEFAULT_PARKED: usize = 16;
+
     /// Set how many dispatches may run at once.
     ///
     /// Zero is treated as one: a server that admits nothing cannot answer.
@@ -125,6 +130,22 @@ impl DispatchLimits {
     pub const fn max_in_flight(self, permits: usize) -> Self {
         Self {
             max_in_flight: if permits == 0 { 1 } else { permits },
+            ..self
+        }
+    }
+
+    /// Set the budget for parked channel clients and retained channel signals.
+    ///
+    /// This budget is shared by cloned servers and handles derived over control
+    /// mode. A timed-out wait keeps its place, and a later signal keeps that
+    /// place until consumed. New clients are refused immediately with
+    /// [`Error::ParkedLimitExceeded`](crate::Error::ParkedLimitExceeded) when
+    /// full. Same-channel waits still join an admitted client or consume its
+    /// signal. Zero is treated as one.
+    #[must_use]
+    pub const fn max_parked(self, permits: usize) -> Self {
+        Self {
+            max_parked: if permits == 0 { 1 } else { permits },
             ..self
         }
     }
@@ -149,12 +170,19 @@ impl DispatchLimits {
     pub const fn in_flight(self) -> usize {
         self.max_in_flight
     }
+
+    /// The budget for parked channel clients and retained channel signals.
+    #[must_use]
+    pub const fn parked(self) -> usize {
+        self.max_parked
+    }
 }
 
 impl Default for DispatchLimits {
     fn default() -> Self {
         Self {
             max_in_flight: Self::DEFAULT_IN_FLIGHT,
+            max_parked: Self::DEFAULT_PARKED,
             acquire_timeout: None,
         }
     }

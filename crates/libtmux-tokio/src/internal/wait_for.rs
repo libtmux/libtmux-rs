@@ -16,7 +16,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::time::Instant;
 
 #[cfg(feature = "tracing")]
@@ -27,9 +27,24 @@ use crate::internal::listing;
 use crate::{ChannelWait, Command, CommandResult, Error};
 
 /// The `wait-for` channels this process has a client on, or a signal for.
-#[derive(Default)]
 pub(crate) struct ChannelWaits {
     channels: Mutex<HashMap<ChannelKey, Channel>>,
+    permits: Arc<Semaphore>,
+    limit: usize,
+    observations: Mutex<Observations>,
+    generation: watch::Sender<Option<crate::ServerGeneration>>,
+}
+
+#[derive(Default)]
+struct Observations {
+    next: u64,
+    reported: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct GenerationObservation {
+    ticket: u64,
+    previous: Option<crate::ServerGeneration>,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -39,6 +54,7 @@ struct ChannelKey {
 }
 
 struct Channel {
+    reservation: Arc<OwnedSemaphorePermit>,
     /// A signal that released a parked client with no caller left to hear it.
     ///
     /// tmux keeps a signal nobody is waiting on, and cannot see that a parked
@@ -55,9 +71,10 @@ struct Channel {
     releases: watch::Sender<u64>,
 }
 
-impl Default for Channel {
-    fn default() -> Self {
+impl Channel {
+    fn new(reservation: Arc<OwnedSemaphorePermit>) -> Self {
         Self {
+            reservation,
             kept: false,
             waiting: 0,
             resident: false,
@@ -65,9 +82,7 @@ impl Default for Channel {
             releases: watch::channel(0).0,
         }
     }
-}
 
-impl Channel {
     /// Whether nothing about this channel is left to remember.
     fn is_idle(&self) -> bool {
         !self.kept && !self.resident && self.waiting == 0 && self.failure.is_none()
@@ -75,37 +90,130 @@ impl Channel {
 }
 
 impl ChannelWaits {
+    pub(crate) fn new(limit: usize) -> Self {
+        let limit = limit.clamp(1, Semaphore::MAX_PERMITS);
+        Self {
+            channels: Mutex::default(),
+            permits: Arc::new(Semaphore::new(limit)),
+            limit,
+            observations: Mutex::default(),
+            generation: watch::channel(None).0,
+        }
+    }
+
+    pub(crate) fn begin_observation(&self) -> GenerationObservation {
+        let mut observations = self
+            .observations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        observations.next += 1;
+        GenerationObservation {
+            ticket: observations.next,
+            previous: *self.generation.borrow(),
+        }
+    }
+
+    pub(crate) fn observed_generation(
+        &self,
+        observation: GenerationObservation,
+        generation: crate::ServerGeneration,
+    ) -> Result<(), Error> {
+        let mut channels = self.channels();
+        let mut observations = self
+            .observations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let current = *self.generation.borrow();
+        let superseded =
+            observation.ticket < observations.reported || current != observation.previous;
+        observations.reported = observations.reported.max(observation.ticket);
+        if superseded {
+            if let Some(found) = current.filter(|found| *found != generation) {
+                return Err(Error::ServerGenerationChanged {
+                    expected: generation,
+                    found,
+                });
+            }
+        }
+        channels.retain(|key, _| key.generation == generation);
+        self.generation.send_replace(Some(generation));
+        Ok(())
+    }
+
+    fn replaced(&self, expected: crate::ServerGeneration) -> Option<Error> {
+        self.generation.borrow().and_then(|found| {
+            (found != expected).then_some(Error::ServerGenerationChanged { expected, found })
+        })
+    }
+
+    async fn until_replaced(
+        &self,
+        expected: crate::ServerGeneration,
+        mut dispatch: crate::internal::executor::DispatchFuture,
+    ) -> Result<CommandResult, Error> {
+        let mut changed = self.generation.subscribe();
+        loop {
+            let _ = changed.borrow_and_update();
+            if let Some(error) = self.replaced(expected) {
+                return Err(error);
+            }
+            tokio::select! {
+                result = &mut dispatch => return result,
+                _ = changed.changed() => {}
+            }
+        }
+    }
+
+    pub(crate) fn reserve(&self) -> Result<Arc<OwnedSemaphorePermit>, Error> {
+        Arc::clone(&self.permits)
+            .try_acquire_owned()
+            .map(Arc::new)
+            .map_err(|_| Error::ParkedLimitExceeded { limit: self.limit })
+    }
+
     fn channels(&self) -> MutexGuard<'_, HashMap<ChannelKey, Channel>> {
         self.channels.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Take a kept signal, or join the queue behind the channel's client.
-    fn join(&self, channel: &ChannelKey) -> Join<'_> {
+    fn join(&self, channel: &ChannelKey) -> Result<Join<'_>, Error> {
         let mut channels = self.channels();
-        let state = channels.entry(channel.to_owned()).or_default();
+        if let Some(error) = self.replaced(channel.generation) {
+            return Err(error);
+        }
+        let state = match channels.entry(channel.to_owned()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Channel::new(self.reserve()?))
+            }
+        };
         if state.kept {
             state.kept = false;
             let idle = state.is_idle();
             if idle {
                 channels.remove(channel);
             }
-            return Join::Kept;
+            return Ok(Join::Kept);
         }
 
-        state.waiting += 1;
         let opening = !state.resident;
         if opening {
+            // Only the channel owns a unique reservation after child cleanup.
+            if Arc::strong_count(&state.reservation) != 1 {
+                state.reservation = self.reserve()?;
+            }
             state.resident = true;
             state.failure = None;
         }
-        Join::Waiting(Waiter {
+        state.waiting += 1;
+        Ok(Join::Waiting(Waiter {
             waits: self,
             channel: channel.to_owned(),
             seen: *state.releases.borrow(),
             released: state.releases.subscribe(),
-            opening,
+            opening: opening.then(|| Arc::clone(&state.reservation)),
             settled: false,
-        })
+        }))
     }
 
     /// Record how the channel's client ended.
@@ -121,6 +229,10 @@ impl ChannelWaits {
                 state.kept = state.waiting == 0;
             }
             Err(error) => {
+                if state.waiting == 0 {
+                    channels.remove(channel);
+                    return;
+                }
                 state.failure = Some(error);
                 state.releases.send_modify(|_| ());
             }
@@ -128,6 +240,12 @@ impl ChannelWaits {
         if state.is_idle() {
             channels.remove(channel);
         }
+    }
+}
+
+impl Default for ChannelWaits {
+    fn default() -> Self {
+        Self::new(crate::DispatchLimits::DEFAULT_PARKED)
     }
 }
 
@@ -145,7 +263,7 @@ struct Waiter<'a> {
     seen: u64,
     released: watch::Receiver<u64>,
     /// Whether this caller is the one that opens the channel's client.
-    opening: bool,
+    opening: Option<Arc<OwnedSemaphorePermit>>,
     settled: bool,
 }
 
@@ -165,7 +283,10 @@ impl Waiter<'_> {
         self.settled = true;
         let mut channels = self.waits.channels();
         let Some(state) = channels.get_mut(&self.channel) else {
-            return Settled::TimedOut;
+            return self
+                .waits
+                .replaced(self.channel.generation)
+                .map_or(Settled::TimedOut, Settled::Failed);
         };
         state.waiting -= 1;
 
@@ -196,6 +317,9 @@ impl Drop for Waiter<'_> {
         // A signal this caller was released by and then dropped is nobody's,
         // so it goes back to being kept for the next wait.
         state.kept = *state.releases.borrow() > self.seen && state.waiting == 0;
+        if state.waiting == 0 && !state.resident && !state.kept {
+            state.failure = None;
+        }
         if state.is_idle() {
             channels.remove(&self.channel);
         }
@@ -220,12 +344,12 @@ pub(crate) async fn wait(
         name: channel.to_owned(),
     };
     loop {
-        let mut waiter = match core.channel_waits().join(&key) {
+        let mut waiter = match core.channel_waits().join(&key)? {
             Join::Kept => return Ok(ChannelWait::Signalled),
             Join::Waiting(waiter) => waiter,
         };
-        if waiter.opening {
-            park(core, key.clone());
+        if let Some(reservation) = waiter.opening.take() {
+            park(core, key.clone(), reservation);
         }
 
         tokio::select! {
@@ -248,11 +372,16 @@ pub(crate) async fn wait(
 }
 
 /// Open the channel's client, which stays until tmux releases it.
-fn park(core: &Arc<Core>, channel: ChannelKey) {
+fn park(core: &Arc<Core>, channel: ChannelKey, reservation: Arc<OwnedSemaphorePermit>) {
     let core = Arc::clone(core);
     spawn(async move {
-        let (_, dispatch) = core.dispatch_without_deadline(channel_command(None, &channel.name));
-        let outcome = mutated(dispatch.await);
+        let (_, dispatch) =
+            core.dispatch_without_deadline(channel_command(None, &channel.name), reservation);
+        let outcome = mutated(
+            core.channel_waits()
+                .until_replaced(channel.generation, dispatch)
+                .await,
+        );
         core.channel_waits().finish(&channel, outcome);
     });
 }
@@ -265,13 +394,22 @@ fn park(core: &Arc<Core>, channel: ChannelKey) {
 pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> Result<(), Error> {
     let command = channel_command(Some("-L"), channel);
     let summary = command.summary();
-    let (request_id, dispatch) = core.dispatch_without_deadline(command);
+    let reservation = core.channel_waits().reserve()?;
+    let generation = core
+        .expected_generation()
+        .ok_or(libtmux_core::Error::InvalidKey)?;
+    let (request_id, dispatch) = core.dispatch_without_deadline(command, reservation);
 
     let (granted, taken) = oneshot::channel();
     let holder = Arc::clone(core);
     let name = channel.to_owned();
     spawn(async move {
-        let outcome = mutated(dispatch.await);
+        let outcome = mutated(
+            holder
+                .channel_waits()
+                .until_replaced(generation, dispatch)
+                .await,
+        );
         if let Err(outcome) = granted.send(outcome) {
             // The caller is gone, and tmux grants this client the lock all the
             // same: a lock nobody holds wedges every later locker.
@@ -390,6 +528,108 @@ fn spawn(task: impl Future<Output = ()> + Send + 'static) {
 mod tests {
     use super::{ChannelKey, ChannelWaits, Join, Settled};
 
+    #[test]
+    fn out_of_order_observations_cannot_retire_the_new_generations_signal() {
+        for stale_registered_last in [false, true] {
+            let waits = ChannelWaits::new(1);
+            let original = crate::ServerGeneration::from_raw(12, 1);
+            let replacement = crate::ServerGeneration::from_raw(13, 1);
+            waits
+                .observed_generation(waits.begin_observation(), original)
+                .expect("initial report");
+            let first = waits.begin_observation();
+            let second = waits.begin_observation();
+            let (stale, fresh) = if stale_registered_last {
+                (second, first)
+            } else {
+                (first, second)
+            };
+            waits
+                .observed_generation(fresh, replacement)
+                .expect("replacement report");
+            let key = ChannelKey {
+                generation: replacement,
+                name: "ready".into(),
+            };
+            let Join::Waiting(waiter) = waits.join(&key).expect("replacement wait") else {
+                panic!("no initial signal");
+            };
+            drop(waiter);
+            waits.finish(&key, Ok(()));
+            assert!(
+                matches!(waits.observed_generation(stale, original), Err(crate::Error::ServerGenerationChanged { expected, found }) if expected == original && found == replacement)
+            );
+            assert!(
+                matches!(waits.join(&key), Ok(Join::Kept)),
+                "a delayed old report cannot discard the replacement's signal"
+            );
+            assert!(
+                waits.reserve().is_ok(),
+                "consuming the current signal frees capacity"
+            );
+        }
+    }
+
+    #[test]
+    fn orphaned_failures_return_map_capacity_after_child_ownership_ends() {
+        let waits = ChannelWaits::new(1);
+        for index in 0..8 {
+            let key = ChannelKey {
+                generation: crate::ServerGeneration::from_raw(12, 1),
+                name: format!("failed-{index}"),
+            };
+            let Join::Waiting(mut waiter) = waits.join(&key).expect("channel admitted") else {
+                panic!("new channel cannot have a kept signal");
+            };
+            let child = waiter.opening.take().expect("child reservation");
+            drop(waiter);
+            waits.finish(&key, Err(crate::Error::invalid_command_input(1, "fixture")));
+            assert!(
+                waits.channels().is_empty(),
+                "no unobserved error entry remains"
+            );
+            assert!(waits.reserve().is_err(), "cleanup still owns the child");
+            drop(child);
+            assert!(waits.reserve().is_ok(), "cleanup returns capacity");
+        }
+    }
+
+    #[test]
+    fn a_verified_replacement_retires_a_signal_without_delivering_it_again() {
+        let waits = ChannelWaits::new(1);
+        let original = crate::ServerGeneration::from_raw(12, 1);
+        let replacement = crate::ServerGeneration::from_raw(13, 1);
+        let key = ChannelKey {
+            generation: original,
+            name: "ready".into(),
+        };
+        waits
+            .observed_generation(waits.begin_observation(), original)
+            .expect("original report");
+        let Join::Waiting(waiter) = waits.join(&key).expect("channel admitted") else {
+            panic!("no initial signal");
+        };
+        drop(waiter);
+        waits.finish(&key, Ok(()));
+        assert!(waits.reserve().is_err(), "verified signal owns its place");
+        waits
+            .observed_generation(waits.begin_observation(), replacement)
+            .expect("replacement report");
+        assert!(
+            matches!(waits.join(&key), Err(crate::Error::ServerGenerationChanged { expected, found }) if expected == original && found == replacement)
+        );
+        assert!(
+            matches!(
+                waits.join(&ChannelKey {
+                    generation: replacement,
+                    ..key
+                }),
+                Ok(Join::Waiting(_))
+            ),
+            "the replacement cannot consume the retired signal"
+        );
+    }
+
     /// What a release does depends on who is left to hear it, and the three
     /// answers are what keeps a signal from being lost or heard twice.
     #[test]
@@ -402,7 +642,7 @@ mod tests {
 
         // The caller gave up and left the client parked: the release is kept,
         // and the next caller takes it once.
-        let Join::Waiting(gave_up) = waits.join(&key) else {
+        let Join::Waiting(gave_up) = waits.join(&key).expect("channel admitted") else {
             panic!("the channel starts with nothing kept");
         };
         drop(gave_up);
@@ -411,24 +651,36 @@ mod tests {
             generation: crate::ServerGeneration::from_raw(13, 1),
             ..key.clone()
         };
-        assert!(matches!(waits.join(&replacement), Join::Waiting(_)));
-        assert!(matches!(waits.join(&key), Join::Kept));
+        assert!(matches!(
+            waits.join(&replacement).expect("channel admitted"),
+            Join::Waiting(_)
+        ));
+        assert!(matches!(
+            waits.join(&key).expect("channel admitted"),
+            Join::Kept
+        ));
 
         // A caller is waiting: the release is theirs, and nothing is kept.
-        let Join::Waiting(mut waiting) = waits.join(&key) else {
+        let Join::Waiting(mut waiting) = waits.join(&key).expect("channel admitted") else {
             panic!("a kept release is one-shot");
         };
         waits.finish(&key, Ok(()));
         assert!(matches!(waiting.settle(), Settled::Signalled));
-        assert!(matches!(waits.join(&key), Join::Waiting(_)));
+        assert!(matches!(
+            waits.join(&key).expect("channel admitted"),
+            Join::Waiting(_)
+        ));
 
         // Released, then dropped before settling: the release is nobody's
         // again rather than lost.
-        let Join::Waiting(raced) = waits.join(&key) else {
+        let Join::Waiting(raced) = waits.join(&key).expect("channel admitted") else {
             panic!("the release went to the caller that was waiting");
         };
         waits.finish(&key, Ok(()));
         drop(raced);
-        assert!(matches!(waits.join(&key), Join::Kept));
+        assert!(matches!(
+            waits.join(&key).expect("channel admitted"),
+            Join::Kept
+        ));
     }
 }

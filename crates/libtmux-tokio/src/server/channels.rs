@@ -121,6 +121,8 @@ impl Server {
     /// [`crate::ErrorKind::Timeout`] when the channel is still held after
     /// [`Server::default_timeout`]. A dedicated subprocess waits on the daemon
     /// that admitted the request, leaving an attached control connection free.
+    /// A full [`crate::DispatchLimits::max_parked`] budget refuses the client
+    /// before submission with [`Error::ParkedLimitExceeded`].
     ///
     /// # Cancel safety
     ///
@@ -180,9 +182,13 @@ impl Server {
     /// than opening a second, and a signal that releases it with nobody
     /// waiting is kept for the next wait, which is where the latch above
     /// survives a wait that gave up. The client is this process's, so it ends
-    /// with [`Server::shutdown`]; it does not count against
-    /// [`crate::DispatchLimits`], because signalling the channel is itself a
-    /// dispatch.
+    /// with [`Server::shutdown`]. It uses the separate
+    /// [`crate::DispatchLimits::max_parked`] budget, leaving ordinary dispatch
+    /// capacity available for signalling and unlocking. A retained signal
+    /// holds its place until consumed. Saturation refuses a new channel without
+    /// evicting signals or opening a client; waits on the same channel can join.
+    /// A fresh discovery that verifies a replacement daemon retires the old
+    /// generation's clients and signals. Old signals never satisfy new waits.
     ///
     /// `within` is capped at [`Server::default_timeout`]: ask for longer by
     /// building the server with a longer timeout.
@@ -193,6 +199,8 @@ impl Server {
     /// reached. Running out of time is [`ChannelWait::TimedOut`] rather than
     /// an error, so "nothing signalled it" stays distinct from "the command
     /// did not get through" -- the caller retries only one of those.
+    /// [`Error::ParkedLimitExceeded`] means the separate parked budget was full
+    /// before a client was submitted.
     ///
     /// A control-backed server parks an ordinary client on the same daemon.
     /// Commands on the attached control connection can still run while it waits.

@@ -3,6 +3,9 @@ use std::ffi::OsString;
 use std::fmt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
+use std::sync::Arc;
+
+use tokio::sync::OwnedSemaphorePermit;
 
 pub use libtmux_core::{Command, CommandChain, CommandSummary};
 
@@ -70,6 +73,7 @@ pub(crate) struct CommandRequest {
     /// the channel's next signal or its next lock. Such a request ends when
     /// tmux answers or the executor shuts down.
     unbounded: bool,
+    parked: Option<Arc<OwnedSemaphorePermit>>,
     /// Whether the client's stdout goes to the null device instead of a pipe.
     ///
     /// tmux 3.1 and older keep a client's stdout open after the client exits,
@@ -195,6 +199,7 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count: 1,
             unbounded: false,
+            parked: None,
             stdout_discarded: false,
             requirement,
             refused_intervals,
@@ -224,6 +229,7 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count: 1,
             unbounded: false,
+            parked: None,
             stdout_discarded: false,
             requirement: None,
             refused_intervals: Vec::new(),
@@ -259,6 +265,7 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count,
             unbounded: false,
+            parked: None,
             stdout_discarded: false,
             requirement,
             refused_intervals,
@@ -266,9 +273,40 @@ impl CommandRequest {
     }
 
     /// Run this request without a deadline of its own.
-    pub(crate) const fn without_deadline(mut self) -> Self {
+    pub(crate) fn without_deadline(mut self, reservation: Arc<OwnedSemaphorePermit>) -> Self {
         self.unbounded = true;
+        self.parked = Some(reservation);
         self
+    }
+
+    pub(crate) fn with_parked_reservation(
+        mut self,
+        reservation: Arc<OwnedSemaphorePermit>,
+    ) -> Self {
+        self.parked = Some(reservation);
+        self
+    }
+
+    pub(crate) fn parked_reservation(&self) -> Option<&Arc<OwnedSemaphorePermit>> {
+        self.parked.as_ref()
+    }
+
+    pub(crate) fn requires_parked_admission(&self) -> bool {
+        use libtmux_core::control::arguments::{flags, native};
+
+        self.argv[self.logical_subcommand_index..]
+            .split(|word| word == ";")
+            .any(|command| {
+                let Some((name, arguments)) = command.split_first() else {
+                    return false;
+                };
+                if !native(name.as_encoded_bytes(), b"wait-for", b"wait", 5) {
+                    return false;
+                }
+                let found = flags(arguments, b"");
+                found.iter().any(|(flag, _)| *flag == b'L')
+                    || !found.iter().any(|(flag, _)| b"SU".contains(flag))
+            })
     }
 
     /// Whether this request runs without a deadline of its own.

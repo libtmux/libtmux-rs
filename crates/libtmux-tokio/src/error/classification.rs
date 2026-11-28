@@ -108,6 +108,7 @@ impl Error {
             | Self::NoEffect { .. }
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
+            | Self::ParkedLimitExceeded { .. }
             | Self::SessionExists { .. }
             | Self::OptionRejected { .. } => ErrorKind::Refused,
             Self::Timeout { .. } => ErrorKind::Timeout,
@@ -202,6 +203,7 @@ impl Error {
             | Self::OperationAndCleanup { .. }
             | Self::OperationCleanupPending { .. } => false,
             Self::Overloaded { .. }
+            | Self::ParkedLimitExceeded { .. }
             | Self::ClientSuspended { .. }
             | Self::Timeout {
                 before_dispatch: true,
