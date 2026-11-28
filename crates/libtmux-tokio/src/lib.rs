@@ -143,9 +143,9 @@
 //! get. tmux releases through 3.6b rewrite `:` and `.` in a session name to
 //! `_`, because a target is split on those, and they do it silently: 3.7
 //! refuses such a name outright, and 3.7a keeps it. So `new_session("a:b")`
-//! succeeds on every supported release except 3.7 and hands back a session
-//! called `a_b` on most of them. The handle reports what tmux stored, so
-//! [`Session::name`] is always the truth; the request is what may differ from
+//! succeeds on every supported release except 3.7. Its receipt identifies the
+//! new session even when tmux rewrites its name. [`Server::inspect_session`]
+//! reads the stored [`Session::name`], which may differ from
 //! it. Compare the two when the name has to round-trip.
 //!
 //! ## Examples
@@ -381,7 +381,7 @@ pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[cfg(feature = "unstable-fuzzing")]
 #[doc(hidden)]
 pub use internal::environment::__fuzz_environment_listing;
-pub use libtmux_core::{CreatedSession, NewSession, PaneKey};
+pub use libtmux_core::{CreatedSession, NewSession, PaneKey, SessionKey, WindowKey};
 #[cfg(feature = "control-mode")]
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};

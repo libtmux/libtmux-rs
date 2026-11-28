@@ -23,10 +23,14 @@ async fn pane_in(server: &Server, name: &str, width: u32) -> String {
             .await
             .expect("keeper session");
     }
-    let session = server
+    let receipt = server
         .new_session(NewSession::new(name).command(SHELL).size(width, 12))
         .await
         .expect("session");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes").remove(0);
     let id = pane.id().to_string();
     prompt_ready(server, &id).await;

@@ -40,7 +40,10 @@ impl Error {
     /// // The shape this exists for: use it if it is there, make it if not.
     /// let session = match server.session("work").await? {
     ///     Some(session) => session,
-    ///     None => server.new_session("work").await?,
+    ///     None => {
+    ///         let receipt = server.new_session("work").await?;
+    ///         server.inspect_session(&receipt).await?
+    ///     }
     /// };
     ///
     /// // And when an operation races something else removing it. The handle
@@ -165,8 +168,13 @@ impl Error {
     #[must_use]
     pub fn is_transient(&self) -> bool {
         match self {
+            Self::OperationFailure { effect, source, .. } => {
+                matches!(
+                    effect,
+                    libtmux_core::Effect::NotSubmitted | libtmux_core::Effect::Observation
+                ) && source.is_transient()
+            }
             Self::CoreOperation { .. }
-            | Self::OperationFailure { .. }
             | Self::OperationAndCleanup { .. }
             | Self::OperationCleanupPending { .. } => false,
             Self::Overloaded { .. }

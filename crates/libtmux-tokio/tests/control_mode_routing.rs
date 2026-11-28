@@ -66,8 +66,8 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         return;
     };
     let real = guard.server().clone();
-    let session = real
-        .new_session("routed")
+    let session = guard
+        .session("routed")
         .await
         .expect("the fixture holds a session");
     let version = real
@@ -277,8 +277,8 @@ async fn a_blocking_channel_call_is_refused_rather_than_routed() {
         return;
     };
     let real = guard.server().clone();
-    let session = real
-        .new_session("routed")
+    let session = guard
+        .session("routed")
         .await
         .expect("the fixture holds a session");
 
@@ -339,8 +339,7 @@ async fn a_sender_for_another_server_is_refused() {
         .await
         .expect("a second private tmux starts");
     let session = first
-        .server()
-        .new_session("origin")
+        .session("origin")
         .await
         .expect("the first fixture holds a session");
 
@@ -378,7 +377,7 @@ async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
         return;
     };
     let real = guard.server().clone();
-    let session = real.new_session("routed-plan").await.expect("session");
+    let session = guard.session("routed-plan").await.expect("session");
     let version = real
         .capabilities()
         .await
@@ -407,7 +406,8 @@ async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
 
     let mut plan = Plan::new();
     plan.add(SelectLayout::new(window.id().clone(), "tiled"));
-    let result = routed.run_plan(&plan, Planner::Sequential)
+    let result = routed
+        .run_plan(&plan, Planner::Sequential)
         .await
         .expect("the routed plan runs");
     assert!(result.is_complete(), "{result:?}");

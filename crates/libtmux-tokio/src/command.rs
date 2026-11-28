@@ -40,6 +40,7 @@ pub(crate) struct CommandRequest {
     request_id: RequestId,
     command: CommandSummary,
     argv: Vec<OsString>,
+    client_flags_end: usize,
     logical_subcommand_index: usize,
     /// The same logical command rendered for a control-mode connection.
     ///
@@ -104,18 +105,35 @@ impl CommandRequest {
     }
 
     pub(crate) fn live_only(mut self) -> Self {
-        self.argv
-            .insert(self.logical_subcommand_index, OsString::from("-N"));
-        self.logical_subcommand_index += 1;
+        if self.argv[..self.client_flags_end]
+            .last()
+            .is_none_or(|arg| arg != "-N")
+        {
+            self.argv
+                .insert(self.client_flags_end, OsString::from("-N"));
+            self.client_flags_end += 1;
+            self.logical_subcommand_index += 1;
+        }
         self
     }
 
-    pub(crate) fn fence_version(mut self, version: &crate::TmuxVersion) -> Self {
+    pub(crate) fn for_generation(self, generation: Option<crate::ServerGeneration>) -> Self {
+        match generation {
+            Some(generation) => self.live_only().prepend_guard(generation.queue_guard()),
+            None => self,
+        }
+    }
+
+    pub(crate) fn fence_version(self, version: &crate::TmuxVersion) -> Self {
         let guard = Command::new("if-shell")
             .arg("-F")
             .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
             .arg("")
             .arg("libtmux-core-version-changed");
+        self.prepend_guard(guard)
+    }
+
+    fn prepend_guard(mut self, guard: Command) -> Self {
         #[cfg(feature = "control-mode")]
         {
             self.control_line = self.control_line.and_then(|line| {
@@ -167,6 +185,7 @@ impl CommandRequest {
             request_id,
             command: summary,
             argv,
+            client_flags_end: logical_subcommand_index,
             logical_subcommand_index,
             #[cfg(feature = "control-mode")]
             control_line: None,
@@ -195,6 +214,7 @@ impl CommandRequest {
             request_id,
             command: summary,
             argv,
+            client_flags_end: logical_subcommand_index,
             logical_subcommand_index,
             #[cfg(feature = "control-mode")]
             control_line: None,
@@ -229,6 +249,7 @@ impl CommandRequest {
             request_id,
             command,
             argv,
+            client_flags_end: logical_subcommand_index,
             logical_subcommand_index,
             #[cfg(feature = "control-mode")]
             control_line: None,

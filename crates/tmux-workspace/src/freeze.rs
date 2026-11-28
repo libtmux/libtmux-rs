@@ -41,7 +41,7 @@ use crate::config::{PaneConfig, ShellCommand, WindowConfig, Workspace};
 /// use tmux_workspace::freeze;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("built-by-hand").await?;
+/// let session = guard.session("built-by-hand").await?;
 /// let mut window = session.active_window().await?.expect("a window");
 /// window.split(SplitOptions::new(SplitDirection::Below)).await?;
 ///

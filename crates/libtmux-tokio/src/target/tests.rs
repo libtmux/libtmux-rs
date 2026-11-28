@@ -22,8 +22,8 @@ fn core_and_client_use_identical_primitive_types() {
     let pane: crate::PaneId = pane;
     let text: libtmux_core::TmuxText = crate::TmuxText::from_bytes([b'#', 0xff]);
     let argument: crate::TmuxArg = libtmux_core::TmuxArg::from(&text);
-    let identity: crate::ServerIdentity =
-        libtmux_core::ServerIdentity::from_socket_path("/private/shared/socket".into());
+    let identity: ServerIdentity =
+        ServerIdentity::from_socket_path("/private/shared/socket".into());
     let generation: crate::ServerGeneration = libtmux_core::ServerGeneration::from_raw(42, 1);
     let error: crate::IdParseError = "@1".parse::<libtmux_core::PaneId>().unwrap_err();
 

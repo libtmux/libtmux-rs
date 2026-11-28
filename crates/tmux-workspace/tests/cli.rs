@@ -1008,7 +1008,8 @@ impl PromptDriver<'_> {
         let window = self
             .keeper
             .new_window(
-                libtmux_tokio::NewWindowOptions::unnamed().start_directory(self.directory.to_path_buf()),
+                libtmux_tokio::NewWindowOptions::unnamed()
+                    .start_directory(self.directory.to_path_buf()),
             )
             .await
             .unwrap();
@@ -1241,7 +1242,8 @@ async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mu
     symlink(original.socket_path(), &alias).unwrap();
     let marker = directory.path().join("python-called");
     let python = directory.path().join("python-sentinel");
-    libtmux_tokio::test::install_executable(&python, "#!/bin/sh\n: > python-called\nexit 97\n").unwrap();
+    libtmux_tokio::test::install_executable(&python, "#!/bin/sh\n: > python-called\nexit 97\n")
+        .unwrap();
     let mut failures = Vec::new();
     for retarget in [false, true] {
         if retarget {
@@ -3301,8 +3303,7 @@ async fn appended_before_script_failure_leaves_the_borrowed_session_and_stays_pa
     // "error", unlike the owned case above.
     let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux_tokio::NewSession::new("owner"))
+        .session(libtmux_tokio::NewSession::new("owner"))
         .await
         .unwrap();
     let pane = current_pane(&session).await;
@@ -3413,8 +3414,7 @@ async fn closed_workspace_completed_event_retains_the_completed_input() {
 async fn failed_append_reports_borrowed_session_and_created_ids() {
     let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux_tokio::NewSession::new("borrowed"))
+        .session(libtmux_tokio::NewSession::new("borrowed"))
         .await
         .unwrap();
     let pane = session
@@ -3569,8 +3569,7 @@ async fn append_summary_says_appended_with_a_single_space() {
 async fn append_leaves_the_client_on_its_window_unless_one_appended_window_focuses() {
     let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux_tokio::NewSession::new("owner"))
+        .session(libtmux_tokio::NewSession::new("owner"))
         .await
         .unwrap();
     let original = session.active_window().await.unwrap().unwrap();
@@ -4290,14 +4289,15 @@ async fn load_places_panes_after_the_first_in_config_order() {
         .zip(["MARK-A", "MARK-B", "MARK-C", "MARK-D"])
         .enumerate()
     {
-        let seen = libtmux_tokio::test::retry_until(std::time::Duration::from_secs(15), async || {
-            pane.capture().await.is_ok_and(|lines| {
-                lines
-                    .iter()
-                    .any(|line| line.to_string_lossy().contains(marker))
+        let seen =
+            libtmux_tokio::test::retry_until(std::time::Duration::from_secs(15), async || {
+                pane.capture().await.is_ok_and(|lines| {
+                    lines
+                        .iter()
+                        .any(|line| line.to_string_lossy().contains(marker))
+                })
             })
-        })
-        .await;
+            .await;
         assert!(seen.is_ok(), "pane at index {index} should show {marker}");
     }
 
@@ -4692,7 +4692,9 @@ async fn load_accepts_both_options_and_options_after_spellings() {
         let value = window.typed_option("main-pane-width").await.unwrap();
         assert_eq!(
             value,
-            Some(libtmux_tokio::OptionValue::Text(expected.to_string().into())),
+            Some(libtmux_tokio::OptionValue::Text(
+                expected.to_string().into()
+            )),
             "window {:?}",
             window.name().to_string_lossy()
         );
@@ -4795,8 +4797,7 @@ async fn a_mid_build_failure_removes_the_session_and_the_rerun_fails_the_same_wa
 async fn reusing_a_session_without_the_document_s_windows_is_a_mismatch() {
     let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux_tokio::NewSession::new("half"))
+        .session(libtmux_tokio::NewSession::new("half"))
         .await
         .unwrap();
     let mut window = session.active_window().await.unwrap().unwrap();
@@ -5107,8 +5108,7 @@ async fn freeze_refuses_a_session_name_load_would_not_accept() {
 async fn freeze_refuses_an_existing_dotted_session_the_same_way() {
     let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let Ok(session) = guard
-        .server()
-        .new_session(libtmux_tokio::NewSession::new("my.proj"))
+        .session(libtmux_tokio::NewSession::new("my.proj"))
         .await
     else {
         guard.shutdown().await.unwrap();

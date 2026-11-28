@@ -31,7 +31,7 @@ const MUST_CARRY: &[(&str, &str, &str)] = &[
     ("src/pane/observe.rs", "Pane", "wait_until"),
     ("src/plan/run.rs", "Plan", "run"),
     ("src/plan/run.rs", "Plan", "run_over_control_mode"),
-    ("src/server.rs", "Server", "create_session"),
+    ("src/server.rs", "Server", "new_session"),
     ("src/server.rs", "Server", "run_shell"),
     ("src/server.rs", "Server", "with_session"),
     ("src/server/channels.rs", "Server", "lock_channel"),

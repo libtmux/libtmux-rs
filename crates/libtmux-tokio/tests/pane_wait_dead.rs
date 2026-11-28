@@ -14,8 +14,8 @@ async fn waiting_pane(guard: &TestServer) -> libtmux_tokio::Pane {
         .new_session(NewSession::new("keeper").command("sleep 600"))
         .await
         .expect("keeper session");
-    let session = server
-        .new_session(NewSession::new("watched").command("sleep 600"))
+    let session = guard
+        .session(NewSession::new("watched").command("sleep 600"))
         .await
         .expect("session");
     session.panes().await.expect("panes").remove(0)

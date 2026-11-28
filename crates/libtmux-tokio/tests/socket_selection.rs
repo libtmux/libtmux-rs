@@ -601,7 +601,11 @@ fn child_attaches_control(directory: &Path) {
             .config_file("/dev/null")
             .build()
             .expect("the server builds");
-        let session = server.new_session("probe").await.expect("tmux runs");
+        let receipt = server.new_session("probe").await.expect("tmux runs");
+        let session = server
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
         let version = server
             .capabilities()
             .await

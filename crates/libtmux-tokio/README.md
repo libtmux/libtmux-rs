@@ -82,7 +82,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
 
-    let session = server.new_session("work").await?;
+    let receipt = server.new_session("work").await?;
+    let session = server.inspect_session(&receipt).await?;
     let window = session.new_window("editor").await?;
     let pane = window.active_pane().await?.expect("a window has a pane");
 
@@ -292,7 +293,7 @@ use std::time::Duration;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
-    let session = guard.server().new_session("waiting").await?;
+    let session = guard.session("waiting").await?;
     let pane = session.panes().await?.remove(0);
 
     pane.send_line("printf 'ready\n'").await?;
@@ -359,7 +360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #     guard.shutdown().await?;
 #     return Ok(());
 # }
-    let session = guard.server().new_session("watching").await?;
+    let session = guard.session("watching").await?;
     let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
         .await?
         .split();
@@ -454,7 +455,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
 
-    let ci = server.new_session("ci").await?;
+    let receipt = server.new_session("ci").await?;
+    let ci = server.inspect_session(&receipt).await?;
     ci.new_window("build").await?;
     server.new_session("idle").await?;
 
@@ -501,7 +503,7 @@ use libtmux_tokio::test::TestServer;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
-    let session = guard.server().new_session("work").await?;
+    let session = guard.session("work").await?;
 
     match session.windows().await {
         Ok(windows) => println!("{} windows", windows.len()),
@@ -583,7 +585,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #     guard.shutdown().await?;
 #     return Ok(());
 # }
-    let session = guard.server().new_session("routed").await?;
+    let session = guard.session("routed").await?;
 
     let (commands, events) = ControlMode::attach(guard.server(), session.id())
         .await?
@@ -676,7 +678,8 @@ use libtmux_tokio::{Command, test::TestServer};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
-    let session = server.new_session("escape-hatch").await?;
+    let receipt = server.new_session("escape-hatch").await?;
+    let session = server.inspect_session(&receipt).await?;
     let pane = session.panes().await?.remove(0);
 
     // `Pane::clock_mode` has no typed way back out for every mode, so this is

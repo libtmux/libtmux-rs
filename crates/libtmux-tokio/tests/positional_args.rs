@@ -137,8 +137,8 @@ async fn real_tmux_compat_dash_creation_commands_are_not_flags() {
 
     // The shell refuses -d; retaining exited panes makes its exact command
     // observable without racing the process exit against the creation reply.
-    let session = server
-        .new_session(NewSession::new("created").command("-d"))
+    let session = guard
+        .session(NewSession::new("created").command("-d"))
         .await
         .expect("the session command is positional");
     let first = session.panes().await.expect("panes").remove(0);
@@ -187,7 +187,10 @@ async fn real_tmux_compat_dash_plan_commands_are_not_flags() {
         let mut plan = Plan::new();
         let window = plan.add(NewWindow::new(session.id().clone()).command("-d").focus());
         plan.add(SplitWindow::new(window).command("-d").focus());
-        let result = server.run_plan(&plan, planner).await.expect("the plan runs");
+        let result = server
+            .run_plan(&plan, planner)
+            .await
+            .expect("the plan runs");
         assert!(result.is_complete(), "{planner:?}: {result:?}");
         let id = result.created(0).expect("the window has an id");
         let window = session

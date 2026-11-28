@@ -36,7 +36,10 @@ async fn layout_preflight_validates_syntax_before_endpoint_version_check() {
         .validate_layouts([(OsStr::new("t"), 1)])
         .await
         .unwrap_err();
-    assert!(matches!(error, libtmux_tokio::Error::ExecutableNotFound { .. }));
+    assert!(matches!(
+        error,
+        libtmux_tokio::Error::ExecutableNotFound { .. }
+    ));
     let error = server
         .validate_layouts([
             (OsStr::new("main-horizontal-mirrored"), 1),
@@ -166,10 +169,7 @@ async fn creating_an_object_returns_it_hydrated_in_one_command() {
     let server = guard.server();
 
     // A bare name is enough for the common case.
-    let session = server
-        .new_session("work")
-        .await
-        .expect("session is created");
+    let session = guard.session("work").await.expect("session is created");
     assert_eq!(session.name().as_bytes().to_vec(), b"work".to_vec());
     assert_eq!(session.window_count(), 1);
     // The handle came back populated, so no follow-up listing was needed.
@@ -201,11 +201,10 @@ async fn creating_an_object_returns_it_hydrated_in_one_command() {
 #[tokio::test]
 async fn creation_options_reach_tmux() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
     let directory = tempfile::tempdir().expect("temporary directory");
 
-    let session = server
-        .new_session(
+    let session = guard
+        .session(
             NewSession::new("configured")
                 .window_name("first")
                 .start_directory(directory.path())
@@ -242,12 +241,8 @@ async fn creation_options_reach_tmux() {
 #[tokio::test]
 async fn a_new_window_does_not_steal_selection_unless_asked() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
 
-    let session = server
-        .new_session("work")
-        .await
-        .expect("session is created");
+    let session = guard.session("work").await.expect("session is created");
     let first = session
         .active_window()
         .await
@@ -287,12 +282,8 @@ async fn a_new_window_does_not_steal_selection_unless_asked() {
 #[tokio::test]
 async fn renaming_updates_the_handle_that_performed_it() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
 
-    let mut session = server
-        .new_session("before")
-        .await
-        .expect("session is created");
+    let mut session = guard.session("before").await.expect("session is created");
     session.rename("after").await.expect("rename succeeds");
     assert_eq!(session.name().as_bytes().to_vec(), b"after".to_vec());
 
@@ -309,9 +300,8 @@ async fn renaming_updates_the_handle_that_performed_it() {
 #[tokio::test]
 async fn flag_shaped_names_layouts_and_keys_stay_literal() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let mut session = server
-        .new_session(NewSession::new("ordinary").command("cat"))
+    let mut session = guard
+        .session(NewSession::new("ordinary").command("cat"))
         .await
         .expect("session is created");
     let mut window = session
@@ -402,8 +392,8 @@ async fn flag_shaped_commands_and_paths_stay_literal() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server
-        .new_session(NewSession::new("respawn").command("cat"))
+    let session = guard
+        .session(NewSession::new("respawn").command("cat"))
         .await
         .expect("session is created");
     let mut window = session
@@ -502,10 +492,7 @@ async fn killing_removes_the_object_and_strands_other_handles() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let session = server
-        .new_session("doomed")
-        .await
-        .expect("session is created");
+    let session = guard.session("doomed").await.expect("session is created");
     server
         .new_session("survivor")
         .await
@@ -532,10 +519,7 @@ async fn unlink_removes_one_link_while_kill_removes_the_window() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let origin = server
-        .new_session("origin")
-        .await
-        .expect("session is created");
+    let origin = guard.session("origin").await.expect("session is created");
     server
         .new_session("borrower")
         .await
@@ -598,10 +582,9 @@ async fn unlink_removes_one_link_while_kill_removes_the_window() {
 #[tokio::test]
 async fn pane_input_and_capture_round_trip_through_a_shell() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
 
-    let session = server
-        .new_session(NewSession::new("io").command("sh"))
+    let session = guard
+        .session(NewSession::new("io").command("sh"))
         .await
         .expect("session is created");
     let mut pane = session
@@ -662,8 +645,8 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
 async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server
-        .new_session("line-cancellation")
+    let session = guard
+        .session("line-cancellation")
         .await
         .expect("session is created");
     let pane = session.panes().await.expect("panes list").remove(0);
@@ -723,9 +706,8 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
 #[tokio::test]
 async fn a_line_send_preserves_adversarial_literal_text() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server
-        .new_session("literal-line")
+    let session = guard
+        .session("literal-line")
         .await
         .expect("session is created");
     let pane = session.panes().await.expect("panes list").remove(0);
@@ -776,8 +758,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
 async fn a_line_send_redacts_input_and_classifies_a_gone_pane() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let session = guard
-        .server()
-        .new_session("line-error")
+        .session("line-error")
         .await
         .expect("session is created");
     let window = session
@@ -824,9 +805,8 @@ async fn killing_the_server_leaves_nothing_running() {
 #[tokio::test]
 async fn pane_operations_reshape_the_hierarchy() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
 
-    let session = server.new_session("shaping").await.expect("session");
+    let session = guard.session("shaping").await.expect("session");
     let window = session
         .windows()
         .await
@@ -871,10 +851,9 @@ async fn pane_operations_reshape_the_hierarchy() {
 #[tokio::test]
 async fn window_operations_move_and_resize() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("moving").await.expect("session");
-    let destination = server
-        .new_session("moved-into")
+    let session = guard.session("moving").await.expect("session");
+    let destination = guard
+        .session("moved-into")
         .await
         .expect("destination session");
 
@@ -929,10 +908,8 @@ async fn handle_mutations_reject_another_server() {
 
     let left_guard = TestServer::builder().start().await.expect("tmux starts");
     let right_guard = TestServer::builder().start().await.expect("tmux starts");
-    let left = left_guard.server();
-    let right = right_guard.server();
-    let left_session = left.new_session("left").await.expect("left session");
-    let right_session = right.new_session("right").await.expect("right session");
+    let left_session = left_guard.session("left").await.expect("left session");
+    let right_session = right_guard.session("right").await.expect("right session");
     let mut left_window = left_session
         .active_window()
         .await
@@ -989,7 +966,7 @@ async fn handle_mutations_reject_another_server() {
 async fn pane_window_follows_an_external_move() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("pane-moved").await.expect("session");
+    let session = guard.session("pane-moved").await.expect("session");
     let source = session
         .active_window()
         .await
@@ -999,8 +976,8 @@ async fn pane_window_follows_an_external_move() {
         .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
         .await
         .expect("moving pane");
-    let destination_session = server
-        .new_session(NewSession::new("pane-destination").command("sleep 300"))
+    let destination_session = guard
+        .session(NewSession::new("pane-destination").command("sleep 300"))
         .await
         .expect("destination session");
     let destination = destination_session
@@ -1042,7 +1019,7 @@ async fn pane_window_follows_an_external_move() {
 async fn a_session_environment_is_set_read_and_removed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("environed").await.expect("session");
+    let session = guard.session("environed").await.expect("session");
 
     assert!(
         session.environment("EDITOR").await.expect("read").is_none(),
@@ -1100,8 +1077,8 @@ async fn a_session_environment_is_set_read_and_removed() {
 async fn a_window_linked_into_two_sessions_is_one_window() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let source = server.new_session("linking-from").await.expect("session");
-    let target = server.new_session("linking-to").await.expect("session");
+    let source = guard.session("linking-from").await.expect("session");
+    let target = guard.session("linking-to").await.expect("session");
 
     let mut window = source
         .new_window(NewWindowOptions::new("shared").command("sleep 300"))
@@ -1140,8 +1117,8 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
         b"renamed",
     );
 
-    let destination = server
-        .new_session("linking-destination")
+    let destination = guard
+        .session("linking-destination")
         .await
         .expect("destination session");
     let selected = server
@@ -1213,7 +1190,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
 async fn objects_are_found_by_their_tmux_identity() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("identified").await.expect("session");
+    let session = guard.session("identified").await.expect("session");
     let window = session
         .new_window(NewWindowOptions::new("found").command("sleep 300"))
         .await
@@ -1269,7 +1246,7 @@ async fn a_failure_says_what_to_do_about_it() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("classified").await.expect("session");
+    let session = guard.session("classified").await.expect("session");
 
     // An object that has gone is the branch a caller writes most: it means
     // look again or create, not that the request was wrong.
@@ -1370,7 +1347,11 @@ async fn a_name_with_ambiguous_separators_is_rejected_before_creation() {
         .expect("tmux accepts the name");
 
     let found = server
-        .cmd(libtmux_tokio::Command::new("has-session").arg("-t").arg("a:b"))
+        .cmd(
+            libtmux_tokio::Command::new("has-session")
+                .arg("-t")
+                .arg("a:b"),
+        )
         .await
         .expect("the command runs");
     assert!(
@@ -1409,8 +1390,8 @@ async fn a_taken_session_name_is_classified_rather_than_a_bare_refusal() {
     // handles, so it arrives as its own variant rather than as text to
     // match on. Checking with has-session first would race: another process
     // can take the name between the check and the create.
-    let error = server
-        .new_session("taken")
+    let error = guard
+        .session("taken")
         .await
         .map(|_| ())
         .expect_err("tmux refuses a duplicate name");
@@ -1432,11 +1413,7 @@ async fn directional_focus_follows_the_layout_and_wraps_at_the_edge() {
     use libtmux_tokio::{NewWindowOptions, PaneDirection, SplitDirection};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("directions")
-        .await
-        .expect("session");
+    let session = guard.session("directions").await.expect("session");
 
     // Two panes, one above the other. Kept to two because `split` divides
     // whichever pane is active, and splitting is detached by default, so a
@@ -1533,8 +1510,7 @@ async fn directional_focus_follows_the_layout_and_wraps_at_the_edge() {
 #[tokio::test]
 async fn a_layout_is_named_saved_or_stepped_through() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("layouts").await.expect("session");
+    let session = guard.session("layouts").await.expect("session");
     let mut window = session
         .active_window()
         .await
@@ -1605,10 +1581,7 @@ async fn a_layout_is_named_saved_or_stepped_through() {
 async fn real_tmux_compat_saved_layout_pane_identity_needs_json() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server
-        .new_session("layout-identity")
-        .await
-        .expect("session");
+    let session = guard.session("layout-identity").await.expect("session");
     let mut window = session
         .active_window()
         .await
@@ -1714,7 +1687,7 @@ async fn real_tmux_compat_saved_layout_pane_identity_needs_json() {
 async fn a_value_that_is_not_a_layout_is_refused_before_dispatch() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("not-a-layout").await.expect("session");
+    let session = guard.session("not-a-layout").await.expect("session");
     let mut window = session
         .active_window()
         .await
@@ -1753,7 +1726,7 @@ async fn a_value_that_is_not_a_layout_is_refused_before_dispatch() {
 async fn a_unique_layout_prefix_applies_an_ambiguous_one_names_its_candidates() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("layout-prefix").await.expect("session");
+    let session = guard.session("layout-prefix").await.expect("session");
     let mut window = session
         .active_window()
         .await
@@ -1827,7 +1800,7 @@ async fn a_unique_layout_prefix_applies_an_ambiguous_one_names_its_candidates() 
 async fn a_json_layout_on_an_old_tmux_names_the_version_it_needs() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("json-layout").await.expect("session");
+    let session = guard.session("json-layout").await.expect("session");
     let mut window = session
         .active_window()
         .await
@@ -1887,7 +1860,7 @@ async fn a_pane_broken_out_can_be_joined_back() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("moving").await.expect("session");
+    let session = guard.session("moving").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -1941,7 +1914,7 @@ async fn a_pane_broken_out_can_be_joined_back() {
 async fn respawning_and_locking_reach_every_level_tmux_offers() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("levels").await.expect("session");
+    let session = guard.session("levels").await.expect("session");
     let mut window = session
         .active_window()
         .await
@@ -1992,8 +1965,7 @@ async fn respawning_and_locking_reach_every_level_tmux_offers() {
 #[tokio::test]
 async fn a_dead_panes_pid_is_absent_rather_than_a_decode_failure() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("dead-pid").await.expect("session");
+    let session = guard.session("dead-pid").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -2084,7 +2056,7 @@ fn place(windows: &[libtmux_tokio::Window], id: &str) -> i32 {
 async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("home").await.expect("session");
+    let session = guard.session("home").await.expect("session");
     for name in ["second", "third", "fourth"] {
         session
             .new_window(NewWindowOptions::new(name))
@@ -2127,9 +2099,8 @@ async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
 #[tokio::test]
 async fn swapping_windows_across_sessions_refreshes_the_destination_link() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let left = server.new_session("left").await.expect("left session");
-    let right = server.new_session("right").await.expect("right session");
+    let left = guard.session("left").await.expect("left session");
+    let right = guard.session("right").await.expect("right session");
     let mut left_window = left
         .active_window()
         .await
@@ -2175,7 +2146,7 @@ async fn swapping_windows_across_sessions_refreshes_the_destination_link() {
 async fn a_rendered_window_target_survives_a_renumber() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("home").await.expect("session");
+    let session = guard.session("home").await.expect("session");
     for name in ["second", "third", "fourth"] {
         session
             .new_window(NewWindowOptions::new(name))
@@ -2266,8 +2237,7 @@ async fn a_new_session_carries_environment_to_its_first_process() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
 
     let session = guard
-        .server()
-        .new_session(NewSession::new("env").environment("LIBTMUX_RS", "set-here"))
+        .session(NewSession::new("env").environment("LIBTMUX_RS", "set-here"))
         .await
         .expect("the session is created");
     let pane = session.panes().await.expect("panes list").remove(0);
@@ -2291,8 +2261,7 @@ async fn a_new_session_carries_environment_to_its_first_process() {
 async fn a_pane_reaches_the_session_it_was_found_through() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let session = guard
-        .server()
-        .new_session("reach")
+        .session("reach")
         .await
         .expect("the session is created");
     let pane = session.panes().await.expect("panes list").remove(0);

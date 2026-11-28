@@ -748,8 +748,8 @@ mod tests {
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let session = server
-            .new_session("input-placement-source")
+        let session = guard
+            .session("input-placement-source")
             .await
             .expect("source session starts");
         let pane = session.panes().await.expect("source panes list").remove(0);
@@ -794,8 +794,8 @@ mod tests {
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let session = server
-            .new_session("input-repeated-link")
+        let session = guard
+            .session("input-repeated-link")
             .await
             .expect("session starts");
         let pane = session.panes().await.expect("source panes list").remove(0);
@@ -829,8 +829,8 @@ mod tests {
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let pane = server
-            .new_session("input-caller-signature")
+        let pane = guard
+            .session("input-caller-signature")
             .await
             .expect("session starts")
             .panes()
@@ -871,13 +871,13 @@ mod tests {
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let source = server
-            .new_session("input-caller-source")
+        let source = guard
+            .session("input-caller-source")
             .await
             .expect("source session starts");
         let pane = source.panes().await.expect("source panes list").remove(0);
-        let linked = server
-            .new_session("input-caller-linked")
+        let linked = guard
+            .session("input-caller-linked")
             .await
             .expect("linked session starts");
         server

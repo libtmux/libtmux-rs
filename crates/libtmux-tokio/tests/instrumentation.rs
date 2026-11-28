@@ -150,7 +150,7 @@ async fn dispatch_each_outcome(server: &Server) -> ErrorKind {
 async fn each_dispatch_runs_in_one_span_on_either_transport() {
     let guard = TestServer::new().await.expect("tmux starts");
     let server = guard.server().clone();
-    let session = server.new_session("spans").await.expect("a session");
+    let session = guard.session("spans").await.expect("a session");
     // The version probe is a dispatch of its own; take it before collecting.
     server
         .capabilities()

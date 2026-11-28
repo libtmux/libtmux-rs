@@ -980,7 +980,7 @@ impl ControlSender {
     /// #     guard.shutdown().await?;
     /// #     return Ok(());
     /// # }
-    /// let session = guard.server().new_session("watched").await?;
+    /// let session = guard.session("watched").await?;
     /// let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
     ///     .await?
     ///     .split();

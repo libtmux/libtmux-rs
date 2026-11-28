@@ -63,7 +63,10 @@ fn input_dispatch(
     Some(commands.fold(CommandChain::new(first), CommandChain::then))
 }
 
-async fn delete_private_paste_buffer(server: &libtmux_tokio::Server, name: &str) -> Result<(), Error> {
+async fn delete_private_paste_buffer(
+    server: &libtmux_tokio::Server,
+    name: &str,
+) -> Result<(), Error> {
     if server.buffer(name).await?.is_none() {
         return Ok(());
     }
@@ -101,7 +104,10 @@ impl TmuxTools {
     }
 
     /// Refuse to destroy a session that currently contains the caller pane.
-    async fn protect_session_caller(&self, session: &libtmux_tokio::Session) -> Result<(), ToolError> {
+    async fn protect_session_caller(
+        &self,
+        session: &libtmux_tokio::Session,
+    ) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
@@ -277,11 +283,16 @@ impl TmuxTools {
             options = options.start_directory(directory);
         }
 
-        let session = self
+        let receipt = self
             .server
             .new_session(options)
             .await
             .map_err(|e| tmux_error(&e))?;
+        let session = self
+            .server
+            .inspect_session(&receipt)
+            .await
+            .map_err(|e| tmux_error(&e.after_creation(receipt)))?;
         let foreign_attached = self.foreign_attached_sessions().await;
 
         Ok(Json(SessionView {
@@ -821,8 +832,7 @@ mod tests {
     async fn a_later_send_keys_failure_reports_the_first_effect() {
         let guard = TestServer::builder().start().await.expect("tmux starts");
         let session = guard
-            .server()
-            .new_session("send-boundary")
+            .session("send-boundary")
             .await
             .expect("a session starts");
         session

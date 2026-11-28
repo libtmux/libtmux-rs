@@ -55,7 +55,7 @@ impl Window {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("opts").await?;
+    /// let session = guard.session("opts").await?;
     /// let window = session.new_window("w").await?;
     ///
     /// window.set_option("main-pane-width", "99").await?;
@@ -237,7 +237,7 @@ impl Window {
     /// use libtmux_tokio::{IndexedHooks, ReplaceMode, TmuxText};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let session = guard.session("hooked").await?;
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// let mut entries = BTreeMap::new();
@@ -296,7 +296,7 @@ impl Window {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let session = guard.session("hooked").await?;
     /// let window = session.new_window("w").await?;
     ///
     /// assert!(window.hook("pane-died").await?.is_none());

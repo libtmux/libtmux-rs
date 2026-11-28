@@ -37,7 +37,7 @@ mod settings;
 /// use libtmux_tokio::{PaneDirection, SplitDirection};
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 /// let lower = window.split(SplitDirection::Below).await?;
 ///
@@ -272,7 +272,7 @@ impl PaneDirection {
 /// use libtmux_tokio::SplitDirection;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 ///
 /// // Splitting is detached by default, so focus stays where it was.
@@ -319,7 +319,8 @@ impl Window {
     /// # let server = guard.server();
     /// use libtmux_tokio::Window;
     ///
-    /// let session = server.new_session("locating-window").await?;
+    /// let receipt = server.new_session("locating-window").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let pane = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
@@ -451,7 +452,7 @@ impl Window {
     /// use std::time::{Duration, SystemTime};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("busy").await?;
+    /// let session = guard.session("busy").await?;
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// // A window that has just been made has already produced output.
@@ -630,7 +631,7 @@ impl Window {
     /// use libtmux_tokio::Layout;
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("arranged").await?;
+    /// let session = guard.session("arranged").await?;
     /// let mut window = session.active_window().await?.expect("a window");
     ///
     /// window.select_layout(Layout::Tiled).await?;
@@ -818,7 +819,7 @@ impl Window {
     /// use libtmux_tokio::{Rotation, SplitDirection, SplitOptions};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("turning").await?;
+    /// let session = guard.session("turning").await?;
     /// let mut window = session.active_window().await?.expect("a window");
     /// window.split(SplitOptions::new(SplitDirection::Below)).await?;
     ///
@@ -918,7 +919,7 @@ impl Window {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("raw").await?;
+    /// let session = guard.session("raw").await?;
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// let result = window
@@ -955,7 +956,7 @@ impl Window {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("shown").await?;
+    /// let session = guard.session("shown").await?;
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// let expanded = window.format("#{window_id}").await?;
@@ -1152,7 +1153,8 @@ impl Window {
     /// # let server = guard.server();
     /// use libtmux_tokio::ResizeDirection;
     ///
-    /// let session = server.new_session("resized-window").await?;
+    /// let receipt = server.new_session("resized-window").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let mut window = session.windows().await?.remove(0);
     ///
     /// window.resize(80, 24).await?;
@@ -1208,8 +1210,10 @@ impl Window {
     /// # runtime.block_on(async {
     /// # let guard = libtmux_tokio::test::TestServer::new().await?;
     /// # let server = guard.server();
-    /// let source = server.new_session("linking-from").await?;
-    /// let target = server.new_session("linking-to").await?;
+    /// let receipt = server.new_session("linking-from").await?;
+    /// let source = server.inspect_session(&receipt).await?;
+    /// let receipt = server.new_session("linking-to").await?;
+    /// let target = server.inspect_session(&receipt).await?;
     /// let window = source.windows().await?.remove(0);
     ///
     /// window.link_to(&target, None).await?;
@@ -1260,7 +1264,8 @@ impl Window {
     /// # runtime.block_on(async {
     /// # let guard = libtmux_tokio::test::TestServer::new().await?;
     /// # let server = guard.server();
-    /// let session = server.new_session("sized").await?;
+    /// let receipt = server.new_session("sized").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let mut window = session.windows().await?.remove(0);
     ///
     /// window.resize(100, 40).await?;
@@ -1346,7 +1351,7 @@ impl Window {
     /// use libtmux_tokio::{Availability, Window};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
+    /// let session = guard.session("read").await?;
     /// let window = session.active_window().await?.expect("a session has a window");
     /// let fields = Window::filter_fields();
     ///
@@ -1423,7 +1428,7 @@ impl FilterSchema for Window {
 /// use libtmux_tokio::{Rotation, SplitDirection};
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 /// window.split(SplitDirection::Below).await?;
 ///
@@ -1471,7 +1476,7 @@ impl Rotation {
 /// use libtmux_tokio::Layout;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("arranged").await?;
+/// let session = guard.session("arranged").await?;
 /// let mut window = session.active_window().await?.expect("a window");
 ///
 /// window.select_layout(Layout::EvenHorizontal).await?;
@@ -1575,7 +1580,7 @@ impl fmt::Display for Layout {
 /// use libtmux_tokio::Layout;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("restored").await?;
+/// let session = guard.session("restored").await?;
 /// let mut window = session.active_window().await?.expect("a window");
 ///
 /// // Keep what tmux reports, rearrange, then put it back exactly.
@@ -1782,7 +1787,7 @@ pub use libtmux_core::SplitDirection;
 /// use libtmux_tokio::{JoinOptions, SplitDirection};
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("moving").await?;
+/// let session = guard.session("moving").await?;
 /// let window = session.active_window().await?.expect("a window");
 /// let second = session.new_window("elsewhere").await?;
 /// let stranded = second.panes().await?.remove(0);
@@ -1864,7 +1869,7 @@ impl JoinOptions {
 /// assert_eq!(PaneSize::Percent(25).to_string(), "25%");
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 ///
 /// let pane = window
@@ -1912,7 +1917,7 @@ impl fmt::Display for PaneSize {
 /// use libtmux_tokio::ResizeDirection;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let mut window = session.active_window().await?.expect("a session has a window");
 ///
 /// // The direction names the edge that moves, so `Down` makes a window taller
@@ -1965,7 +1970,7 @@ impl ResizeDirection {
 /// use libtmux_tokio::{SplitDirection, SplitOptions};
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("split").await?;
+/// let session = guard.session("split").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 ///
 /// // Splitting leaves focus where it was unless asked otherwise, so a caller

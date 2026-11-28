@@ -139,7 +139,7 @@ async fn control_acquisition_rank(reported: &str, refused: bool) {
     let Some(guard) = qualified_fixture().await else {
         return;
     };
-    let session = guard.server().new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned witness");
     let marker = directory.path().join("control-started");
     let wrapper = directory.path().join("tmux");
@@ -233,11 +233,7 @@ async fn real_tmux_compat_optional_control_refuses_3_3a_before_identification() 
         .start()
         .await
         .expect("3.3a starts");
-    let session = guard
-        .server()
-        .new_session("keeper")
-        .await
-        .expect("ordinary creation");
+    let session = guard.session("keeper").await.expect("ordinary creation");
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned witness");
     let marker = directory.path().join("control-started");
     let wrapper = directory.path().join("tmux");
@@ -270,7 +266,7 @@ async fn real_tmux_compat_optional_control_owns_a_private_socket_carrier() {
     let Some(guard) = qualified_fixture().await else {
         return;
     };
-    let session = guard.server().new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let control = ControlMode::attach(guard.server(), session.id())
         .await
         .expect("qualified control");
@@ -388,7 +384,7 @@ async fn real_tmux_compat_optional_control_probes_share_one_acquisition_deadline
     let Some(guard) = qualified_fixture().await else {
         return;
     };
-    let session = guard.server().new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned probe witness");
     let server = delayed_server(&guard, directory.path(), "1.2", Duration::from_secs(2));
     let result = ControlMode::attach(&server, session.id()).await;
@@ -412,7 +408,7 @@ async fn real_tmux_compat_optional_control_cancellation_reaps_the_probe_and_carr
     let Some(guard) = qualified_fixture().await else {
         return;
     };
-    let session = guard.server().new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned probe witness");
     let server = delayed_server(
         &guard,
@@ -451,7 +447,7 @@ async fn real_tmux_compat_optional_control_replacement_cannot_redirect_identific
     let Some(guard) = qualified_fixture().await else {
         return;
     };
-    let session = guard.server().new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned witness");
     let wrapper = directory.path().join("tmux");
     let witness = directory.path().join("witness.json");
@@ -567,7 +563,7 @@ async fn real_tmux_compat_optional_control_opening_shares_the_acquisition_deadli
     let Some(guard) = qualified_fixture().await else {
         return;
     };
-    let session = guard.server().new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned opening witness");
     std::fs::write(directory.path().join("mode"), "slow").expect("slow opening");
     let server = delayed_opening_server(&guard, directory.path(), Duration::from_millis(700));

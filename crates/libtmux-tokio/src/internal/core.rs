@@ -387,13 +387,19 @@ fn map_identity_error(error: &IdentityError) -> ServerConfigurationErrorKind {
 }
 
 pub(crate) struct Core {
+    driver: Arc<DriverState>,
+    generation: Option<crate::ServerGeneration>,
+    #[cfg(test)]
+    check_versions: bool,
+}
+
+struct DriverState {
     configuration: CoreConfiguration,
     executor: Arc<dyn Executor>,
+    ordinary_executor: Arc<dyn Executor>,
     capabilities: OnceCell<EngineCapabilities>,
     next_request_id: AtomicU64,
     server_version: Arc<crate::internal::support::versions::VersionCache>,
-    #[cfg(test)]
-    check_versions: bool,
     /// The `wait-for` channels this handle has a client on, or a signal for.
     ///
     /// Shared by every clone of a [`crate::Server`], because the clients are
@@ -431,20 +437,44 @@ impl Core {
     fn with_executor(configuration: CoreConfiguration, executor: Arc<dyn Executor>) -> Self {
         #[cfg(feature = "control-mode")]
         let control_client_limits = configuration.control_client_limits;
-        Self {
+        let driver = DriverState {
             configuration,
+            ordinary_executor: Arc::clone(&executor),
             executor,
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
             server_version: Arc::default(),
-            #[cfg(test)]
-            check_versions: true,
             channel_waits: ChannelWaits::default(),
             #[cfg(feature = "control-mode")]
             persistent_clients: PersistentClients::new(control_client_limits),
             #[cfg(feature = "control-mode")]
             control_client_pids: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        };
+        Self {
+            driver: Arc::new(driver),
+            generation: None,
+            #[cfg(test)]
+            check_versions: true,
         }
+    }
+
+    pub(crate) const fn expected_generation(&self) -> Option<crate::ServerGeneration> {
+        self.generation
+    }
+
+    /// Bind derived handles to the daemon that supplied their IDs.
+    pub(crate) fn bound_to(&self, expected: crate::ServerGeneration) -> Result<Self, Error> {
+        if let Some(found) = self.generation {
+            if found != expected {
+                return Err(Error::ServerGenerationChanged { expected, found });
+            }
+        }
+        Ok(Self {
+            driver: Arc::clone(&self.driver),
+            generation: Some(expected),
+            #[cfg(test)]
+            check_versions: self.check_versions,
+        })
     }
 
     /// Build a core that dispatches over an already-attached connection.
@@ -461,22 +491,31 @@ impl Core {
         // A version cannot be asked over the connection without a hook:
         // `run-shell -C` reports its answer outside any block. The attach
         // already checked the daemon this connection reaches, so carry that.
-        self.server_version.remember(sender.version().clone());
+        self.driver
+            .server_version
+            .remember(sender.version().clone());
         let executor = crate::internal::control_executor::ControlModeExecutor::new(sender);
 
-        Self {
-            configuration: self.configuration.clone(),
+        let driver = DriverState {
+            ordinary_executor: Arc::clone(&self.driver.ordinary_executor),
+            configuration: self.driver.configuration.clone(),
             executor: Arc::new(executor),
             capabilities: OnceCell::new_with(Some(capabilities)),
             next_request_id: AtomicU64::new(1),
-            server_version: Arc::clone(&self.server_version),
-            #[cfg(test)]
-            check_versions: true,
+            server_version: Arc::clone(&self.driver.server_version),
             channel_waits: ChannelWaits::default(),
-            persistent_clients: PersistentClients::new(self.configuration.control_client_limits),
+            persistent_clients: PersistentClients::new(
+                self.driver.configuration.control_client_limits,
+            ),
             // Shared with the parent: a control client this process spawned is
             // the same process whichever handle dispatches through it.
-            control_client_pids: Arc::clone(&self.control_client_pids),
+            control_client_pids: Arc::clone(&self.driver.control_client_pids),
+        };
+        Self {
+            driver: Arc::new(driver),
+            generation: self.generation,
+            #[cfg(test)]
+            check_versions: true,
         }
     }
 
@@ -505,7 +544,7 @@ impl Core {
     }
 
     fn next_request_id(&self) -> RequestId {
-        RequestId::new(self.next_request_id.fetch_add(1, Ordering::Relaxed))
+        RequestId::new(self.driver.next_request_id.fetch_add(1, Ordering::Relaxed))
     }
 
     pub(crate) async fn execute(&self, command: Command) -> Result<CommandResult, Error> {
@@ -513,30 +552,31 @@ impl Core {
         // that reads a line. A subprocess dispatch pays nothing for it.
         #[cfg(feature = "control-mode")]
         let control_line = self
+            .driver
             .executor
             .renders_control_line()
             .then(|| command.control_mode_line());
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
-            &self.configuration.global_argv,
+            &self.driver.configuration.global_argv,
             command,
         );
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
         if request.is_client_diagnostic() {
             #[cfg(feature = "control-mode")]
-            if self.executor.renders_control_line() {
+            if self.driver.executor.renders_control_line() {
                 return crate::internal::executor::DispatchSpan::new(&request, "control")
                     .run(async { Err(Error::control_mode_unrepresentable()) })
                     .await;
             }
-            return self.executor.execute(request).await;
+            return self.driver.executor.execute(request).await;
         }
         self.dispatch_checked(request, false).await
     }
 
     pub(crate) fn operation_deadline(&self) -> Option<tokio::time::Instant> {
-        tokio::time::Instant::now().checked_add(self.configuration.timeout)
+        tokio::time::Instant::now().checked_add(self.driver.configuration.timeout)
     }
 
     pub(crate) async fn execute_operation(
@@ -547,28 +587,30 @@ impl Core {
     ) -> Result<(CommandResult, bool), Error> {
         let request = CommandRequest::native_argv(
             self.next_request_id(),
-            &self.configuration.global_argv,
+            &self.driver.configuration.global_argv,
             arguments,
             summary,
         );
-        super::process::validate_request(&self.configuration.launch, &request)
+        let request = request.for_generation(self.generation);
+        super::process::validate_request(&self.driver.configuration.launch, &request)
             .map_err(super::operation::OperationContext::before_dispatch)?;
         #[cfg(test)]
         if !self.check_versions {
             let result = self
-                .executor
+                .driver
+                .ordinary_executor
                 .execute_operation(request, operation.clone())
                 .await?;
             return Ok((result, operation.is_late()));
         }
         let result = super::support::versions::dispatch(
-            Arc::clone(&self.executor),
-            self.configuration.clone(),
+            Arc::clone(&self.driver.ordinary_executor),
+            self.driver.configuration.clone(),
             request,
             self.next_request_id(),
             self.next_request_id(),
             false,
-            Arc::clone(&self.server_version),
+            Arc::clone(&self.driver.server_version),
             Some(operation.clone()),
         )
         .await
@@ -588,12 +630,13 @@ impl Core {
     ) -> (RequestId, crate::internal::executor::DispatchFuture) {
         #[cfg(feature = "control-mode")]
         let control_line = self
+            .driver
             .executor
             .renders_control_line()
             .then(|| command.control_mode_line());
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
-            &self.configuration.global_argv,
+            &self.driver.configuration.global_argv,
             command,
         )
         .without_deadline();
@@ -604,8 +647,8 @@ impl Core {
     }
 
     /// The `wait-for` channels this handle has a client on, or a signal for.
-    pub(crate) const fn channel_waits(&self) -> &ChannelWaits {
-        &self.channel_waits
+    pub(crate) fn channel_waits(&self) -> &ChannelWaits {
+        &self.driver.channel_waits
     }
 
     /// Whether this handle dispatches over a connection someone else holds.
@@ -615,18 +658,19 @@ impl Core {
     /// ask.
     #[cfg(feature = "control-mode")]
     pub(crate) fn routes_over_control_mode(&self) -> bool {
-        self.executor.renders_control_line()
+        self.driver.executor.renders_control_line()
     }
 
     pub(crate) async fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
         #[cfg(feature = "control-mode")]
         let control_line = self
+            .driver
             .executor
             .renders_control_line()
             .then(|| chain.control_mode_line());
         let request = CommandRequest::chain_with_global_argv(
             self.next_request_id(),
-            &self.configuration.global_argv,
+            &self.driver.configuration.global_argv,
             chain,
         );
         #[cfg(feature = "control-mode")]
@@ -639,11 +683,12 @@ impl Core {
         request: CommandRequest,
         absent_cleanup: bool,
     ) -> crate::internal::executor::DispatchFuture {
+        let request = request.for_generation(self.generation);
         if let Err(error) =
-            crate::internal::process::validate_request(&self.configuration.launch, &request)
+            crate::internal::process::validate_request(&self.driver.configuration.launch, &request)
         {
             #[cfg(feature = "control-mode")]
-            let transport = if self.executor.renders_control_line() {
+            let transport = if self.driver.executor.renders_control_line() {
                 "control"
             } else {
                 "subprocess"
@@ -655,16 +700,16 @@ impl Core {
         }
         #[cfg(test)]
         if !self.check_versions {
-            return self.executor.execute(request);
+            return self.driver.executor.execute(request);
         }
         crate::internal::support::versions::dispatch(
-            Arc::clone(&self.executor),
-            self.configuration.clone(),
+            Arc::clone(&self.driver.executor),
+            self.driver.configuration.clone(),
             request,
             self.next_request_id(),
             self.next_request_id(),
             absent_cleanup,
-            Arc::clone(&self.server_version),
+            Arc::clone(&self.driver.server_version),
             None,
         )
     }
@@ -675,11 +720,11 @@ impl Core {
             return Ok(self.capabilities().await?.tmux_version().clone());
         }
         crate::internal::support::versions::format_version(
-            &self.executor,
-            &self.configuration,
+            &self.driver.executor,
+            &self.driver.configuration,
             self.next_request_id(),
             self.next_request_id(),
-            &self.server_version,
+            &self.driver.server_version,
         )
         .await
     }
@@ -693,11 +738,11 @@ impl Core {
             .map_err(Into::into);
         }
         crate::internal::support::versions::endpoint_version(
-            &self.executor,
-            &self.configuration,
+            &self.driver.executor,
+            &self.driver.configuration,
             self.next_request_id(),
             self.next_request_id(),
-            &self.server_version,
+            &self.driver.server_version,
         )
         .await
     }
@@ -706,12 +751,13 @@ impl Core {
         let command = Command::new("kill-server");
         #[cfg(feature = "control-mode")]
         let control_line = self
+            .driver
             .executor
             .renders_control_line()
             .then(|| command.control_mode_line());
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
-            &self.configuration.global_argv,
+            &self.driver.configuration.global_argv,
             command,
         );
         #[cfg(feature = "control-mode")]
@@ -723,15 +769,15 @@ impl Core {
     pub(crate) async fn fixture_pid(&self) -> Result<CommandResult, Error> {
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
-            &self.configuration.global_argv,
+            &self.driver.configuration.global_argv,
             Command::new("display-message").arg("-p").arg("#{pid}"),
         );
-        self.executor.execute(request).await
+        self.driver.executor.execute(request).await
     }
 
     async fn probe_capabilities(&self) -> Result<EngineCapabilities, Error> {
         let request = CommandRequest::new(self.next_request_id(), Command::new("-V"));
-        let result = self.executor.execute(request).await?;
+        let result = self.driver.executor.execute(request).await?;
         if !result.success() {
             return Err(Error::version_probe_failed(
                 result.request_id(),
@@ -745,7 +791,8 @@ impl Core {
     }
 
     pub(crate) async fn capabilities(&self) -> Result<&EngineCapabilities, Error> {
-        self.capabilities
+        self.driver
+            .capabilities
             .get_or_try_init(|| self.probe_capabilities())
             .await
     }
@@ -763,25 +810,26 @@ impl Core {
             .arg(session.to_string());
         let summary = command.summary();
         let reservation = self
+            .driver
             .persistent_clients
             .reserve(request_id, summary.clone(), deadline)
             .await?;
         let mut stopped = reservation.stopped();
         let prepare = async {
             let native = SubprocessExecutor::new(
-                self.configuration.executable(),
-                self.configuration.timeout,
+                self.driver.configuration.executable(),
+                self.driver.configuration.timeout,
             )
-            .with_launch_context(self.configuration.launch.clone())
-            .with_output_limits(self.configuration.output_limits)
-            .with_dispatch_limits(self.configuration.dispatch_limits);
+            .with_launch_context(self.driver.configuration.launch.clone())
+            .with_output_limits(self.driver.configuration.output_limits)
+            .with_dispatch_limits(self.driver.configuration.dispatch_limits);
             let identity = self
-                .control_identity(&native, self.configuration.global_argv())
+                .control_identity(&native, self.driver.configuration.global_argv())
                 .await?;
             let carrier = super::control_socket::PinnedSocket::new(
-                self.configuration.identity.socket_path(),
+                self.driver.configuration.identity.socket_path(),
             )?;
-            let mut global_argv = carrier.arguments(self.configuration.global_argv());
+            let mut global_argv = carrier.arguments(self.driver.configuration.global_argv());
             let pinned = self.control_identity(&native, &global_argv).await?;
             if pinned != identity {
                 return Err(Error::control_mode(std::io::Error::other(
@@ -789,7 +837,7 @@ impl Core {
                 )));
             }
             let version = TmuxVersion::parse_output(&identity.0)?;
-            self.server_version.remember(version.clone());
+            self.driver.server_version.remember(version.clone());
             global_argv.push(OsString::from("-N"));
             global_argv.push(OsString::from("-C"));
             // Opening an observer must not copy this process's environment
@@ -797,10 +845,10 @@ impl Core {
             let request = CommandRequest::with_global_argv(request_id, &global_argv, command)
                 .fence_version(&version);
             PersistentChild::spawn(
-                &self.configuration.launch,
+                &self.driver.configuration.launch,
                 &request,
                 reservation,
-                Arc::clone(&self.control_client_pids),
+                Arc::clone(&self.driver.control_client_pids),
                 carrier.into_directory(),
                 version,
             )
@@ -819,7 +867,7 @@ impl Core {
             deadline,
             request_id,
             &summary,
-            self.configuration.timeout,
+            self.driver.configuration.timeout,
             false,
         )
         .await
@@ -888,7 +936,8 @@ impl Core {
     /// [`Self::spawn_control`] is the only thing that adds an entry.
     #[cfg(feature = "control-mode")]
     pub(crate) fn owns_control_client(&self, pid: u32) -> bool {
-        self.control_client_pids
+        self.driver
+            .control_client_pids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&pid)
@@ -897,18 +946,20 @@ impl Core {
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
         #[cfg(feature = "control-mode")]
         {
-            let (executor, ()) =
-                tokio::join!(self.executor.shutdown(), self.persistent_clients.shutdown());
+            let (executor, ()) = tokio::join!(
+                self.driver.executor.shutdown(),
+                self.driver.persistent_clients.shutdown()
+            );
             executor
         }
         #[cfg(not(feature = "control-mode"))]
         {
-            self.executor.shutdown().await
+            self.driver.executor.shutdown().await
         }
     }
 
     pub(crate) fn configuration(&self) -> &CoreConfiguration {
-        &self.configuration
+        &self.driver.configuration
     }
 
     pub(crate) fn require_same_server(
@@ -916,7 +967,7 @@ impl Core {
         other: &ServerIdentity,
         operation: &'static str,
     ) -> Result<(), Error> {
-        if self.configuration.identity() == other {
+        if self.driver.configuration.identity() == other {
             Ok(())
         } else {
             Err(Error::server_mismatch(operation))
@@ -1566,10 +1617,11 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
         .expect("captured configuration resolves");
         let core = Core::new(configuration);
         let result = core
+            .driver
             .executor
             .execute(crate::command::CommandRequest::with_global_argv(
                 core.next_request_id(),
-                core.configuration.global_argv(),
+                core.driver.configuration.global_argv(),
                 Command::new("display-message").arg("value;"),
             ))
             .await

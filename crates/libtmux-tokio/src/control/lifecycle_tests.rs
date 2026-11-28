@@ -1092,10 +1092,14 @@ async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
         guard.shutdown().await.expect("ineligible fixture closes");
         return;
     }
-    let session = server
+    let receipt = server
         .new_session("frame-closed")
         .await
         .expect("session starts");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes list").remove(0);
     let (sender, events) = ControlMode::attach_with_limits(
         server,
@@ -1160,11 +1164,16 @@ async fn initial_watch_failure_preserves_the_connection_error() {
         .await
         .expect("tmux starts");
     let eligible = control_qualified(guard.server()).await;
-    let session = guard
+    let receipt = guard
         .server()
         .new_session("initial-watch")
         .await
         .expect("session starts");
+    let session = guard
+        .server()
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes list").remove(0);
     let tmux = shell_quote(Path::new(guard.server().tmux_executable()));
     let executable = write_script_with_version(
@@ -1225,7 +1234,11 @@ async fn real_tmux_control_acquisition_fires_no_user_hook() {
         guard.shutdown().await.expect("ineligible fixture closes");
         return;
     }
-    let session = server.new_session("hooked").await.expect("session starts");
+    let receipt = server.new_session("hooked").await.expect("session starts");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let hook = server
         .cmd(
             Command::new("set-hook")

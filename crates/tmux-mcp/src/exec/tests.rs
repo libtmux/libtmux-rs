@@ -1206,10 +1206,14 @@ async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() 
         return;
     };
     let server = guard.server();
-    let session = server
+    let receipt = server
         .new_session("wait-frame-budget")
         .await
         .expect("session starts");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes list").remove(0);
 
     // Comfortably above the connection's own opening handshake and the
@@ -1291,10 +1295,14 @@ async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo()
         return;
     };
     let server = guard.server();
-    let session = server
+    let receipt = server
         .new_session("echo-contract-s2-before")
         .await
         .expect("session starts");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes list").remove(0);
 
     libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {

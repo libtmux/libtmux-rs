@@ -47,11 +47,16 @@ async fn build(sessions: usize, windows: usize) -> Fixture {
     let guard = TestServer::builder().start().await.expect("tmux starts");
 
     for session in 0..sessions {
-        let created = guard
+        let receipt = guard
             .server()
             .new_session(format!("bench-{session}").as_str())
             .await
             .expect("session");
+        let created = guard
+            .server()
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
 
         for window in 0..windows {
             let created = created

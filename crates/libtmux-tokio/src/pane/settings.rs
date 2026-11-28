@@ -52,7 +52,7 @@ impl Pane {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("opts").await?;
+    /// let session = guard.session("opts").await?;
     /// let window = session.active_window().await?.expect("a session has a window");
     /// let pane = window.active_pane().await?.expect("a window has a pane");
     ///
@@ -211,7 +211,7 @@ impl Pane {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let session = guard.session("hooked").await?;
     /// let window = session.active_window().await?.expect("a session has a window");
     /// let pane = window.active_pane().await?.expect("a window has a pane");
     ///

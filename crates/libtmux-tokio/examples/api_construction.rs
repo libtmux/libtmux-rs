@@ -21,9 +21,10 @@ async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
         server.config_file() == Some(std::path::Path::new("/dev/null")),
         "wrong config path",
     )?;
-    let session = server
+    let receipt = server
         .new_session(NewSession::new("work").command("cat"))
         .await?;
+    let session = server.inspect_session(&receipt).await?;
     check(
         server.is_alive().await,
         "new_session did not start a daemon",

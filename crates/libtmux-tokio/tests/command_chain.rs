@@ -154,8 +154,8 @@ async fn a_caller_supplied_semicolon_stays_an_argument_in_a_chain() {
 async fn a_created_id_is_still_captured_when_a_later_member_fails() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server
-        .new_session("chain-capture")
+    let session = guard
+        .session("chain-capture")
         .await
         .expect("session is created");
 

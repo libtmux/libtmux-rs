@@ -26,7 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket = root.join(format!("{}.sock", unique_name("libtmux-watch")));
     let server = Server::builder().socket_path(&socket).build()?;
 
-    let session = server.new_session(unique_name("watched").as_str()).await?;
+    let receipt = server.new_session(unique_name("watched").as_str()).await?;
+    let session = server.inspect_session(&receipt).await?;
     let control = match ControlMode::attach(&server, session.id()).await {
         Ok(control) => control,
         Err(error @ libtmux_tokio::Error::UnsupportedCapability { .. }) => {

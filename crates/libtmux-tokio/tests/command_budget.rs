@@ -59,10 +59,14 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CommandCounter {
 /// Add `sessions` sessions of `windows` windows, each holding two panes.
 async fn populate(server: &libtmux_tokio::Server, prefix: &str, sessions: usize, windows: usize) {
     for session in 0..sessions {
-        let session = server
+        let receipt = server
             .new_session(format!("{prefix}-{session}").as_str())
             .await
             .expect("session");
+        let session = server
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
 
         for window in 0..windows {
             let created = session
@@ -179,7 +183,7 @@ async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("attached").await.expect("session");
+    let session = guard.session("attached").await.expect("session");
 
     // A control-mode connection is a client, so the server has one to ask.
     let control = libtmux_tokio::control::ControlMode::attach(server, session.id())
@@ -240,11 +244,10 @@ async fn reading_a_listed_pane_field_costs_no_command() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
     // History to scroll back through, then a cursor off the origin, then a
     // reader that prints nothing more, so the cursor holds still.
-    let session = server
-        .new_session(NewSession::new("read").command("seq 1 200; printf abc; exec cat"))
+    let session = guard
+        .session(NewSession::new("read").command("seq 1 200; printf abc; exec cat"))
         .await
         .expect("session");
     let mut pane = session.panes().await.expect("panes").remove(0);
@@ -325,8 +328,7 @@ async fn replacing_hooks_clears_and_writes_in_one_command() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let session = guard
-        .server()
-        .new_session("hooks")
+        .session("hooks")
         .await
         .expect("the session is created");
     let mut entries = std::collections::BTreeMap::new();

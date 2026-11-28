@@ -142,7 +142,8 @@ impl Pane {
     /// # let server = guard.server();
     /// use libtmux_tokio::CaptureOptions;
     ///
-    /// let session = server.new_session("captured").await?;
+    /// let receipt = server.new_session("captured").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let pane = session.panes().await?.remove(0);
     ///
     /// let visible = pane.capture_with(CaptureOptions::visible()).await?;
@@ -208,7 +209,8 @@ impl Pane {
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
     /// let server = guard.server();
-    /// let session = server.new_session("prompts").await?;
+    /// let receipt = server.new_session("prompts").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let pane = session.panes().await?.remove(0);
     ///
     /// if server.capabilities().await?.tmux_version().has_behavior(&libtmux_tokio::since::CAPTURE_LINE_FLAGS) {
@@ -294,7 +296,7 @@ impl Pane {
     /// use std::time::Duration;
     ///
     /// # let guard = libtmux_tokio::test::TestServer::builder().start().await?;
-    /// # let session = guard.server().new_session("waiting").await?;
+    /// # let session = guard.session("waiting").await?;
     /// # let pane = session.panes().await?.remove(0);
     /// pane.send_line("printf 'ready\\n'").await?;
     ///
@@ -345,7 +347,7 @@ impl Pane {
     /// use std::time::Duration;
     ///
     /// # let guard = libtmux_tokio::test::TestServer::builder().start().await?;
-    /// # let session = guard.server().new_session("settling").await?;
+    /// # let session = guard.session("settling").await?;
     /// # let pane = session.panes().await?.remove(0);
     /// let settled = pane
     ///     .wait_for_quiet(Duration::from_millis(300), Duration::from_secs(10))
@@ -418,7 +420,7 @@ impl Pane {
     /// use std::time::Duration;
     ///
     /// # let guard = libtmux_tokio::test::TestServer::builder().start().await?;
-    /// # let session = guard.server().new_session("counting").await?;
+    /// # let session = guard.session("counting").await?;
     /// # let pane = session.panes().await?.remove(0);
     /// // The leading `echo` starts the output on a row of its own: keys sent
     /// // before the shell's first prompt would otherwise print `$ tick`.

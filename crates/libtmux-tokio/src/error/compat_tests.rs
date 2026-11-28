@@ -57,7 +57,11 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("compat-missing").await.expect("session");
+    let receipt = server.new_session("compat-missing").await.expect("session");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
 
     // One live session, so tmux can resolve a current target and reports
     // the specific object it could not find.
@@ -208,7 +212,11 @@ async fn real_tmux_compat_a_coordinate_miss_is_not_an_object_miss() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("compat-echo").await.expect("session");
+    let receipt = server.new_session("compat-echo").await.expect("session");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
 
     for (target, gone) in [
         // A place in a session that holds nothing there.

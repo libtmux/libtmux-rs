@@ -31,13 +31,13 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     };
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let Some(guard) = support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
     let session = guard
-        .server()
-        .new_session(libtmux_tokio::NewSession::new("paste-enter").command(bash.as_str()))
+        .session(libtmux_tokio::NewSession::new("paste-enter").command(bash.as_str()))
         .await
         .expect("bash session");
     let panes = session.panes().await.expect("panes");

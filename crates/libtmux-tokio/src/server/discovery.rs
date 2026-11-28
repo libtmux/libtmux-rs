@@ -16,6 +16,13 @@ use crate::window::Window;
 use crate::{Error, PaneId, SessionId, WindowId};
 
 impl Server {
+    pub(crate) async fn for_discovery(&self) -> Result<Self, Error> {
+        if self.core.expected_generation().is_some() {
+            return Ok(self.clone());
+        }
+        self.bound_to(self.generation().await?)
+    }
+
     /// List every window on the server, preserving any failure.
     ///
     /// # Errors
@@ -23,11 +30,12 @@ impl Server {
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
     pub async fn windows(&self) -> Result<Vec<Window>, Error> {
-        let projections = listing::windows(&self.core, listing::Scope::Server, None).await?;
+        let server = self.for_discovery().await?;
+        let projections = listing::windows(&server.core, listing::Scope::Server, None).await?;
 
         Ok(projections
             .into_iter()
-            .map(|projection| Window::new(Arc::clone(&self.core), projection))
+            .map(|projection| Window::new(Arc::clone(&server.core), projection))
             .collect())
     }
 
@@ -38,11 +46,12 @@ impl Server {
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
     pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
-        let projections = listing::panes(&self.core, listing::Scope::Server, None).await?;
+        let server = self.for_discovery().await?;
+        let projections = listing::panes(&server.core, listing::Scope::Server, None).await?;
 
         Ok(projections
             .into_iter()
-            .map(|projection| Pane::new(Arc::clone(&self.core), projection))
+            .map(|projection| Pane::new(Arc::clone(&server.core), projection))
             .collect())
     }
 
@@ -53,11 +62,12 @@ impl Server {
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
     pub async fn clients(&self) -> Result<Vec<Client>, Error> {
-        let infos = listing::clients(&self.core, None).await?;
+        let server = self.for_discovery().await?;
+        let infos = listing::clients(&server.core, None).await?;
 
         Ok(infos
             .into_iter()
-            .map(|info| Client::new(Arc::clone(&self.core), info))
+            .map(|info| Client::new(Arc::clone(&server.core), info))
             .collect())
     }
 
@@ -99,15 +109,16 @@ impl Server {
     ///
     /// Returns an error when the session listing fails.
     pub async fn session_by_id(&self, id: &SessionId) -> Result<Option<Session>, Error> {
+        let server = self.for_discovery().await?;
         // An id is a sigil and digits, so it can be handed to tmux as a
         // predicate and matched server-side. tmux returns the one row rather
         // than every row for this to scan.
-        let infos = listing::sessions(&self.core, Some(&id.predicate("session_id"))).await?;
+        let infos = listing::sessions(&server.core, Some(&id.predicate("session_id"))).await?;
 
         Ok(infos
             .into_iter()
             .next()
-            .map(|info| Session::new(Arc::clone(&self.core), info)))
+            .map(|info| Session::new(Arc::clone(&server.core), info)))
     }
 
     /// Find the window with this id, preferring an active link then the lowest index.
@@ -119,8 +130,9 @@ impl Server {
     ///
     /// Returns an error when the window listing fails.
     pub async fn window_by_id(&self, id: &WindowId) -> Result<Option<Window>, Error> {
+        let server = self.for_discovery().await?;
         let projections = listing::windows(
-            &self.core,
+            &server.core,
             listing::Scope::Server,
             Some(&id.predicate("window_id")),
         )
@@ -139,7 +151,7 @@ impl Server {
                     projection.link().identity().window_index(),
                 )
             })
-            .map(|projection| Window::new(Arc::clone(&self.core), projection)))
+            .map(|projection| Window::new(Arc::clone(&server.core), projection)))
     }
 
     /// Find the pane with this id.
@@ -148,8 +160,9 @@ impl Server {
     ///
     /// Returns an error when the pane listing fails.
     pub async fn pane_by_id(&self, id: &PaneId) -> Result<Option<Pane>, Error> {
+        let server = self.for_discovery().await?;
         let projections = listing::panes(
-            &self.core,
+            &server.core,
             listing::Scope::Server,
             Some(&id.predicate("pane_id")),
         )
@@ -158,7 +171,7 @@ impl Server {
         Ok(projections
             .into_iter()
             .next()
-            .map(|projection| Pane::new(Arc::clone(&self.core), projection)))
+            .map(|projection| Pane::new(Arc::clone(&server.core), projection)))
     }
 
     /// Find the client attached to this terminal.
@@ -197,8 +210,9 @@ impl Server {
     ///
     /// Returns an error when any of the three listings fails.
     pub async fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
+        let server = self.for_discovery().await?;
         let (sessions, windows, panes) =
-            tokio::try_join!(self.sessions(), self.windows(), self.panes(),)?;
+            tokio::try_join!(server.sessions(), server.windows(), server.panes(),)?;
 
         // Grouping is by the numeric part of each ID rather than the ID: it
         // is Copy and unique among IDs of one kind, so stitching the three
@@ -292,11 +306,12 @@ impl Server {
     /// # }
     /// ```
     pub async fn sessions(&self) -> Result<Vec<Session>, Error> {
-        let infos = listing::sessions(&self.core, None).await?;
+        let server = self.for_discovery().await?;
+        let infos = listing::sessions(&server.core, None).await?;
 
         Ok(infos
             .into_iter()
-            .map(|info| Session::new(Arc::clone(&self.core), info))
+            .map(|info| Session::new(Arc::clone(&server.core), info))
             .collect())
     }
 }
@@ -310,7 +325,7 @@ impl Server {
 /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 /// # runtime.block_on(async {
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// session.new_window("editor").await?;
 ///
 /// // One round of listings for the whole hierarchy, rather than one call per
@@ -349,7 +364,7 @@ pub struct SessionTree {
 /// use libtmux_tokio::SplitDirection;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 /// window.split(SplitDirection::Below).await?;
 ///

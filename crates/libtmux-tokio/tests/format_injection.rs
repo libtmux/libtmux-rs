@@ -23,8 +23,7 @@ async fn a_session_name_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
 
     let session = guard
-        .server()
-        .new_session(HOSTILE)
+        .session(HOSTILE)
         .await
         .expect("the session is created");
 
@@ -40,8 +39,8 @@ async fn a_hostile_name_round_trips_through_lookup() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let created = server
-        .new_session(HOSTILE)
+    let created = guard
+        .session(HOSTILE)
         .await
         .expect("the session is created");
 
@@ -65,11 +64,7 @@ async fn a_hostile_name_round_trips_through_lookup() {
 async fn a_renamed_session_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
 
-    let mut session = guard
-        .server()
-        .new_session("work")
-        .await
-        .expect("the session is created");
+    let mut session = guard.session("work").await.expect("the session is created");
     session.rename(HOSTILE).await.expect("the session renames");
 
     assert_eq!(session.name().to_string_lossy(), HOSTILE);
@@ -80,11 +75,7 @@ async fn a_renamed_session_reaches_tmux_literally() {
 #[tokio::test]
 async fn a_window_name_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("work")
-        .await
-        .expect("the session is created");
+    let session = guard.session("work").await.expect("the session is created");
 
     let created = session
         .new_window(HOSTILE)
@@ -107,8 +98,7 @@ async fn a_first_window_name_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
 
     let session = guard
-        .server()
-        .new_session(NewSession::new("work").window_name(HOSTILE))
+        .session(NewSession::new("work").window_name(HOSTILE))
         .await
         .expect("the session is created");
 
@@ -125,11 +115,7 @@ async fn a_first_window_name_reaches_tmux_literally() {
 #[tokio::test]
 async fn a_pane_title_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("work")
-        .await
-        .expect("the session is created");
+    let session = guard.session("work").await.expect("the session is created");
     let mut pane = session.panes().await.expect("panes list").remove(0);
 
     pane.set_title(HOSTILE).await.expect("the title is set");
@@ -142,11 +128,7 @@ async fn a_pane_title_reaches_tmux_literally() {
 #[tokio::test]
 async fn a_start_directory_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("work")
-        .await
-        .expect("the session is created");
+    let session = guard.session("work").await.expect("the session is created");
 
     // A directory that really holds a `#`, which is also what an unescaped
     // pass would mangle. tmux reports the path it started in.
@@ -181,11 +163,7 @@ async fn a_start_directory_reaches_tmux_literally() {
 #[tokio::test]
 async fn a_split_start_directory_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("work")
-        .await
-        .expect("the session is created");
+    let session = guard.session("work").await.expect("the session is created");
     let pane = session.panes().await.expect("panes list").remove(0);
 
     let scratch = TempDir::new().expect("a scratch directory");

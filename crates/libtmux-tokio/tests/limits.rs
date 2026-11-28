@@ -180,7 +180,7 @@ async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("frames").await.expect("session");
+    let session = guard.session("frames").await.expect("session");
 
     // Small enough that an ordinary command's own response block exceeds it,
     // which is the point: the budget is the only thing bounding a connection
@@ -206,7 +206,10 @@ async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
                 .await
                 .expect_err("the answer is past the budget");
             assert!(
-                matches!(&error, libtmux_tokio::Error::ControlModeFrameTooLarge { .. }),
+                matches!(
+                    &error,
+                    libtmux_tokio::Error::ControlModeFrameTooLarge { .. }
+                ),
                 "got {error:?}",
             );
             assert_eq!(error.kind(), libtmux_tokio::ErrorKind::Decode);
@@ -236,8 +239,8 @@ async fn persistent_clients_have_their_own_admission_limit() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("persistent-admission")
+    let session = guard
+        .session("persistent-admission")
         .await
         .expect("session");
     let first = ControlMode::attach(server, session.id())

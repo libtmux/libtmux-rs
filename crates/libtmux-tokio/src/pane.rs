@@ -249,7 +249,7 @@ const fn pane_mode_is_active(count: u32) -> bool {
 /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 /// # runtime.block_on(async {
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 /// let pane = window.active_pane().await?.expect("a window has a pane");
 ///
@@ -312,7 +312,8 @@ impl Pane {
     /// # let server = guard.server();
     /// use libtmux_tokio::Pane;
     ///
-    /// let session = server.new_session("locating").await?;
+    /// let receipt = server.new_session("locating").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let expected = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
@@ -466,7 +467,7 @@ impl Pane {
     /// use libtmux_tokio::{SplitDirection, SplitOptions};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("edges").await?;
+    /// let session = guard.session("edges").await?;
     /// let mut window = session.active_window().await?.expect("a window");
     ///
     /// // One pane fills the window, so it touches every edge.
@@ -557,7 +558,7 @@ impl Pane {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("piped").await?;
+    /// let session = guard.session("piped").await?;
     /// let mut pane = session.panes().await?.remove(0);
     ///
     /// assert!(!pane.is_piped());
@@ -697,7 +698,8 @@ impl Pane {
     /// # let server = guard.server();
     /// use libtmux_tokio::{PaneSize, SplitDirection, SplitOptions};
     ///
-    /// let session = server.new_session("split-from-pane").await?;
+    /// let receipt = server.new_session("split-from-pane").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let pane = session.panes().await?.remove(0);
     ///
     /// let above = pane
@@ -746,7 +748,8 @@ impl Pane {
     /// # let server = guard.server();
     /// use libtmux_tokio::{ResizeDirection, SplitDirection, SplitOptions};
     ///
-    /// let session = server.new_session("resized-pane").await?;
+    /// let receipt = server.new_session("resized-pane").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let pane = session.panes().await?.remove(0);
     /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
     ///
@@ -802,7 +805,8 @@ impl Pane {
     /// # let server = guard.server();
     /// use libtmux_tokio::{SplitDirection, SplitOptions};
     ///
-    /// let session = server.new_session("zoomed").await?;
+    /// let receipt = server.new_session("zoomed").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let pane = session.panes().await?.remove(0);
     /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
     ///
@@ -991,7 +995,7 @@ impl Pane {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("raw").await?;
+    /// let session = guard.session("raw").await?;
     /// let window = session.active_window().await?.expect("a window");
     /// let pane = window.active_pane().await?.expect("a pane");
     ///
@@ -1030,7 +1034,7 @@ impl Pane {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("shown").await?;
+    /// let session = guard.session("shown").await?;
     /// let window = session.active_window().await?.expect("a window");
     /// let pane = window.active_pane().await?.expect("a pane");
     ///
@@ -1268,7 +1272,7 @@ impl Pane {
     /// use libtmux_tokio::{SplitDirection, SplitOptions};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("broken-out").await?;
+    /// let session = guard.session("broken-out").await?;
     /// let pane = session.panes().await?.remove(0);
     /// let stays = pane.window_id().clone();
     ///
@@ -1321,7 +1325,7 @@ impl Pane {
     /// use libtmux_tokio::{JoinOptions, SplitDirection};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("moving").await?;
+    /// let session = guard.session("moving").await?;
     /// let window = session.active_window().await?.expect("a window");
     /// let elsewhere = session.new_window("elsewhere").await?;
     ///
@@ -1490,7 +1494,7 @@ impl Pane {
     /// use libtmux_tokio::{Availability, Pane, TmuxText};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
+    /// let session = guard.session("read").await?;
     /// let mut pane = session.panes().await?.remove(0);
     /// let fields = Pane::filter_fields();
     ///
@@ -1625,7 +1629,7 @@ pub enum PaneWait {
 /// use libtmux_tokio::CaptureOptions;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("capture").await?;
+/// let session = guard.session("capture").await?;
 /// let window = session.active_window().await?.expect("a session has a window");
 /// let pane = window.active_pane().await?.expect("a window has a pane");
 ///
@@ -1877,7 +1881,8 @@ enum CaptureBound {
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
 /// let server = guard.server();
-/// let session = server.new_session("marked").await?;
+/// let receipt = server.new_session("marked").await?;
+/// let session = server.inspect_session(&receipt).await?;
 /// let pane = session.panes().await?.remove(0);
 ///
 /// if server.capabilities().await?.tmux_version().has_behavior(&libtmux_tokio::since::CAPTURE_LINE_FLAGS) {

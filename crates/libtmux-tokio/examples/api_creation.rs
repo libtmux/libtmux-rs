@@ -16,13 +16,10 @@ fn check(condition: bool, message: &str) -> Result<(), ExampleError> {
 }
 
 async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
-    let session = server
-        .new_session(
-            NewSession::new("work")
-                .window_name("editor")
-                .command("cat"),
-        )
+    let receipt = server
+        .new_session(NewSession::new("work").window_name("editor").command("cat"))
         .await?;
+    let session = server.inspect_session(&receipt).await?;
     let window = session
         .new_window(NewWindowOptions::new("logs").command("cat"))
         .await?;

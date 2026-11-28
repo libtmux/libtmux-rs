@@ -56,7 +56,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("opts").await?;
+    /// let session = guard.session("opts").await?;
     ///
     /// session.set_option("status-left-length", "30").await?;
     /// let options = session.options().await?;
@@ -124,7 +124,7 @@ impl Session {
     /// use libtmux_tokio::{Error, OptionValue};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("typed").await?;
+    /// let session = guard.session("typed").await?;
     ///
     /// session.set_typed_option("history-limit", 5000).await?;
     /// assert_eq!(
@@ -254,7 +254,7 @@ impl Session {
     /// use libtmux_tokio::{IndexedHooks, ReplaceMode, TmuxText};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let session = guard.session("hooked").await?;
     ///
     /// let mut entries = BTreeMap::new();
     /// entries.insert(0, TmuxText::from(b"display-message first".to_vec()));
@@ -308,7 +308,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let session = guard.session("hooked").await?;
     ///
     /// session.set_hook("alert-bell", "display-message rang").await?;
     /// let hooks = session.hooks().await?;
@@ -338,7 +338,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
+    /// let session = guard.session("hooked").await?;
     ///
     /// assert!(session.hook("alert-bell").await?.is_none());
     /// session.set_hook("alert-bell", "display-message rang").await?;
@@ -402,7 +402,7 @@ impl Session {
     /// use libtmux_tokio::EnvironmentEntry;
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
+    /// let session = guard.session("read").await?;
     ///
     /// assert_eq!(session.environment("EDITOR").await?, None);
     ///
@@ -463,7 +463,7 @@ impl Session {
     /// use libtmux_tokio::EnvironmentEntry;
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("env").await?;
+    /// let session = guard.session("env").await?;
     ///
     /// session.set_environment("EDITOR", "vi").await?;
     /// session.hide_environment("PAGER").await?;
@@ -506,7 +506,7 @@ impl Session {
     /// use libtmux_tokio::EnvironmentEntry;
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hidden").await?;
+    /// let session = guard.session("hidden").await?;
     ///
     /// session.hide_environment("PAGER").await?;
     /// assert_eq!(

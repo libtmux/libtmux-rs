@@ -93,7 +93,7 @@ async fn options_are_scoped_to_the_object_that_set_them() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let session = server.new_session("scoped").await.expect("session created");
+    let session = guard.session("scoped").await.expect("session created");
     let window = session
         .new_window(NewWindowOptions::new("scoped").command("sleep 300"))
         .await
@@ -146,11 +146,7 @@ async fn options_are_scoped_to_the_object_that_set_them() {
 #[tokio::test]
 async fn appending_extends_a_value_rather_than_replacing_it() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server
-        .new_session("appending")
-        .await
-        .expect("session created");
+    let session = guard.session("appending").await.expect("session created");
 
     session.set_option("@parts", "one").await.expect("set");
     session
@@ -403,7 +399,7 @@ async fn a_hook_keeps_the_indices_tmux_stores_it_under() {
 async fn a_hook_set_on_a_window_is_read_back_by_name() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("scoped").await.expect("session");
+    let session = guard.session("scoped").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -454,8 +450,7 @@ async fn a_hook_set_on_a_window_is_read_back_by_name() {
 #[tokio::test]
 async fn a_typed_listing_decodes_every_option_it_reports() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("listed").await.expect("session");
+    let session = guard.session("listed").await.expect("session");
 
     session
         .set_option("status-left-length", "30")
@@ -512,8 +507,8 @@ async fn a_listing_keeps_the_indices_an_array_option_is_stored_under() {
     // A listing reports what is set at that scope, not what an object would
     // resolve to. A session that has set nothing of its own is empty even
     // though every option still has an effective value it inherits.
-    let fresh = server
-        .new_session("inheriting")
+    let fresh = guard
+        .session("inheriting")
         .await
         .expect("session")
         .options()
@@ -530,7 +525,7 @@ async fn a_listing_keeps_the_indices_an_array_option_is_stored_under() {
 #[tokio::test]
 async fn an_environment_listing_tells_a_removal_from_a_value() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard.server().new_session("env").await.expect("session");
+    let session = guard.session("env").await.expect("session");
 
     session
         .set_environment("EDITOR", "vi")
@@ -559,11 +554,7 @@ async fn an_environment_listing_tells_a_removal_from_a_value() {
 #[tokio::test]
 async fn an_environment_value_survives_what_a_line_listing_would_split() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("awkward")
-        .await
-        .expect("session");
+    let session = guard.session("awkward").await.expect("session");
 
     // Each of these breaks a naive parse of the listing: an embedded newline
     // spans lines, and a continuation line holding `=` reads exactly like the
@@ -838,8 +829,8 @@ async fn the_server_environment_is_separate_from_every_session_one() {
     // Separate stores, not one layered over the other. Reading a session is
     // not a fallback to the server, whenever the session was created: tmux
     // merges the two only when it starts a process.
-    let before = server.new_session("before").await.expect("session");
-    let after = server.new_session("after").await.expect("session");
+    let before = guard.session("before").await.expect("session");
+    let after = guard.session("after").await.expect("session");
     for (label, session) in [("before", &before), ("after", &after)] {
         assert_eq!(
             session.environment("SERVER_ONLY").await.expect("read"),
@@ -900,7 +891,7 @@ async fn a_started_process_gets_the_server_and_session_environments_merged() {
         .await
         .expect("mark");
 
-    let session = server.new_session("merged").await.expect("session");
+    let session = guard.session("merged").await.expect("session");
     session
         .set_environment("BOTH", "from_session")
         .await
@@ -1012,8 +1003,7 @@ async fn a_name_shaped_like_a_flag_is_refused_not_obeyed() {
     // name a caller did not write could act on a different option. `-u` is
     // the sharp one: it unsets.
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("flags").await.expect("session");
+    let session = guard.session("flags").await.expect("session");
 
     session
         .set_option("@kept", "original")
@@ -1151,8 +1141,7 @@ async fn the_schema_agrees_with_where_tmux_accepts_a_write() {
     use libtmux_tokio::{OptionScope, option_schema};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("scoped").await.expect("a session");
+    let session = guard.session("scoped").await.expect("a session");
     let window = session
         .windows()
         .await
@@ -1188,8 +1177,7 @@ async fn a_write_tmux_would_place_elsewhere_is_refused() {
     use libtmux_tokio::{ErrorKind, OptionScope};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("scoped").await.expect("a session");
+    let session = guard.session("scoped").await.expect("a session");
     let pane = session
         .active_window()
         .await
@@ -1239,8 +1227,7 @@ async fn a_write_tmux_would_place_elsewhere_is_refused() {
 #[tokio::test]
 async fn a_name_tmux_would_resolve_is_guarded_like_the_one_it_resolves_to() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("scoped").await.expect("a session");
+    let session = guard.session("scoped").await.expect("a session");
     let pane = session
         .active_window()
         .await
@@ -1295,8 +1282,7 @@ async fn a_late_pane_scope_is_granted_to_whichever_tmux_actually_has_it() {
         builder = builder.tmux_executable(executable);
     }
     let guard = builder.start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("late-scope").await.expect("a session");
+    let session = guard.session("late-scope").await.expect("a session");
     let pane = session
         .active_window()
         .await
@@ -1320,7 +1306,7 @@ async fn a_late_pane_scope_is_granted_to_whichever_tmux_actually_has_it() {
 async fn a_typed_write_reads_back_as_the_value_written() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("typed").await.expect("a session");
+    let session = guard.session("typed").await.expect("a session");
     let window = session
         .active_window()
         .await
@@ -1392,11 +1378,7 @@ async fn a_value_the_table_refuses_never_reaches_tmux() {
     use libtmux_tokio::{Error, ErrorKind, OptionKind, OptionValueRefusal};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("refused")
-        .await
-        .expect("a session");
+    let session = guard.session("refused").await.expect("a session");
 
     session
         .set_typed_option("mouse", false)
@@ -1500,7 +1482,7 @@ async fn a_typed_refusal_needs_no_server() {
 #[tokio::test]
 async fn a_typed_user_option_is_stored_as_text() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard.server().new_session("user").await.expect("a session");
+    let session = guard.session("user").await.expect("a session");
 
     let cases = [
         ("@flag", OptionValue::Flag(true), "on"),

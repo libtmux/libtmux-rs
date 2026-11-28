@@ -82,7 +82,7 @@ pub(super) fn tmux_error(error: &libtmux_tokio::Error) -> ToolError {
 
     let kind = error.kind();
     let retryable = error.is_transient();
-    let detail = serde_json::json!({
+    let mut detail = serde_json::json!({
         "kind": match kind {
             ErrorKind::PartialEffect => "partial_effect",
             ErrorKind::ObjectGone => "object_gone",
@@ -101,6 +101,18 @@ pub(super) fn tmux_error(error: &libtmux_tokio::Error) -> ToolError {
         "retryable": retryable,
         "stale": error.is_object_gone(),
     });
+    if let Some(effect) = error.operation_effect() {
+        detail["effect"] = effect.as_str().into();
+    }
+    if let Some(receipt) = error.creation_receipt() {
+        detail["created"] = serde_json::json!({
+            "session_id": receipt.session().as_ref(),
+            "window_id": receipt.window().as_ref(),
+            "pane_id": receipt.pane().id().as_ref(),
+            "server_pid": receipt.generation().pid(),
+            "server_start_time": receipt.generation().unix_start_time(),
+        });
+    }
     let message = error.to_string();
 
     match (kind, retryable) {

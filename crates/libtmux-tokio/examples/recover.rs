@@ -26,7 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder().socket_path(&socket).build()?;
     println!("server on {}", socket.display());
 
-    let home = server.new_session(unique_name("home").as_str()).await?;
+    let receipt = server.new_session(unique_name("home").as_str()).await?;
+    let home = server.inspect_session(&receipt).await?;
 
     // A window killed out from under a handle. The handle still names it, and
     // the name is now the only thing left.
@@ -61,9 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // window running in the other, so "the link is gone" must not read as
     // "the window is gone" or a caller discards a handle that still works.
     let shared = home.new_window(NewWindowOptions::new("shared")).await?;
-    let elsewhere = server
+    let receipt = server
         .new_session(unique_name("elsewhere").as_str())
         .await?;
+    let elsewhere = server.inspect_session(&receipt).await?;
     shared.link_to(&elsewhere, None).await?;
 
     let links = server.windows().await?;

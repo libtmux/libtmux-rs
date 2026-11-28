@@ -597,7 +597,9 @@ mod tests {
         server: &libtmux_tokio::Server,
     ) -> crate::CallerIdentity {
         let peer = pane
-            .split(libtmux_tokio::SplitOptions::new(libtmux_tokio::SplitDirection::Below))
+            .split(libtmux_tokio::SplitOptions::new(
+                libtmux_tokio::SplitDirection::Below,
+            ))
             .await
             .expect("caller peer is created");
         let generation = server.generation().await.expect("server generation");
@@ -726,8 +728,8 @@ mod tests {
                 return;
             };
             let server = guard.server();
-            let session = server
-                .new_session(format!("run-final-{transition}"))
+            let session = guard
+                .session(format!("run-final-{transition}"))
                 .await
                 .expect("session starts");
             let pane = session.panes().await.expect("panes list").remove(0);

@@ -44,7 +44,7 @@ impl Window {
     /// use libtmux_tokio::query::Filterable as _;
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("searched").await?;
+    /// let session = guard.session("searched").await?;
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// let fields = libtmux_tokio::Pane::filter_fields();
@@ -103,7 +103,7 @@ impl Window {
     /// use libtmux_tokio::{PaneDirection, SplitDirection};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("directions").await?;
+    /// let session = guard.session("directions").await?;
     /// let window = session.active_window().await?.expect("a session has a window");
     ///
     /// // Splitting leaves focus where it was, so the top pane is still active.
@@ -166,7 +166,7 @@ impl Window {
     /// use libtmux_tokio::{SplitDirection, SplitOptions};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("panes").await?;
+    /// let session = guard.session("panes").await?;
     /// let mut window = session.active_window().await?.expect("a window");
     ///
     /// // One pane, so there is nowhere to go back to and nothing broke.

@@ -196,7 +196,7 @@ async fn real_tmux_compat_optional_scanner_split_percent_refuses_before_a_prior_
         .await
         .expect("3.4 starts");
     let server = guard.server();
-    let session = server.new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
     let mut observed = Vec::new();
     for name in ["split-window", "splitw", "sp", "split-"] {
@@ -282,7 +282,7 @@ async fn real_tmux_compat_optional_literal_capture_flags_refuse_before_a_prior_e
         .await
         .expect("3.3a starts");
     let server = guard.server();
-    let session = server.new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let pane = session
         .panes()
         .await
@@ -550,7 +550,7 @@ async fn real_tmux_compat_optional_named_paste_and_delete_is_safe_on_3_3a() {
         .await
         .expect("3.3a starts");
     let server = guard.server();
-    let session = server.new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
     let original_window = pane.window_id().clone();
     let native = server
@@ -695,7 +695,7 @@ async fn real_tmux_compat_optional_exact_3_7_break_pane_refuses_all_literal_form
         .await
         .expect("exact3.7 starts");
     let server = guard.server();
-    let session = server.new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
     server
         .cmd(
@@ -814,11 +814,7 @@ async fn real_tmux_compat_optional_control_uses_daemon_defects_with_a_newer_clie
         .start()
         .await
         .expect("3.7 starts");
-    let session = guard
-        .server()
-        .new_session("mixed-control")
-        .await
-        .expect("session");
+    let session = guard.session("mixed-control").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
     guard
         .server()
@@ -897,7 +893,7 @@ async fn real_tmux_compat_optional_exact_3_7_refuses_colon_and_dot_names() {
         .await
         .expect("exact 3.7 starts");
     let server = guard.server();
-    let session = server.new_session("keeper").await.expect("session");
+    let session = guard.session("keeper").await.expect("session");
     let window = session.windows().await.expect("windows").remove(0);
     let windows_before = session.windows().await.expect("windows").len();
     let sessions_before = server.sessions().await.expect("sessions").len();

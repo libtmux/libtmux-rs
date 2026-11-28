@@ -312,10 +312,14 @@ async fn real_tmux_compat_minimum_daemon_accepts_newer_clients() {
         .tmux_executable(current_binary())
         .build()
         .expect("newer client configured");
-    let mut session = server
+    let receipt = server
         .new_session("supported")
         .await
         .expect("minimum daemon accepts typed creation");
+    let mut session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let panes = session
         .panes()
         .await

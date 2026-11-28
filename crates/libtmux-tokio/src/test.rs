@@ -811,7 +811,9 @@ impl TestServer {
         &self,
         options: impl Into<crate::NewSession>,
     ) -> Result<crate::Session, crate::Error> {
-        self.server().new_session(options).await
+        let server = self.server();
+        let receipt = server.new_session(options).await?;
+        server.inspect_session(&receipt).await
     }
 
     /// Return the retained foreground daemon PID.

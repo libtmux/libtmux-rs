@@ -969,24 +969,6 @@ async fn supervise_outer(
             stderr,
         )),
         Ok(InnerOutcome::Failed(error)) => {
-            let error = context.interrupted(error);
-            match cleanup_child(
-                &mut ownership.child,
-                &mut ownership.readers,
-                &mut ownership.process_group,
-                &context,
-            )
-            .await
-            {
-                Ok(()) => Err(error),
-                Err(wait_error) => Err(context.cleanup_failed(error, wait_error)),
-            }
-        }
-        Err(()) => {
-            let primary = context.interrupted(Error::supervisor_lost(
-                context.request_id(),
-                context.command.clone(),
-            ));
             let cleanup = cleanup_child(
                 &mut ownership.child,
                 &mut ownership.readers,
@@ -994,6 +976,23 @@ async fn supervise_outer(
                 &context,
             )
             .await;
+            // Reader cancellation settles the collected prefix before its receipt is decoded.
+            let error = context.interrupted(error);
+            match cleanup {
+                Ok(()) => Err(error),
+                Err(wait_error) => Err(context.cleanup_failed(error, wait_error)),
+            }
+        }
+        Err(()) => {
+            let primary = Error::supervisor_lost(context.request_id(), context.command.clone());
+            let cleanup = cleanup_child(
+                &mut ownership.child,
+                &mut ownership.readers,
+                &mut ownership.process_group,
+                &context,
+            )
+            .await;
+            let primary = context.interrupted(primary);
             match cleanup {
                 Ok(()) => Err(primary),
                 Err(wait_error) => Err(context.cleanup_failed(primary, wait_error)),

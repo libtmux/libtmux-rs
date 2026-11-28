@@ -3,7 +3,9 @@
 use std::error::Error;
 use std::time::Duration;
 
-use libtmux_tokio::query::{ExactlyOneError, Filterable as _, MultipleItemsError, QueryIteratorExt as _};
+use libtmux_tokio::query::{
+    ExactlyOneError, Filterable as _, MultipleItemsError, QueryIteratorExt as _,
+};
 use libtmux_tokio::{NewSession, Server, Session};
 
 type ExampleError = Box<dyn Error>;

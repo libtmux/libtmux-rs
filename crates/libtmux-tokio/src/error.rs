@@ -357,7 +357,7 @@ pub use libtmux_core::IdParseError;
 /// use libtmux_tokio::ErrorKind;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let doomed = guard.server().new_session("doomed").await?;
+/// let doomed = guard.session("doomed").await?;
 /// let mut stale = doomed.clone();
 /// guard.server().new_session("survivor").await?;
 /// doomed.kill().await?;
@@ -397,8 +397,8 @@ pub enum Error {
         source: Box<Error>,
     },
 
-    /// Operation and process cleanup both failed.
-    #[error("{primary}; child cleanup also failed: {cleanup}")]
+    /// The operation and its cleanup both failed.
+    #[error("{primary}; cleanup also failed: {cleanup}")]
     OperationAndCleanup {
         /// The original operation failure and receipt.
         #[source]

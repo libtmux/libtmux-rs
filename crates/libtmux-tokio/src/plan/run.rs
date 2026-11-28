@@ -370,6 +370,7 @@ impl Execution<'_> {
         }
         self.validate_option_scopes()?;
         self.validate_layouts(server).await?;
+        let mut server = server.clone();
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -381,9 +382,10 @@ impl Execution<'_> {
             if let [index] = step.indices() {
                 if let Op::NewSession(request) = &self.steps()[*index] {
                     let receipt = server
-                        .create_session(request.clone())
+                        .new_session(request.clone())
                         .await
                         .map_err(|error| after_plan_effect(error, effect_seen))?;
+                    server = server.bound_to(receipt.generation())?;
                     reported.push(StepOutcome::created_session(*index, receipt, &mut bound));
                     outcomes[*index] = Outcome::Complete;
                     effect_seen = true;
@@ -391,8 +393,12 @@ impl Execution<'_> {
                     continue;
                 }
             }
+            server = server
+                .for_discovery()
+                .await
+                .map_err(|error| after_plan_effect(error, effect_seen))?;
             let (result, marked_creation) = self
-                .dispatch(server, &step, &bound)
+                .dispatch(&server, &step, &bound)
                 .await
                 .map_err(|error| after_plan_effect(error, effect_seen))?;
             dispatches += 1;
@@ -1046,6 +1052,14 @@ mod tests {
             })
         }
 
+        fn execute_operation(
+            &self,
+            request: CommandRequest,
+            _operation: crate::internal::operation::OperationContext,
+        ) -> DispatchFuture {
+            self.execute(request)
+        }
+
         fn shutdown(&self) -> ShutdownFuture {
             ShutdownFuture::new(async { Ok(()) })
         }
@@ -1054,7 +1068,9 @@ mod tests {
     #[test]
     fn creation_binding_rejects_a_wrong_scope_without_partial_state() {
         let mut plan = Plan::new();
-        plan.add(NewSession::new("work"));
+        plan.add(crate::plan::NewWindow::new(
+            "$1".parse::<SessionId>().expect("session id"),
+        ));
         let step = Planner::Sequential
             .steps(&plan)
             .into_iter()
@@ -1066,9 +1082,9 @@ mod tests {
             &mut bound,
             plan.steps(),
             &step,
-            b"$1 %2 sentinel-binding-output\n",
+            b"@1 sentinel-binding-output\n",
         )
-        .expect_err("the second and third ids have the wrong scopes");
+        .expect_err("the second id is not a pane");
 
         assert_eq!(error.kind(), crate::ErrorKind::Decode);
         assert!(bound.is_empty(), "a failed decode binds nothing");
@@ -1087,7 +1103,9 @@ mod tests {
                 calls: AtomicUsize::new(0),
                 stdout,
             });
-            let server = Server::from_executor_for_test(executor.clone());
+            let server = Server::from_executor_for_test(executor.clone())
+                .bound_to(crate::ServerGeneration::from_raw(222, 333))
+                .expect("fixture generation");
             let mut plan = Plan::new();
             let session = plan.add(NewSession::new("work"));
             plan.add(SendKeys::new(session.pane()).text("do-not-send"));
@@ -1100,7 +1118,10 @@ mod tests {
                 "the dependent operation must not be dispatched",
             );
             let error = outcome.expect_err("malformed creation output fails the run");
-            assert_eq!(error.kind(), crate::ErrorKind::PartialEffect);
+            assert_eq!(
+                error.operation_effect(),
+                Some(libtmux_core::Effect::Unknown)
+            );
             assert!(!error.is_transient());
             let diagnostic = format!("{error:?} {error}");
             assert!(!diagnostic.contains("sentinel-binding-output"));
@@ -1113,7 +1134,9 @@ mod tests {
             calls: AtomicUsize::new(0),
             second: SecondOutcome::DispatchError,
         });
-        let server = Server::from_executor_for_test(executor.clone());
+        let server = Server::from_executor_for_test(executor.clone())
+            .bound_to(crate::ServerGeneration::from_raw(222, 333))
+            .expect("fixture generation");
 
         let error = server
             .run_plan(&two_step_plan(false), Planner::Sequential)
@@ -1138,7 +1161,9 @@ mod tests {
             calls: AtomicUsize::new(0),
             second: SecondOutcome::DispatchError,
         });
-        let server = Server::from_executor_for_test(executor.clone());
+        let server = Server::from_executor_for_test(executor.clone())
+            .bound_to(crate::ServerGeneration::from_raw(222, 333))
+            .expect("fixture generation");
 
         let error = server
             .run_plan(&two_step_plan(true), Planner::Sequential)
@@ -1157,7 +1182,9 @@ mod tests {
             calls: AtomicUsize::new(0),
             second: SecondOutcome::Refused,
         });
-        let server = Server::from_executor_for_test(executor.clone());
+        let server = Server::from_executor_for_test(executor.clone())
+            .bound_to(crate::ServerGeneration::from_raw(222, 333))
+            .expect("fixture generation");
 
         let result = server
             .run_plan(&two_step_plan(false), Planner::Sequential)
@@ -1177,7 +1204,9 @@ mod tests {
             calls: AtomicUsize::new(0),
             second: SecondOutcome::Refused,
         });
-        let server = Server::from_executor_for_test(executor.clone());
+        let server = Server::from_executor_for_test(executor.clone())
+            .bound_to(crate::ServerGeneration::from_raw(222, 333))
+            .expect("fixture generation");
 
         let result = server
             .run_plan(&two_step_plan(true), Planner::Sequential)

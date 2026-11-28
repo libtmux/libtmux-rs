@@ -170,7 +170,10 @@ async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row
     let plan = workload(name);
     let before = witness.started();
     let started = Instant::now();
-    let result = server.run_plan(&plan, planner).await.expect("the plan runs");
+    let result = server
+        .run_plan(&plan, planner)
+        .await
+        .expect("the plan runs");
     let elapsed = started.elapsed();
     let processes = witness.started() - before;
 
@@ -238,10 +241,14 @@ async fn run_control_mode(connection: Connection, name: &str) -> Option<Row> {
     // Control mode attaches to a session, so the plan cannot be the thing that
     // creates its own connection. One session is made first; the workload then
     // builds its own beside it.
-    let host = server
+    let receipt = server
         .new_session("control-host")
         .await
         .expect("host session");
+    let host = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
 
     // Counted from here, so the connection's own process is in the row.
     let before = witness.started();
@@ -253,10 +260,7 @@ async fn run_control_mode(connection: Connection, name: &str) -> Option<Row> {
     let plan = workload(name);
     let started = Instant::now();
     let (mode, result) = match connection {
-        Connection::Streaming => (
-            "control-mode/streaming",
-            sender.run_plan(&plan).await,
-        ),
+        Connection::Streaming => ("control-mode/streaming", sender.run_plan(&plan).await),
         Connection::Routed => {
             let routed = server
                 .over_control_mode(&sender)
@@ -363,7 +367,10 @@ async fn what_a_fold_costs_when_something_fails() {
         plan.add(libtmux_tokio::plan::KillPane::new(absent.clone()));
         plan.add(SendKeys::new(absent.clone()).text("never runs").enter());
 
-        let result = server.run_plan(&plan, planner).await.expect("the plan runs");
+        let result = server
+            .run_plan(&plan, planner)
+            .await
+            .expect("the plan runs");
         println!(
             "  {:<12} {} dispatch(es) -> {:?}",
             format!("{planner:?}"),

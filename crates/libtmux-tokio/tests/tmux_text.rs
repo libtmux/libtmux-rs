@@ -89,12 +89,10 @@ fn byte_references_preserve_the_allocation_and_invalid_utf8() {
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn accessor_names_compose_with_byte_name_lookups() {
-    let guard = libtmux_tokio::test::TestServer::new().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("s\u{fffd}")
+    let guard = libtmux_tokio::test::TestServer::new()
         .await
-        .expect("session");
+        .expect("tmux starts");
+    let session = guard.session("s\u{fffd}").await.expect("session");
     let found = guard
         .server()
         .session(session.name())

@@ -16,7 +16,7 @@ use libtmux_tokio::test::TestServer;
 async fn every_listing_reports_a_server_that_is_gone() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server().clone();
-    let session = server.new_session("gone").await.expect("session");
+    let session = guard.session("gone").await.expect("session");
     let window = session
         .active_window()
         .await

@@ -8,11 +8,10 @@ use libtmux_tokio::{NewSession, PaneWait, Server};
 type ExampleError = Box<dyn Error>;
 
 async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
-    let session = server
-        .new_session(
-            NewSession::new("capture").command("env ENV=/dev/null PS1='api-ready> ' sh"),
-        )
+    let receipt = server
+        .new_session(NewSession::new("capture").command("env ENV=/dev/null PS1='api-ready> ' sh"))
         .await?;
+    let session = server.inspect_session(&receipt).await?;
     let panes = session.panes().await?;
     let pane = panes.first().ok_or("session has no pane")?;
     if pane

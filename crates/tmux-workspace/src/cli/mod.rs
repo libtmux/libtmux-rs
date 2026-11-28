@@ -119,7 +119,9 @@ impl From<libtmux_tokio::Error> for CliError {
         // classifies every variant into "for reporting and routing"; reuse
         // it rather than re-deriving the same split from Error's variants.
         let code = match error.kind() {
-            libtmux_tokio::ErrorKind::Unreachable | libtmux_tokio::ErrorKind::ServerGone => "tmux_unavailable",
+            libtmux_tokio::ErrorKind::Unreachable | libtmux_tokio::ErrorKind::ServerGone => {
+                "tmux_unavailable"
+            }
             // Everything rejected before a command is sent was rejected for
             // what the document said: a layout name that is not one, an
             // option tmux keeps somewhere else. That is a defect in the

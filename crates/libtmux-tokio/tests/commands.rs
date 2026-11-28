@@ -42,7 +42,8 @@ async fn a_listed_buffer_name_passes_back_unchanged() {
     names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     assert_eq!(names, expected);
 
-    let safe_delete = versions::supports(server, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await;
+    let safe_delete =
+        versions::supports(server, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await;
     for name in &names {
         assert!(
             server.buffer(name).await.expect("read").is_some(),
@@ -293,7 +294,7 @@ async fn real_tmux_compat_key_bindings_read_as_fields() {
 async fn formats_expand_against_a_target() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("formatted").await.expect("session");
+    let session = guard.session("formatted").await.expect("session");
 
     // A format is evaluated against a pane, and resolves the session and
     // window around it from there.
@@ -380,8 +381,7 @@ async fn scoped_operations_clean_up_after_success_and_failure() {
 #[tokio::test]
 async fn scoped_windows_and_panes_nest() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("nested").await.expect("session");
+    let session = guard.session("nested").await.expect("session");
 
     let before = session.windows().await.expect("windows").len();
 
@@ -393,7 +393,9 @@ async fn scoped_windows_and_panes_nest() {
                     .with_pane(
                         SplitOptions::new(SplitDirection::Below).command("sleep 300"),
                         async |_pane| {
-                            Ok::<_, libtmux_tokio::Error>(window.panes().await.expect("panes").len())
+                            Ok::<_, libtmux_tokio::Error>(
+                                window.panes().await.expect("panes").len(),
+                            )
                         },
                     )
                     .await
@@ -416,7 +418,7 @@ async fn scoped_windows_and_panes_nest() {
 async fn scoped_operations_clean_up_after_cancellation() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server().clone();
-    let anchor = server.new_session("anchor").await.expect("session");
+    let anchor = guard.session("anchor").await.expect("session");
     let window = anchor
         .active_window()
         .await
@@ -695,8 +697,8 @@ async fn a_client_reports_itself_while_it_is_attached() {
         return;
     };
     let server = guard.server();
-    let first = server.new_session("client-one").await.expect("session");
-    let second = server.new_session("client-two").await.expect("session");
+    let first = guard.session("client-one").await.expect("session");
+    let second = guard.session("client-two").await.expect("session");
 
     let control = ControlMode::attach(server, first.id())
         .await
@@ -769,8 +771,8 @@ async fn server_operations_reject_foreign_handles() {
     let right_guard = TestServer::builder().start().await.expect("tmux starts");
     let left = left_guard.server();
     let right = right_guard.server();
-    let left_session = left.new_session("left").await.expect("left session");
-    let right_session = right.new_session("right").await.expect("right session");
+    let left_session = left_guard.session("left").await.expect("left session");
+    let right_session = right_guard.session("right").await.expect("right session");
     let right_pane = right_session.panes().await.expect("right panes").remove(0);
     assert_eq!(
         error_kind!(left.format(Some(&right_pane), "#{session_name}")),
@@ -801,7 +803,11 @@ async fn server_operations_reject_foreign_handles() {
         error_kind!(left.display_menu(
             Some(&foreign_client),
             "menu",
-            [libtmux_tokio::MenuItem::new("Item", "i", "display-message item")],
+            [libtmux_tokio::MenuItem::new(
+                "Item",
+                "i",
+                "display-message item"
+            )],
         )),
         error_kind!(left.command_prompt(
             Some(&foreign_client),
@@ -830,8 +836,7 @@ async fn server_operations_reject_foreign_handles() {
 #[tokio::test]
 async fn pane_modes_enter_and_leave() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("modes").await.expect("session");
+    let session = guard.session("modes").await.expect("session");
     let mut pane = session
         .panes()
         .await
@@ -866,8 +871,7 @@ async fn pane_modes_enter_and_leave() {
 #[tokio::test]
 async fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("clocked").await.expect("session");
+    let session = guard.session("clocked").await.expect("session");
     let mut pane = session
         .panes()
         .await
@@ -904,8 +908,7 @@ async fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
 #[tokio::test]
 async fn edge_flags_follow_the_split_that_made_them() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("edges").await.expect("session");
+    let session = guard.session("edges").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -948,7 +951,7 @@ async fn edge_flags_follow_the_split_that_made_them() {
 async fn a_global_window_option_is_read_globally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("options").await.expect("session");
+    let session = guard.session("options").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -991,8 +994,7 @@ async fn a_global_window_option_is_read_globally() {
 #[tokio::test]
 async fn a_pane_pipes_until_it_is_told_to_stop() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("piped").await.expect("session");
+    let session = guard.session("piped").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     let mut pane = pane;
@@ -1033,7 +1035,7 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
 async fn a_pane_reports_its_own_terminal() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("ttys").await.expect("session");
+    let session = guard.session("ttys").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     let reported = pane.tty().as_str().expect("a tty path is text").to_owned();
@@ -1064,7 +1066,7 @@ async fn a_pane_reports_its_own_terminal() {
 async fn window_flags_each_read_their_own_field() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("flags").await.expect("session");
+    let session = guard.session("flags").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -1124,7 +1126,7 @@ async fn window_flags_each_read_their_own_field() {
 async fn a_buffer_pastes_into_a_pane() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("pasted").await.expect("session");
+    let session = guard.session("pasted").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     server
@@ -1160,8 +1162,7 @@ async fn searching_a_window_finds_the_pane_that_matches() {
     use libtmux_tokio::query::Filterable as _;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("searched").await.expect("session");
+    let session = guard.session("searched").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -1202,7 +1203,7 @@ async fn a_client_reports_its_own_terminal_and_type() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("client-fields").await.expect("session");
+    let session = guard.session("client-fields").await.expect("session");
     let control = ControlMode::attach(server, session.id())
         .await
         .expect("control mode attaches");
@@ -1293,7 +1294,7 @@ async fn timestamps_are_system_times_that_agree_with_their_handles() {
         return;
     };
     let server = guard.server();
-    let mut session = server.new_session("clock").await.expect("session");
+    let mut session = guard.session("clock").await.expect("session");
     let control = ControlMode::attach(server, session.id())
         .await
         .expect("control mode attaches");
@@ -1380,7 +1381,7 @@ async fn timestamps_are_system_times_that_agree_with_their_handles() {
 async fn dispatch_only_commands_are_accepted() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("dispatch").await.expect("session");
+    let session = guard.session("dispatch").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     pane.send_prefix().await.expect("the prefix key is sent");
@@ -1409,8 +1410,8 @@ async fn dispatch_only_commands_are_accepted() {
 async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let home = server.new_session("home").await.expect("session");
-    let elsewhere = server.new_session("elsewhere").await.expect("session");
+    let home = guard.session("home").await.expect("session");
+    let elsewhere = guard.session("elsewhere").await.expect("session");
 
     let shared = home
         .new_window(NewWindowOptions::new("shared"))
@@ -1538,7 +1539,7 @@ async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("nobody").await.expect("session");
+    let session = guard.session("nobody").await.expect("session");
     assert!(
         server.clients().await.expect("clients").is_empty(),
         "nothing is attached"
@@ -1584,8 +1585,7 @@ async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
 #[tokio::test]
 async fn a_dead_pane_says_so_however_the_question_is_asked() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("gone").await.expect("session");
+    let session = guard.session("gone").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -1669,7 +1669,7 @@ async fn a_dead_session_is_not_an_unset_variable() {
     let server = guard.server();
     // A second session keeps the server alive once the first is killed.
     server.new_session("keeper").await.expect("session");
-    let doomed = server.new_session("doomed").await.expect("session");
+    let doomed = guard.session("doomed").await.expect("session");
 
     doomed
         .set_environment("FOO", "bar")
@@ -1760,11 +1760,10 @@ async fn retry_until_waits_for_tmux_rather_than_sleeping() {
     use std::time::Duration;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
 
     // A unique name lets concurrent tests share one server without colliding.
     let name = unique_name("retry");
-    let session = server.new_session(name.as_str()).await.expect("session");
+    let session = guard.session(name.as_str()).await.expect("session");
     assert_ne!(unique_name("retry"), name);
 
     // tmux applies a split before the new pane's command has necessarily
@@ -1798,9 +1797,8 @@ async fn retry_until_waits_for_tmux_rather_than_sleeping() {
 #[tokio::test]
 async fn a_scoped_raw_command_targets_its_own_object() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let first = server.new_session("first").await.expect("first session");
-    let second = server.new_session("second").await.expect("second session");
+    let first = guard.session("first").await.expect("first session");
+    let second = guard.session("second").await.expect("second session");
 
     // Each handle addresses itself, not whatever tmux considers current.
     for (session, expected) in [(&first, "first"), (&second, "second")] {
@@ -1855,8 +1853,7 @@ async fn a_scoped_raw_command_targets_its_own_object() {
 #[tokio::test]
 async fn formatting_returns_text_and_displaying_returns_nothing() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("split").await.expect("session");
+    let session = guard.session("split").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -1977,7 +1974,7 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("prompts").await.expect("session");
+    let session = guard.session("prompts").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     let supported = server
@@ -2073,7 +2070,7 @@ async fn a_suspended_client_is_not_reported_gone() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("suspendable").await.expect("session");
+    let session = guard.session("suspendable").await.expect("session");
 
     let hides_stopped = server
         .capabilities()
@@ -2182,11 +2179,10 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
     }
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
     // Printing is the pane's initial command; prompt readiness is not part of
     // this capture assertion.
-    let session = server
-        .new_session(
+    let session = guard
+        .session(
             libtmux_tokio::NewSession::new("trailing").command("printf 'AB   \\n'; exec /bin/sh"),
         )
         .await
@@ -2232,7 +2228,7 @@ async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("blankcells").await.expect("session");
+    let session = guard.session("blankcells").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     let supported = server
@@ -2283,8 +2279,7 @@ async fn waiting_survives_scrollback_and_a_line_wider_than_the_pane() {
     use libtmux_tokio::PaneWait;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("waits").await.expect("session");
+    let session = guard.session("waits").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     // Wider than any sane pane, so tmux wraps it. A screen read would see
@@ -2335,7 +2330,7 @@ async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("dying").await.expect("session");
+    let session = guard.session("dying").await.expect("session");
 
     // `remain-on-exit` keeps the pane after its command ends, so the wait has
     // a dead pane to observe rather than a missing one.
@@ -2377,8 +2372,7 @@ async fn a_predicate_wait_arrives_or_runs_to_its_deadline() {
     use libtmux_tokio::PaneWait;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("predicate").await.expect("session");
+    let session = guard.session("predicate").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     // Wider than the pane, so equality holds only if the wrap is joined; and
@@ -2427,7 +2421,7 @@ async fn a_predicate_wait_ends_when_the_pane_dies() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("dying").await.expect("session");
+    let session = guard.session("dying").await.expect("session");
     server
         .cmd(
             Command::new("set-option")
@@ -2473,7 +2467,7 @@ async fn a_predicate_wait_runs_over_a_control_connection() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let session = guard.server().new_session("routed").await.expect("session");
+    let session = guard.session("routed").await.expect("session");
     let (sender, events) = ControlMode::attach(guard.server(), session.id())
         .await
         .expect("a control connection")
@@ -2512,8 +2506,7 @@ async fn a_quiet_below_the_polling_interval_still_costs_one() {
     use libtmux_tokio::PaneWait;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("settling").await.expect("session");
+    let session = guard.session("settling").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     // Nothing is dispatched, so what this times is the floor the interval puts
@@ -2544,8 +2537,7 @@ async fn breaking_out_the_only_pane_moves_its_window() {
     use libtmux_tokio::NewWindowOptions;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("lonely").await.expect("session");
+    let session = guard.session("lonely").await.expect("session");
     let window = session
         .new_window(NewWindowOptions::new("lone"))
         .await
@@ -2584,8 +2576,7 @@ async fn a_window_acts_on_itself_after_its_index_moved() {
     use libtmux_tokio::NewWindowOptions;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("renumber").await.expect("session");
+    let session = guard.session("renumber").await.expect("session");
 
     let mut moved = session
         .new_window(NewWindowOptions::new("moved"))
@@ -2643,7 +2634,7 @@ async fn a_name_outside_ascii_survives_the_listing() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let session = server.new_session("日本語").await.expect("session");
+    let session = guard.session("日本語").await.expect("session");
     assert_eq!(session.name().as_bytes(), "日本語".as_bytes());
 
     let listed = server.sessions().await.expect("sessions");

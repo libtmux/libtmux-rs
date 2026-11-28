@@ -365,8 +365,8 @@ mod tests {
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let session = server
-            .new_session("caller-hard-link")
+        let session = guard
+            .session("caller-hard-link")
             .await
             .expect("session starts");
         let pane = session.panes().await.expect("panes list").remove(0);

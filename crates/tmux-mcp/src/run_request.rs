@@ -446,8 +446,7 @@ mod tests {
             return;
         };
         let session = guard
-            .server()
-            .new_session("prepared-cleanup")
+            .session("prepared-cleanup")
             .await
             .expect("session starts");
         let pane = session.panes().await.expect("panes list").remove(0);
@@ -516,8 +515,8 @@ mod tests {
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let first_session = server
-            .new_session("first-generation")
+        let first_session = guard
+            .session("first-generation")
             .await
             .expect("first session starts");
         let first_pane = first_session
@@ -545,10 +544,14 @@ mod tests {
             .socket_path(&socket)
             .build()
             .expect("replacement route builds");
-        let second_session = replacement
+        let receipt = replacement
             .new_session("second-generation")
             .await
             .expect("replacement session starts");
+        let second_session = replacement
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
         let second_pane = second_session
             .panes()
             .await
@@ -601,8 +604,8 @@ mod tests {
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let pane = server
-            .new_session("physical-reservation")
+        let pane = guard
+            .session("physical-reservation")
             .await
             .expect("session starts")
             .panes()

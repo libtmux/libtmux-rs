@@ -46,6 +46,8 @@ struct Effects {
     input: usize,
     path: Option<String>,
     session: Option<Session>,
+    creation: Option<(Server, libtmux_tokio::CreatedSession)>,
+    unknown_creation: bool,
     owned: bool,
     changed: bool,
     mutation_started: Option<&'static str>,
@@ -69,7 +71,7 @@ impl LoadState {
         let mut partial = !self.results.is_empty();
         let mut results = self.results.clone();
         if let Some(effects) = &self.current {
-            let uncertain = error.code == "interrupted" && effects.mutation_started.is_some();
+            let uncertain = effects.unknown_creation || (error.code == "interrupted" && effects.mutation_started.is_some());
             partial |= effects.changed || uncertain;
             failure["input_index"] = json!(effects.input);
             failure["partial_effects"] = json!(effects.changed);
@@ -92,7 +94,7 @@ impl LoadState {
                 results.push(json!({
                     "input": effects.path,
                     "input_index": effects.input,
-                    "session_id": effects.session.as_ref().map(|s| s.id().to_string()),
+                    "session_id": effects.session_id(),
                     "session_name": effects.session.as_ref().map(|s| s.name().to_string_lossy()),
                     "reused": effects.stage == REUSED,
                 }));
@@ -119,8 +121,20 @@ impl LoadState {
 }
 
 impl Effects {
+    fn session_id(&self) -> Option<String> {
+        self.creation.as_ref().map(|(_, receipt)| receipt.session().to_string())
+            .or_else(|| self.session.as_ref().map(|session| session.id().to_string()))
+    }
+
+    fn record_creation(&mut self, server: &Server, receipt: &libtmux_tokio::CreatedSession) {
+        self.creation = Some((server.clone(), receipt.clone()));
+        self.owned = true;
+        self.changed = true;
+        self.stage = "session-created";
+    }
+
     fn value(&self) -> Value {
-        json!({"input_index":self.input,"session_id":self.session.as_ref().map(|s|s.id().to_string()),"session_name":self.session.as_ref().map(|s|s.name().to_string_lossy()),"owned_session":self.owned,"window_ids":self.windows,"pane_ids":self.panes,"stage":self.stage,"script_output":self.script_output})
+        json!({"input_index":self.input,"session_id":self.session_id(),"session_name":self.session.as_ref().map(|s|s.name().to_string_lossy()),"owned_session":self.owned,"window_ids":self.windows,"pane_ids":self.panes,"stage":self.stage,"script_output":self.script_output})
     }
 }
 
@@ -839,11 +853,16 @@ async fn build(
         if let Some((columns, rows)) = context.dimensions {
             options = options.size(columns, rows);
         }
-        let session = server.new_session(options).await?;
+        let receipt = server.new_session(options).await.inspect_err(|error| {
+            if let Some(created) = error.creation_receipt() {
+                effects.record_creation(server, created);
+            } else {
+                effects.unknown_creation = error.operation_effect() == Some(libtmux_core::Effect::Unknown);
+            }
+        })?;
+        effects.record_creation(server, &receipt);
+        let session = server.inspect_session(&receipt).await?;
         effects.session = Some(session.clone());
-        effects.owned = true;
-        effects.changed = true;
-        effects.stage = "session-created";
         report.event("session-created", json!({"input_index":input,"session_id":session.id().to_string(),"session_name":workspace.name}))?;
         session
     };
@@ -940,10 +959,13 @@ async fn remove_owned_session(effects: &mut Effects) -> Result<bool> {
     if !effects.owned {
         return Ok(false);
     }
-    let Some(session) = effects.session.clone() else {
+    if let Some((server, receipt)) = &effects.creation {
+        server.kill_created_session(receipt).await?;
+    } else if let Some(session) = effects.session.clone() {
+        session.kill().await?;
+    } else {
         return Ok(false);
-    };
-    session.kill().await?;
+    }
     effects.changed = false;
     effects.windows.clear();
     effects.panes.clear();

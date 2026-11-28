@@ -6,8 +6,8 @@
 
 use std::error::Error as StdError;
 
-use libtmux_tokio::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
 use libtmux_core::VersionError as Error;
+use libtmux_tokio::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
 use static_assertions::assert_impl_all;
 
 assert_impl_all!(Error: StdError, Send, Sync);
@@ -394,7 +394,8 @@ fn shared_version_failures_keep_the_client_error_vocabulary() {
     assert_eq!(refused.minimum_version(), Some(&TmuxVersion::MIN_SUPPORTED));
     assert_eq!(refused.kind(), libtmux_tokio::ErrorKind::UnsupportedVersion);
 
-    let malformed: libtmux_tokio::Error = TmuxVersion::parse_output(b"invalid\n").unwrap_err().into();
+    let malformed: libtmux_tokio::Error =
+        TmuxVersion::parse_output(b"invalid\n").unwrap_err().into();
     assert!(matches!(
         malformed,
         libtmux_tokio::Error::InvalidVersionOutput { output_len: 8 },

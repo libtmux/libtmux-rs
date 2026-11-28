@@ -9,8 +9,7 @@
 use libtmux_tokio::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux_tokio::test::TestServer;
 use libtmux_tokio::{
-    NewSession, NewWindowOptions, Pane, SessionTree, SplitDirection, SplitOptions,
-    WindowTree,
+    NewSession, NewWindowOptions, Pane, SessionTree, SplitDirection, SplitOptions, WindowTree,
 };
 
 /// Build a server with a shape worth asking questions about.
@@ -21,10 +20,14 @@ use libtmux_tokio::{
 /// `build` ends up with windows `editor` (two panes) and `logs`; `idle` with
 /// one window, `shell`.
 async fn populate(server: &libtmux_tokio::Server) {
-    let build = server
+    let receipt = server
         .new_session(NewSession::new("build").window_name("editor"))
         .await
         .expect("session");
+    let build = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     build
         .windows()
         .await
@@ -177,7 +180,8 @@ async fn a_relation_survives_the_portable_envelope() {
         },
     });
     assert!(
-        serde_json::from_value::<libtmux_tokio::query::FilterExpr<SessionTree>>(mismatched).is_err(),
+        serde_json::from_value::<libtmux_tokio::query::FilterExpr<SessionTree>>(mismatched)
+            .is_err(),
         "pane_index is not a window field",
     );
 
@@ -192,7 +196,9 @@ async fn a_relation_survives_the_portable_envelope() {
             "expr": {"op": "eq", "field": "window_name", "value": "x"},
         },
     });
-    assert!(serde_json::from_value::<libtmux_tokio::query::FilterExpr<SessionTree>>(unknown).is_err(),);
+    assert!(
+        serde_json::from_value::<libtmux_tokio::query::FilterExpr<SessionTree>>(unknown).is_err(),
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -203,8 +209,8 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let busy = server
-        .new_session(NewSession::new("busy"))
+    let busy = guard
+        .session(NewSession::new("busy"))
         .await
         .expect("session");
     for name in ["one", "two", "three"] {
@@ -243,8 +249,8 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
 
     // Ordering is numeric, not lexicographic: ten windows beat a bound of
     // nine, where a string comparison would put "10" below "9".
-    let ten = server
-        .new_session(NewSession::new("ten"))
+    let ten = guard
+        .session(NewSession::new("ten"))
         .await
         .expect("session");
     for index in 0..9 {
@@ -310,5 +316,7 @@ fn ordering_travels_the_wire_and_is_refused_where_it_has_no_meaning() {
         "target": "session",
         "expr": {"op": "gt", "field": "session_windows", "value": ["1", "2"]},
     });
-    assert!(serde_json::from_value::<libtmux_tokio::query::FilterExpr<Session>>(two_bounds).is_err());
+    assert!(
+        serde_json::from_value::<libtmux_tokio::query::FilterExpr<Session>>(two_bounds).is_err()
+    );
 }

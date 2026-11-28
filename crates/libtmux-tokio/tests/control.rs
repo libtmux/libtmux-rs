@@ -96,7 +96,7 @@ async fn commands_travel_down_one_connection() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("control").await.expect("session");
+    let session = guard.session("control").await.expect("session");
 
     let control = ControlMode::attach(server, session.id())
         .await
@@ -139,10 +139,7 @@ async fn owns_control_client_reports_its_own_spawned_connections() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("owns-control-client")
-        .await
-        .expect("session");
+    let session = guard.session("owns-control-client").await.expect("session");
 
     assert!(
         server.clients().await.expect("clients list").is_empty(),
@@ -202,7 +199,10 @@ async fn stream_reports_server_shutdown_once_before_eof() {
     })
     .await
     .expect("the terminal diagnostic arrives");
-    assert!(matches!(error, libtmux_tokio::Error::ExecutorShutdown { .. }));
+    assert!(matches!(
+        error,
+        libtmux_tokio::Error::ExecutorShutdown { .. }
+    ));
     assert!(commands.is_closed());
     assert!(events.next_event().await.is_none());
     assert!(events.next().await.is_none());
@@ -220,7 +220,7 @@ async fn the_server_reports_changes_as_they_happen() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("watched").await.expect("session");
+    let session = guard.session("watched").await.expect("session");
 
     let (commands, mut events) = ControlMode::attach(server, session.id())
         .await
@@ -261,7 +261,7 @@ async fn watching_and_sending_run_at_the_same_time() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("concurrent").await.expect("session");
+    let session = guard.session("concurrent").await.expect("session");
 
     let (commands, mut events) = ControlMode::attach(server, session.id())
         .await
@@ -303,7 +303,7 @@ async fn pane_output_keeps_bytes_no_string_would_hold() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("binary").await.expect("session");
+    let session = guard.session("binary").await.expect("session");
 
     let (commands, mut events) = ControlMode::attach(server, session.id())
         .await
@@ -355,7 +355,7 @@ async fn events_compose_with_the_async_ecosystem() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("streamed").await.expect("session");
+    let session = guard.session("streamed").await.expect("session");
 
     let (commands, events) = ControlMode::attach(server, session.id())
         .await
@@ -398,7 +398,7 @@ async fn attaching_finishes_before_anything_can_be_missed() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("racing").await.expect("session");
+    let session = guard.session("racing").await.expect("session");
 
     // Attach and change the server with nothing in between. If attach were
     // to return as soon as the process started, tmux would still be attaching
@@ -437,7 +437,7 @@ async fn either_half_keeps_the_connection_alive_on_its_own() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("halves").await.expect("session");
+    let session = guard.session("halves").await.expect("session");
 
     // A caller who only watches has no use for the sender. Dropping it must
     // not take the connection with it.
@@ -484,7 +484,7 @@ async fn shutting_down_does_not_wait_for_a_sender_that_is_still_alive() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("stopping").await.expect("session");
+    let session = guard.session("stopping").await.expect("session");
 
     let (commands, events) = ControlMode::attach(server, session.id())
         .await
@@ -518,8 +518,7 @@ async fn one_pane_can_be_watched_without_the_protocol_showing() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let session = server.new_session("streaming").await.expect("session");
+    let session = guard.session("streaming").await.expect("session");
 
     let window = session
         .windows()
@@ -578,7 +577,7 @@ async fn a_command_holding_spaces_survives_the_text_protocol() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("quoting").await.expect("session");
+    let session = guard.session("quoting").await.expect("session");
 
     let control = ControlMode::attach(server, session.id())
         .await
@@ -616,10 +615,7 @@ async fn a_command_that_cannot_be_a_line_is_refused_before_it_is_sent() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("unrepresentable")
-        .await
-        .expect("session");
+    let session = guard.session("unrepresentable").await.expect("session");
 
     let control = ControlMode::attach(server, session.id())
         .await
@@ -668,7 +664,7 @@ async fn detaching_a_session_removes_the_clients_attached_to_it() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("busy").await.expect("session");
+    let session = guard.session("busy").await.expect("session");
 
     // Control mode attaches a real client, which is what makes this
     // observable: a headless fixture otherwise has nobody to detach, and a
@@ -704,7 +700,7 @@ async fn a_client_reports_the_session_window_and_pane_it_is_attached_to() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("attached").await.expect("session");
+    let session = guard.session("attached").await.expect("session");
     let window = session
         .active_window()
         .await
@@ -788,7 +784,7 @@ async fn a_muted_pane_never_reaches_this_connection() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("muting").await.expect("session");
+    let session = guard.session("muting").await.expect("session");
     let window = session
         .windows()
         .await
@@ -866,8 +862,7 @@ async fn a_pane_created_after_narrowing_is_muted_too() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let session = server.new_session("late-pane").await.expect("session");
+    let session = guard.session("late-pane").await.expect("session");
     let window = session
         .windows()
         .await
@@ -936,15 +931,11 @@ async fn watching_one_pane_does_not_touch_an_unrelated_session() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let watched_session = server
-        .new_session("watch-scope-watched")
-        .await
-        .expect("session");
+    let watched_session = guard.session("watch-scope-watched").await.expect("session");
     let watched = watched_session.panes().await.expect("panes list").remove(0);
 
-    let other_session = server
-        .new_session("watch-scope-unrelated")
+    let other_session = guard
+        .session("watch-scope-unrelated")
         .await
         .expect("session");
     let other = other_session.panes().await.expect("panes list").remove(0);
@@ -988,7 +979,7 @@ async fn a_block_carrying_pane_ids_keeps_them_as_output() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("ids").await.expect("session");
+    let session = guard.session("ids").await.expect("session");
 
     let (commands, mut events) = ControlMode::attach(server, session.id())
         .await
@@ -1051,7 +1042,7 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("unread").await.expect("session");
+    let session = guard.session("unread").await.expect("session");
     let window = session
         .windows()
         .await
@@ -1129,7 +1120,7 @@ async fn replies_arrive_when_a_caller_only_ever_sends() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("sending").await.expect("session");
+    let session = guard.session("sending").await.expect("session");
 
     let (commands, events) = ControlMode::attach(server, session.id())
         .await
@@ -1170,8 +1161,7 @@ async fn a_slow_reader_of_one_pane_is_given_every_byte() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let session = server.new_session("counted").await.expect("session");
+    let session = guard.session("counted").await.expect("session");
     let window = session
         .windows()
         .await
@@ -1252,8 +1242,7 @@ async fn a_stream_opens_on_a_server_that_is_already_flooding() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let session = server.new_session("busy").await.expect("session");
+    let session = guard.session("busy").await.expect("session");
     let window = session
         .windows()
         .await
@@ -1305,11 +1294,7 @@ async fn observed_pane_death_ends_the_stream_via_layout_change() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let session = server
-        .new_session("pane-death-layout")
-        .await
-        .expect("session");
+    let session = guard.session("pane-death-layout").await.expect("session");
     let window = session
         .windows()
         .await
@@ -1363,11 +1348,7 @@ async fn observed_pane_death_ends_the_stream_via_window_close() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let session = server
-        .new_session("pane-death-window")
-        .await
-        .expect("session");
+    let session = guard.session("pane-death-window").await.expect("session");
 
     // A second window keeps the session alive once the first window's only
     // pane is killed, so that pane's death closes its window without ending
@@ -1421,8 +1402,8 @@ async fn observed_pane_death_in_a_never_active_window_ends_the_stream() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("pane-death-inactive-window")
+    let session = guard
+        .session("pane-death-inactive-window")
         .await
         .expect("session");
     // The first window stays active throughout: `NewWindowOptions` defaults
@@ -1476,11 +1457,7 @@ async fn pane_output_sender_reaches_the_streams_own_connection() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let session = server
-        .new_session("stream-mutes-itself")
-        .await
-        .expect("session");
+    let session = guard.session("stream-mutes-itself").await.expect("session");
     let window = session
         .windows()
         .await
@@ -1688,7 +1665,7 @@ async fn a_subscription_reports_a_change_under_its_own_name() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("watched").await.expect("session");
+    let session = guard.session("watched").await.expect("session");
 
     let (commands, mut events) = ControlMode::attach(server, session.id())
         .await
@@ -1734,7 +1711,7 @@ async fn unsubscribing_stops_the_reports() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("watched").await.expect("session");
+    let session = guard.session("watched").await.expect("session");
 
     let (commands, mut events) = ControlMode::attach(server, session.id())
         .await
@@ -1786,7 +1763,7 @@ async fn a_subscription_format_may_contain_colons() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("colonised").await.expect("session");
+    let session = guard.session("colonised").await.expect("session");
 
     let (commands, mut events) = ControlMode::attach(server, session.id())
         .await
@@ -1826,7 +1803,7 @@ async fn a_subscription_name_tmux_would_misread_is_refused() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("guarded").await.expect("session");
+    let session = guard.session("guarded").await.expect("session");
 
     let (commands, events) = ControlMode::attach(server, session.id())
         .await
@@ -1870,7 +1847,7 @@ async fn the_pause_threshold_and_its_resume_are_accepted() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("paused").await.expect("session");
+    let session = guard.session("paused").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     let (commands, events) = ControlMode::attach(server, session.id())
@@ -1913,8 +1890,8 @@ async fn resume_pane_recovers_what_mute_pane_muted() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("resume-recovers-mute")
+    let session = guard
+        .session("resume-recovers-mute")
         .await
         .expect("session");
     let window = session
@@ -1985,10 +1962,7 @@ async fn layout_events_and_snapshots_agree_on_format() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("layout-agreement")
-        .await
-        .expect("session");
+    let session = guard.session("layout-agreement").await.expect("session");
     let window = session
         .windows()
         .await
@@ -2050,9 +2024,8 @@ async fn a_pane_is_watched_wherever_it_now_lives() {
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
-    let server = guard.server();
-    let origin = server.new_session("origin").await.expect("session");
-    let destination = server.new_session("destination").await.expect("session");
+    let origin = guard.session("origin").await.expect("session");
+    let destination = guard.session("destination").await.expect("session");
 
     let origin_window = origin
         .windows()
@@ -2106,7 +2079,7 @@ async fn a_clients_listing_tells_our_own_connection_apart() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("watched").await.expect("session");
+    let session = guard.session("watched").await.expect("session");
 
     // No connection yet: nothing on the server is ours.
     assert!(

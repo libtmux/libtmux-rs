@@ -37,7 +37,7 @@ use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 /// use libtmux_tokio::EnvironmentEntry;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("env").await?;
+/// let session = guard.session("env").await?;
 ///
 /// session.set_environment("EDITOR", "hx").await?;
 /// assert!(matches!(
@@ -235,7 +235,7 @@ pub enum EnvironmentEntry {
 /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 /// # runtime.block_on(async {
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 ///
 /// // The name is read from the snapshot this handle owns, so it costs
 /// // nothing; asking tmux for the windows is `async` because it does.
@@ -283,7 +283,8 @@ impl Session {
     /// # let server = guard.server();
     /// use libtmux_tokio::{Pane, Session};
     ///
-    /// let session = server.new_session("locating-session").await?;
+    /// let receipt = server.new_session("locating-session").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// let pane = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
@@ -447,7 +448,7 @@ impl Session {
     /// use libtmux_tokio::query::Filterable as _;
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("searched").await?;
+    /// let session = guard.session("searched").await?;
     /// session.new_window("build").await?;
     ///
     /// let fields = libtmux_tokio::Window::filter_fields();
@@ -489,7 +490,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("moving").await?;
+    /// let session = guard.session("moving").await?;
     ///
     /// // One window, so there is nowhere to go and nothing broke.
     /// assert!(session.next_window().await?.is_none());
@@ -716,7 +717,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("raw").await?;
+    /// let session = guard.session("raw").await?;
     ///
     /// let result = session
     ///     .cmd(libtmux_tokio::Command::new("display-message").arg("-p").arg("#{session_name}"))
@@ -752,7 +753,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("shown").await?;
+    /// let session = guard.session("shown").await?;
     ///
     /// let expanded = session.format("#{session_name}").await?;
     /// assert_eq!(expanded.to_string_lossy(), "shown");
@@ -834,7 +835,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("locked").await?;
+    /// let session = guard.session("locked").await?;
     ///
     /// // Locking a session nobody is attached to is accepted and does nothing.
     /// session.lock().await?;
@@ -876,7 +877,7 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("busy").await?;
+    /// let session = guard.session("busy").await?;
     ///
     /// // Nothing is attached in a headless fixture, so this is a no-op.
     /// session.detach_clients().await?;
@@ -1038,7 +1039,7 @@ impl Session {
     /// use libtmux_tokio::{Availability, Session};
     ///
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("read").await?;
+    /// let session = guard.session("read").await?;
     /// let fields = Session::filter_fields();
     ///
     /// // Nobody is attached, so nobody is attached twice.
@@ -1109,7 +1110,7 @@ impl FilterSchema for Session {
 /// use libtmux_tokio::NewWindowOptions;
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 ///
 /// let window = session
 ///     .new_window(NewWindowOptions::new("editor").environment("EDITOR", "vi"))
@@ -1168,7 +1169,7 @@ impl fmt::Debug for NewWindowOptions {
 /// use libtmux_tokio::{NewWindowOptions, WindowPlacement};
 ///
 /// let guard = libtmux_tokio::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
+/// let session = guard.session("work").await?;
 /// let first = session.active_window().await?.expect("a session has a window");
 ///
 /// // Inserting before an index shifts the windows already at or after it, so

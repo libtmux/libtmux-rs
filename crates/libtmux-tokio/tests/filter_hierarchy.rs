@@ -204,8 +204,7 @@ async fn a_filter_expression_is_inert_and_reusable() {
 #[tokio::test]
 async fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("searched").await.expect("session");
+    let session = guard.session("searched").await.expect("session");
     for name in ["build", "build-docs", "test"] {
         session
             .new_window(libtmux_tokio::NewWindowOptions::new(name))

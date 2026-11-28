@@ -67,10 +67,14 @@ struct Target {
 impl Target {
     async fn new(server: &libtmux_tokio::Server, tool: &str) -> Self {
         let session_name = format!("surface-{tool}");
-        let session = server
+        let receipt = server
             .new_session(session_name.as_str())
             .await
             .expect("fixture session");
+        let session = server
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
         session
             .new_window("second")
             .await
@@ -203,7 +207,8 @@ fn is_version_refusal(result: &CallToolResult) -> bool {
 async fn every_advertised_tool_answers_the_schema_it_publishes() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let control = support::supports_control(guard.server()).await;
-    let staging = support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await;
+    let staging =
+        support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await;
     let selection =
         Selection::parse(Some("inspect,manage,execute,teardown"), None, None).expect("selection");
     let offered = TmuxTools::builder(guard.server().clone())

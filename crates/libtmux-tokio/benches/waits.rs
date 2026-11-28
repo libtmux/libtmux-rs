@@ -60,11 +60,16 @@ struct Fixture {
 
 async fn build() -> Fixture {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
+    let receipt = guard
         .server()
         .new_session("waits")
         .await
         .expect("a session");
+    let session = guard
+        .server()
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     Fixture { guard, pane }

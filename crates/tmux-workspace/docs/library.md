@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Your own code reaches a session someone left running through
     // `libtmux_tokio::Server::new()?`.
     let guard = TestServer::new().await?;
-    let session = guard.server().new_session("dev").await?;
+    let session = guard.session("dev").await?;
 
     let workspace = freeze(&session).await?;
     let yaml = workspace.to_yaml();

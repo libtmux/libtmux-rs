@@ -237,10 +237,14 @@ impl RawServerFiles {
             .build()
             .expect("raw server config");
         self.running = true;
-        let session = server
+        let receipt = server
             .new_session(NewSession::new(name).command("/bin/sh"))
             .await
             .expect("raw-path server starts");
+        let session = server
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
         let pane = session
             .panes()
             .await
@@ -811,8 +815,7 @@ async fn send_keys_uses_the_effective_per_pane_cohort() {
         .expect("one peer opts out");
 
     let linked = guard
-        .server()
-        .new_session("effective-cohort-link")
+        .session("effective-cohort-link")
         .await
         .expect("linked session starts");
     window
@@ -1272,8 +1275,7 @@ async fn pane_input_fails_closed_on_incomplete_or_inconsistent_caller_context() 
         .await
         .expect("foreign tmux starts");
     let foreign_pane = foreign_guard
-        .server()
-        .new_session("foreign-caller")
+        .session("foreign-caller")
         .await
         .expect("foreign session starts")
         .panes()
@@ -1301,7 +1303,8 @@ async fn pane_input_fails_closed_on_incomplete_or_inconsistent_caller_context() 
 #[tokio::test]
 async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
     let (guard, _, source, peer) = synchronized_fixture("paste-preflight").await;
-    let Some(guard) = support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
@@ -1353,7 +1356,8 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
 #[tokio::test]
 async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
     let (guard, tools, pane) = typing_fixture("paste-recheck").await;
-    let Some(guard) = support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
@@ -1425,7 +1429,8 @@ async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
 #[tokio::test]
 async fn paste_text_appends_enter_in_the_same_target_only_buffer() {
     let (guard, tools, source, peer) = synchronized_fixture("paste-enter").await;
-    let Some(guard) = support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
@@ -1471,8 +1476,7 @@ async fn paste_text_appends_enter_in_the_same_target_only_buffer() {
 async fn send_keys_batch_preflights_each_executed_row() {
     let (guard, tools, source, peer) = synchronized_fixture("batch-preflight").await;
     let target = guard
-        .server()
-        .new_session("batch-target")
+        .session("batch-target")
         .await
         .expect("independent target session starts")
         .active_window()
@@ -3088,16 +3092,17 @@ async fn list_sessions_excludes_this_processs_own_observation_client() {
         .spawn()
         .expect("a foreign control client starts");
 
-    let listed_with_foreign = libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
-        json(
-            tools
-                .list_sessions()
-                .await
-                .expect("sessions answers while a foreign client is attached"),
-        )["sessions"][0]["attached"]
-            == true
-    })
-    .await;
+    let listed_with_foreign =
+        libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
+            json(
+                tools
+                    .list_sessions()
+                    .await
+                    .expect("sessions answers while a foreign client is attached"),
+            )["sessions"][0]["attached"]
+                == true
+        })
+        .await;
     let _ = foreign.kill();
     let _ = foreign.wait();
     assert!(
@@ -3449,10 +3454,14 @@ const PLANTED_SECRET: &str = "planted-secret-9c41";
 
 /// Plant a server secret, a session secret, an allowed value, and a removal.
 async fn plant_environment(server: &Server) {
-    let session = server
+    let receipt = server
         .new_session("withheld")
         .await
         .expect("session starts");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     server
         .set_environment("PLANTED_API_KEY", PLANTED_SECRET)
         .await
@@ -3849,7 +3858,7 @@ async fn every_session_input_accepts_the_listed_id() {
         )
         .build();
     server.new_session("by-id").await.expect("session starts");
-    let donor = server.new_session("donor").await.expect("donor starts");
+    let donor = guard.session("donor").await.expect("donor starts");
     let moving = donor
         .new_window(NewWindowOptions::new("moving"))
         .await

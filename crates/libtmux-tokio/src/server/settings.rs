@@ -241,7 +241,8 @@ impl Server {
     /// // Separate stores: the session has no entry of its own, and reading it
     /// // does not fall back to the server. The value still reaches a process
     /// // the session starts.
-    /// let session = server.new_session("separate").await?;
+    /// let receipt = server.new_session("separate").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     /// assert_eq!(session.environment("EDITOR").await?, None);
     ///
     /// guard.shutdown().await?;

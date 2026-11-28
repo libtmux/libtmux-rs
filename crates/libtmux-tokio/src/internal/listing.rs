@@ -399,21 +399,6 @@ async fn create_one<T>(
         })
 }
 
-/// Create one session and return its hydrated snapshot.
-pub(crate) async fn create_session(
-    core: &Core,
-    build: impl FnOnce(&str) -> Command,
-) -> Result<SessionInfo, Error> {
-    let version = core.format_version().await?;
-    let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
-    let template = plan.template().to_owned();
-
-    create_one(core, "new-session", build, &template, |stdout| {
-        hydrate_session_infos_from_stdout(&plan, stdout).map_err(decode_error("new-session"))
-    })
-    .await
-}
-
 /// Create one window and return its hydrated projection.
 pub(crate) async fn create_window(
     core: &Core,
@@ -478,7 +463,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{client_session, create_session, mutation_failure};
+    use super::{client_session, create_window, mutation_failure};
     use crate::command::{CommandRequest, CommandResult, ProcessStatus, RequestId};
     use crate::formats::{FIELD_SEPARATOR, FormatPlan, ListProfile};
     use crate::internal::core::Core;
@@ -662,16 +647,16 @@ mod tests {
         });
         let core = Core::from_executor_for_test(executor.clone());
 
-        let error = create_session(&core, |_format| Command::new("new-session"))
+        let error = create_window(&core, |_format| Command::new("new-window"))
             .await
-            .expect_err("tmux succeeded but did not describe the created session");
+            .expect_err("tmux succeeded but did not describe the created window");
 
         assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
         assert_eq!(error.kind(), ErrorKind::PartialEffect);
         assert!(matches!(
             error,
             Error::AfterEffect {
-                operation: "new-session",
+                operation: "new-window",
                 ..
             }
         ));
@@ -691,15 +676,15 @@ mod tests {
         });
         let core = Core::from_executor_for_test(executor.clone());
 
-        let error = create_session(&core, |_format| Command::new("new-session"))
+        let error = create_window(&core, |_format| Command::new("new-window"))
             .await
-            .expect_err("tmux succeeded but described no session");
+            .expect_err("tmux succeeded but described no window");
 
         assert_ne!(error.kind(), ErrorKind::PartialEffect);
         assert!(matches!(
             error,
             Error::NoEffect {
-                command: "new-session",
+                command: "new-window",
                 ..
             }
         ));

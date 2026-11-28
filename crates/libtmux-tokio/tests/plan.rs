@@ -78,7 +78,9 @@ async fn layout_preflight_counts_the_panes_a_plan_creates() {
     plan.add(SplitWindow::new(window));
     plan.add(SelectLayout::new(window, THREE_CELL_LAYOUT));
     assert!(
-        guard.server().run_plan(&plan, Planner::Sequential)
+        guard
+            .server()
+            .run_plan(&plan, Planner::Sequential)
             .await
             .unwrap()
             .is_complete()
@@ -95,10 +97,11 @@ async fn layout_preflight_precedes_control_plan_mutation() {
     };
     let session = guard.session("layout-control-keeper").await.unwrap();
     let window = session.active_window().await.unwrap().unwrap();
-    let (sender, _events) = libtmux_tokio::control::ControlMode::attach(guard.server(), session.id())
-        .await
-        .unwrap()
-        .split();
+    let (sender, _events) =
+        libtmux_tokio::control::ControlMode::attach(guard.server(), session.id())
+            .await
+            .unwrap()
+            .split();
     let mut plan = Plan::new();
     plan.add(SetOption::session(
         session.id().clone(),
@@ -129,10 +132,11 @@ async fn real_tmux_compat_layout_preflight_control_version() {
     let window = session.active_window().await.unwrap().unwrap();
     let version = guard.server().capabilities().await.unwrap().tmux_version();
     let modern = version.has_behavior(&libtmux_tokio::since::MIRRORED_LAYOUTS);
-    let (sender, _events) = libtmux_tokio::control::ControlMode::attach(guard.server(), session.id())
-        .await
-        .unwrap()
-        .split();
+    let (sender, _events) =
+        libtmux_tokio::control::ControlMode::attach(guard.server(), session.id())
+            .await
+            .unwrap()
+            .split();
     for (index, layout, valid) in [
         (0, "main-h", !modern),
         (1, "main-horizontal-mirrored", modern),
@@ -414,7 +418,8 @@ async fn an_invalid_plan_refuses_before_its_first_mutation() {
     plan.add(NewSession::new("must-not-exist"));
     plan.add(NewWindow::new(future_session));
 
-    let failure = server.run_plan(&plan, Planner::Sequential)
+    let failure = server
+        .run_plan(&plan, Planner::Sequential)
         .await
         .expect_err("the plan is invalid");
     assert!(
@@ -439,7 +444,10 @@ async fn every_planner_leaves_the_same_tmux_state_for_a_different_price() {
         let server = guard.server();
 
         let plan = build_plan(&format!("priced-{index}"));
-        let result = server.run_plan(&plan, planner).await.expect("the plan runs");
+        let result = server
+            .run_plan(&plan, planner)
+            .await
+            .expect("the plan runs");
 
         assert!(
             result.is_complete(),
@@ -473,7 +481,10 @@ async fn a_slot_addresses_an_object_the_plan_has_not_made_yet() {
     let window = plan.add(NewWindow::new(session).name("built"));
     plan.add(SetOption::window(window, "synchronize-panes", "on"));
 
-    let result = server.run_plan(&plan, Planner::Sequential).await.expect("runs");
+    let result = server
+        .run_plan(&plan, Planner::Sequential)
+        .await
+        .expect("runs");
     assert!(result.is_complete(), "{:?}", result.operations());
 
     // The ids came back from the commands that made them, so no listing was
@@ -607,7 +618,10 @@ async fn operation_reports_keep_typed_values_aligned_across_planners() {
         plan.add(SelectPane::new(window.pane()));
         plan.add(CapturePane::new(pane.id().clone()));
 
-        let result = server.run_plan(&plan, planner).await.expect("the plan runs");
+        let result = server
+            .run_plan(&plan, planner)
+            .await
+            .expect("the plan runs");
         assert_operation_reports(&result, planner, marker);
     }
 
@@ -627,7 +641,10 @@ async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     plan.add(KillPane::new(absent.clone()));
     plan.add(SendKeys::new(absent.clone()).text("never").enter());
 
-    let sequential = server.run_plan(&plan, Planner::Sequential).await.expect("runs");
+    let sequential = server
+        .run_plan(&plan, Planner::Sequential)
+        .await
+        .expect("runs");
     assert_eq!(sequential.operations()[0].outcome(), Outcome::Complete);
     assert_eq!(sequential.operations()[1].outcome(), Outcome::Failed);
     assert_eq!(sequential.operations()[2].outcome(), Outcome::Skipped);
@@ -639,7 +656,8 @@ async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     folded_plan.add(KillPane::new(absent.clone()));
     folded_plan.add(SendKeys::new(absent).text("never").enter());
 
-    let folded = server.run_plan(&folded_plan, Planner::Folding)
+    let folded = server
+        .run_plan(&folded_plan, Planner::Folding)
         .await
         .expect("runs");
     assert_eq!(folded.steps().len(), 1, "the two shared an invocation");
@@ -679,7 +697,10 @@ async fn a_pause_holds_the_plan_on_every_planner() {
 
     for planner in [Planner::Sequential, Planner::Folding] {
         let started = std::time::Instant::now();
-        let result = server.run_plan(&plan, planner).await.expect("the plan runs");
+        let result = server
+            .run_plan(&plan, planner)
+            .await
+            .expect("the plan runs");
         let elapsed = started.elapsed();
 
         assert!(result.is_complete(), "{planner:?}: {result:?}");
@@ -702,8 +723,8 @@ async fn a_pause_is_refused_over_control_mode() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("paused-control")
+    let session = guard
+        .session("paused-control")
         .await
         .expect("session is created");
     let (sender, events) = ControlMode::attach(server, session.id())
@@ -743,8 +764,8 @@ async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("control-plan-refusal")
+    let session = guard
+        .session("control-plan-refusal")
         .await
         .expect("session is created");
     let (commands, events) = ControlMode::attach(server, session.id())
@@ -755,7 +776,8 @@ async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
     let absent: PaneId = "%999999".parse().expect("a pane id");
     let mut missing = Plan::new();
     missing.add(KillPane::new(absent));
-    let missing = commands.run_plan(&missing)
+    let missing = commands
+        .run_plan(&missing)
         .await
         .expect("tmux refusals remain plan result data");
     let step = &missing.steps()[0];
@@ -788,7 +810,8 @@ async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
         "synchronize-panes",
         secret,
     ));
-    let sensitive = commands.run_plan(&sensitive)
+    let sensitive = commands
+        .run_plan(&sensitive)
         .await
         .expect("tmux refusals remain plan result data");
     let step = &sensitive.steps()[0];
@@ -798,7 +821,10 @@ async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
         "the raw error stream remains inspectable",
     );
     let refusal = step.refusal().expect("the operation was refused");
-    assert!(matches!(refusal, libtmux_tokio::Error::CommandFailed { .. }));
+    assert!(matches!(
+        refusal,
+        libtmux_tokio::Error::CommandFailed { .. }
+    ));
     for diagnostic in [format!("{refusal:?} {refusal}"), format!("{sensitive:?}")] {
         assert!(!diagnostic.contains(secret), "{diagnostic}");
     }
@@ -927,7 +953,8 @@ async fn a_creation_the_run_can_name_is_not_reported_as_unproven() {
     plan.add(KillPane::new(pane));
     plan.add(SendKeys::new(pane).text("unreachable").enter());
 
-    let result = server.run_plan(&plan, Planner::Marked)
+    let result = server
+        .run_plan(&plan, Planner::Marked)
         .await
         .expect("the run reports rather than refusing");
 
@@ -965,7 +992,8 @@ async fn a_plan_will_not_write_an_option_where_tmux_keeps_another() {
     // plan reported success for a change that landed on the session.
     plan.add(SetOption::window(window, "mouse", "on"));
 
-    let error = server.run_plan(&plan, Planner::Sequential)
+    let error = server
+        .run_plan(&plan, Planner::Sequential)
         .await
         .map(|_| ())
         .expect_err("the plan names a scope tmux would not use");
@@ -1007,7 +1035,8 @@ async fn a_plan_refuses_a_layout_value_select_layout_cannot_parse() {
         let session = plan.add(NewSession::new("layout-guard"));
         plan.add(SelectLayout::new(session.window(), value));
 
-        let error = server.run_plan(&plan, Planner::Sequential)
+        let error = server
+            .run_plan(&plan, Planner::Sequential)
             .await
             .map(|_| ())
             .expect_err("select-layout cannot parse this value");
@@ -1040,8 +1069,8 @@ async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
         return;
     };
     let server = guard.server();
-    let session = server
-        .new_session("layout-control")
+    let session = guard
+        .session("layout-control")
         .await
         .expect("session is created");
     let (sender, events) = ControlMode::attach(server, session.id())
@@ -1061,7 +1090,10 @@ async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
         .tmux_version()
         .has_behavior(&libtmux_tokio::since::JSON_LAYOUTS)
     {
-        invalid.push((r#"{"V":2,"L":[]}"#, libtmux_tokio::ErrorKind::UnsupportedVersion));
+        invalid.push((
+            r#"{"V":2,"L":[]}"#,
+            libtmux_tokio::ErrorKind::UnsupportedVersion,
+        ));
     }
     for (value, expected) in invalid {
         let mut plan = Plan::new();
@@ -1086,7 +1118,8 @@ async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
     for value in ["tiled", "tile"] {
         let mut plan = Plan::new();
         plan.add(SelectLayout::new(window.id().clone(), value));
-        let result = sender.run_plan(&plan)
+        let result = sender
+            .run_plan(&plan)
             .await
             .expect("valid layouts are accepted");
         assert!(result.is_complete(), "{value:?}: {result:?}");
@@ -1108,7 +1141,7 @@ async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
 async fn text_that_names_a_key_is_typed_rather_than_pressed() {
     let guard = TestServer::new().await.expect("a server");
     let server = guard.server();
-    let session = server.new_session("literal").await.expect("a session");
+    let session = guard.session("literal").await.expect("a session");
 
     for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
         let window = session
@@ -1121,7 +1154,10 @@ async fn text_that_names_a_key_is_typed_rather_than_pressed() {
         // No `.enter()`: the text stays on the prompt line, so the shell never
         // runs it and the capture reads exactly what tmux typed.
         plan.add(SendKeys::new(pane.id().clone()).text("Space"));
-        server.run_plan(&plan, planner).await.expect("the plan runs");
+        server
+            .run_plan(&plan, planner)
+            .await
+            .expect("the plan runs");
 
         assert_eq!(
             pane.wait_for_text("Space", Duration::from_secs(5))
@@ -1148,7 +1184,7 @@ async fn text_that_names_a_key_is_typed_rather_than_pressed() {
 async fn text_followed_by_enter_runs_the_line() {
     let guard = TestServer::new().await.expect("a server");
     let server = guard.server();
-    let session = server.new_session("submitted").await.expect("a session");
+    let session = guard.session("submitted").await.expect("a session");
 
     for (index, planner) in [Planner::Sequential, Planner::Folding, Planner::Marked]
         .into_iter()
@@ -1167,7 +1203,10 @@ async fn text_followed_by_enter_runs_the_line() {
                 .text(format!("tmux wait-for -S {channel}"))
                 .enter(),
         );
-        server.run_plan(&plan, planner).await.expect("the plan runs");
+        server
+            .run_plan(&plan, planner)
+            .await
+            .expect("the plan runs");
 
         assert_eq!(
             server
@@ -1223,7 +1262,8 @@ async fn a_plan_can_split_on_any_of_the_four_sides() {
         let session = plan.add(NewSession::new(format!("{direction:?}").as_str()));
         plan.add(SplitWindow::new(session.window()).direction(direction));
 
-        let result = server.run_plan(&plan, Planner::Sequential)
+        let result = server
+            .run_plan(&plan, Planner::Sequential)
             .await
             .expect("the plan runs");
         assert!(result.is_complete(), "{:?}", result.operations());

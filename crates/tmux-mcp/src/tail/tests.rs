@@ -347,7 +347,11 @@ async fn opening_is_fail_fast_and_a_failed_replacement_preserves_tails() {
         return;
     };
     let server = guard.server();
-    let session = server.new_session("tail-opening").await.expect("session");
+    let receipt = server.new_session("tail-opening").await.expect("session");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes").remove(0);
     let occupied = pane
         .stream_output()

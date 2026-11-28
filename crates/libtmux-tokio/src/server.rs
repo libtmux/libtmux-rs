@@ -1096,7 +1096,7 @@ impl Server {
     /// Dropping a submitted request asks its existing supervisor to terminate
     /// and reap the client. tmux may already have created the session. The
     /// owner retains any verified receipt while cleanup finishes.
-    pub async fn create_session(
+    pub async fn new_session(
         &self,
         options: impl Into<NewSession>,
     ) -> Result<libtmux_core::CreatedSession, Error> {
@@ -1195,31 +1195,56 @@ impl Server {
             .map_err(Into::into)
     }
 
-    /// Create a detached session and return it.
+    /// Inspect the session identified by a creation receipt from either driver.
     ///
-    /// The session is always detached: attaching would take over the calling
-    /// process's terminal, which a library must not do on its own initiative.
-    ///
-    /// tmux prints the new session through the same format machinery as a
-    /// listing, so this costs one round trip rather than a create followed by
-    /// a lookup.
-    ///
-    /// A name given as text reaches tmux as that text, `#` included. Only a
-    /// name built with [`crate::TmuxArg::format`], through [`NewSession::new`],
-    /// is expanded as a format, so `#(command)` in one runs a shell command.
-    /// See [the crate documentation][crate#a-name-reaches-tmux-as-text].
+    /// The returned handle uses the receipt's daemon generation for later
+    /// commands, including cleanup. Reading the receipt's three IDs costs no I/O.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command, which includes a name
-    /// that already exists, and when its output cannot be decoded.
-    pub async fn new_session(&self, options: impl Into<NewSession>) -> Result<Session, Error> {
-        let options = options.into();
-        let info =
-            listing::create_session(&self.core, |format| Command::new_session(&options, format))
-                .await?;
+    /// Fails on a different endpoint, a replaced daemon or a session that
+    /// disappeared before its snapshot could be read.
+    pub async fn inspect_session(
+        &self,
+        receipt: &libtmux_core::CreatedSession,
+    ) -> Result<Session, Error> {
+        self.core
+            .require_same_server(receipt.pane().server_identity(), "inspect-session")?;
+        let id = receipt.session();
+        self.bound_to(receipt.generation())?
+            .session_by_id(&id)
+            .await?
+            .ok_or_else(|| Error::ObjectGone {
+                kind: crate::ObjectKind::Session,
+                id: id.to_string(),
+            })
+    }
 
-        Ok(Session::new(Arc::clone(&self.core), info))
+    /// Kill the session recorded in a receipt, including one returned by a failed hook.
+    ///
+    /// # Errors
+    ///
+    /// Refuses another endpoint or daemon generation. Returns an error if the
+    /// session disappeared or tmux refused the command.
+    pub async fn kill_created_session(
+        &self,
+        receipt: &libtmux_core::CreatedSession,
+    ) -> Result<(), Error> {
+        self.core
+            .require_same_server(receipt.pane().server_identity(), "kill-session")?;
+        let server = self.bound_to(receipt.generation())?;
+        listing::mutate(
+            &server.core,
+            "kill-session",
+            Command::new("kill-session")
+                .arg("-t")
+                .arg(receipt.session().as_ref()),
+        )
+        .await
+    }
+
+    pub(crate) fn bound_to(&self, generation: ServerGeneration) -> Result<Self, Error> {
+        Ok(Self::from_core(Arc::new(self.core.bound_to(generation)?)))
     }
 
     /// Lock every client on the server.
@@ -1792,10 +1817,10 @@ impl Server {
     ///
     /// # Cancel safety
     ///
-    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
-    /// of their own, so the session is killed even if this future is dropped
-    /// or the operation panics, while the Tokio runtime is alive. A cleanup
-    /// failure then has no caller to reach; the `tracing` feature records it.
+    /// While the runtime is alive, a supervisor attempts cleanup for an
+    /// acknowledged session even when the caller drops the future or panics.
+    /// An interrupted creation without a receipt may leave an unidentified
+    /// session. The `tracing` feature records unobserved cleanup failures.
     pub async fn with_session<T, E>(
         &self,
         options: impl Into<NewSession>,
@@ -1805,7 +1830,28 @@ impl Server {
         let options = options.into();
         scoped::run(
             "with-session",
-            async move { server.new_session(options).await },
+            async move {
+                let inspected = match server.new_session(options).await {
+                    Ok(receipt) => server
+                        .inspect_session(&receipt)
+                        .await
+                        .map_err(|source| source.after_creation(receipt)),
+                    Err(error) => Err(error),
+                };
+                let Err(primary) = inspected else {
+                    return inspected;
+                };
+                let Some(receipt) = primary.creation_receipt() else {
+                    return Err(primary);
+                };
+                match server.kill_created_session(receipt).await {
+                    Ok(()) => Err(primary),
+                    Err(cleanup) => Err(Error::OperationAndCleanup {
+                        primary: Box::new(primary),
+                        cleanup: Box::new(cleanup),
+                    }),
+                }
+            },
             Session::kill,
             operation,
         )
@@ -2048,7 +2094,7 @@ impl Server {
     /// #     guard.shutdown().await?;
     /// #     return Ok(());
     /// # }
-    /// let session = guard.server().new_session("routed").await?;
+    /// let session = guard.session("routed").await?;
     ///
     /// let (sender, events) = ControlMode::attach(guard.server(), session.id())
     ///     .await?

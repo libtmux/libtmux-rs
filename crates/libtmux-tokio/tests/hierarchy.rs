@@ -577,7 +577,7 @@ async fn session_lookup_finds_a_name_no_target_could_address() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let Ok(session) = server.new_session(NewSession::new("my.proj")).await else {
+    let Ok(session) = guard.session(NewSession::new("my.proj")).await else {
         guard.shutdown().await.expect("tmux fixture shuts down");
         return;
     };
@@ -753,7 +753,7 @@ async fn lookups_find_one_object_by_name_id_or_index() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let alpha = server.new_session("alpha").await.expect("session");
+    let alpha = guard.session("alpha").await.expect("session");
     server.new_session("beta").await.expect("session");
     alpha
         .new_window(NewWindowOptions::new("editor").command("sleep 300"))
@@ -866,18 +866,18 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let keep = server.new_session("keep").await.expect("a named session");
+    let keep = guard.session("keep").await.expect("a named session");
 
     // Asking tmux rather than predicting it: either answer is a release
     // behaving as it does, and neither may cost another caller its listing.
     let mut expected = 1;
-    if let Ok(unnamed) = server.new_session("").await {
+    if let Ok(unnamed) = guard.session("").await {
         assert!(unnamed.name().as_bytes().is_empty());
         expected += 1;
     }
 
-    let rootless = server
-        .new_session(NewSession::new("rootless").start_directory(""))
+    let rootless = guard
+        .session(NewSession::new("rootless").start_directory(""))
         .await
         .expect("an empty start directory");
     assert!(rootless.path().as_bytes().is_empty());
@@ -922,11 +922,10 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
 #[tokio::test]
 async fn real_tmux_compat_a_name_reaches_tmux_as_text() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
 
     // The ordinary path: what the caller passed is what tmux stored.
-    let literal = server
-        .new_session("#{version}")
+    let literal = guard
+        .session("#{version}")
         .await
         .expect("tmux accepts the escaped name");
     assert_eq!(
@@ -938,8 +937,8 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_text() {
     // `#{version}` rather than anything about the session: tmux expands the
     // name before the session it would describe exists, which is why a
     // templated name so often expands to nothing.
-    let Ok(expanded) = server
-        .new_session(NewSession::new(TmuxArg::format("#{version}")))
+    let Ok(expanded) = guard
+        .session(NewSession::new(TmuxArg::format("#{version}")))
         .await
     else {
         // A release that refuses the name is protecting the caller from all
@@ -966,7 +965,7 @@ async fn one_hierarchy_fetch_matches_walking_down() {
     let server = guard.server();
 
     for name in ["alpha", "beta"] {
-        let session = server.new_session(name).await.expect("session");
+        let session = guard.session(name).await.expect("session");
         session
             .new_window(NewWindowOptions::new("second").command("sleep 300"))
             .await
@@ -1027,7 +1026,7 @@ async fn a_linked_window_appears_under_every_session_that_links_it() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let origin = server.new_session("origin").await.expect("session");
+    let origin = guard.session("origin").await.expect("session");
     server.new_session("borrower").await.expect("session");
     let shared = origin
         .new_window(NewWindowOptions::new("shared").command("sleep 300"))
@@ -1075,7 +1074,7 @@ async fn a_process_inside_tmux_can_find_where_it_is() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("located").await.expect("session");
+    let session = guard.session("located").await.expect("session");
     let window = session
         .new_window(NewWindowOptions::new("second").command("sleep 300"))
         .await
@@ -1143,14 +1142,13 @@ async fn a_process_inside_tmux_can_find_where_it_is() {
 #[tokio::test]
 async fn linked_sessions_survive_a_session_name_that_looks_like_a_list() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
 
-    let first = server.new_session("first").await.expect("first session");
+    let first = guard.session("first").await.expect("first session");
     // tmux reports `#{window_linked_sessions_list}` as comma-separated names,
     // so this name makes that field read exactly like two more sessions.
     // Reading the winlink rows instead is what survives it.
-    let awkward = server
-        .new_session("has,comma")
+    let awkward = guard
+        .session("has,comma")
         .await
         .expect("a session whose name holds a comma");
     let window = first
@@ -1183,8 +1181,7 @@ async fn linked_sessions_survive_a_session_name_that_looks_like_a_list() {
 #[tokio::test]
 async fn navigation_reports_nowhere_to_go_as_absence_not_failure() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let server = guard.server();
-    let session = server.new_session("moving").await.expect("session");
+    let session = guard.session("moving").await.expect("session");
 
     // tmux reports "no next window" as a command failure, but a session
     // holding one window has no next window and never will. Treating that as
@@ -1233,7 +1230,7 @@ async fn a_point_lookup_picks_the_link_the_window_is_current_through() {
 
     // The same window, linked into two sessions, current in only one of them.
     // Activity belongs to the link rather than to the window.
-    let alpha = server.new_session("alpha").await.expect("alpha");
+    let alpha = guard.session("alpha").await.expect("alpha");
     let target = alpha
         .active_window()
         .await
@@ -1245,7 +1242,7 @@ async fn a_point_lookup_picks_the_link_the_window_is_current_through() {
         .await
         .expect("a second window in alpha");
 
-    let beta = server.new_session("beta").await.expect("beta");
+    let beta = guard.session("beta").await.expect("beta");
     target.link_to(&beta, Some(5)).await.expect("link");
 
     // Make it current in beta and not in alpha. tmux lists alpha's row first,

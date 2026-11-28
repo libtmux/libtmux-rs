@@ -6,22 +6,18 @@ use std::time::Duration;
 
 use libtmux_core::{Effect, NewSession};
 use libtmux_tokio::test::{TestServer, scaled, unique_name};
-use libtmux_tokio::{Command, PaneWait, Server};
+use libtmux_tokio::{Command, Error, PaneWait, Server};
 
-async fn hook(server: &Server, event: &str, command: Option<&str>) {
+async fn hook(server: &Server, event: &str, command: Option<&str>) -> Result<(), Error> {
     let mut request = Command::new("set-hook")
         .arg(if command.is_some() { "-g" } else { "-gu" })
         .arg(event);
     if let Some(command) = command {
         request = request.sensitive_arg(command);
     }
-    assert!(
-        server
-            .cmd(request)
-            .await
-            .expect("hook request finishes")
-            .success()
-    );
+    let result = server.cmd(request).await?;
+    assert!(result.success());
+    Ok(())
 }
 
 #[tokio::test]
@@ -29,7 +25,7 @@ async fn creation_and_observation_share_the_same_key_and_capture_excludes_hook_o
     let guard = TestServer::new().await.expect("tmux starts");
     let server = guard.server();
     let receipt = server
-        .create_session(
+        .new_session(
             NewSession::new(unique_name("shared-receipt"))
                 .size(80, 8)
                 .command("printf 'shared-pane\n\n'; exec sleep 30"),
@@ -71,9 +67,12 @@ async fn creation_and_observation_share_the_same_key_and_capture_excludes_hook_o
         "after-capture-pane",
         Some("display-message -p private-hook-payload"),
     )
-    .await;
+    .await
+    .expect("capture hook is installed");
     let captured = server.capture(&key).await;
-    hook(server, "after-capture-pane", None).await;
+    hook(server, "after-capture-pane", None)
+        .await
+        .expect("capture hook is unset");
     assert_eq!(
         captured.expect("generation-checked capture"),
         native.stdout()
@@ -90,11 +89,14 @@ async fn a_failed_after_hook_preserves_the_created_identities() {
         "after-new-session",
         Some("select-pane -t %4294967295"),
     )
-    .await;
+    .await
+    .expect("failing creation hook is installed");
     let result = server
-        .create_session(NewSession::new(unique_name("failed-hook")))
+        .new_session(NewSession::new(unique_name("failed-hook")))
         .await;
-    hook(server, "after-new-session", None).await;
+    hook(server, "after-new-session", None)
+        .await
+        .expect("creation hook is unset");
     let error = result.expect_err("the hook refuses its missing pane");
     assert_eq!(error.operation_effect(), Some(Effect::Created));
     assert!(!error.is_transient());
@@ -125,7 +127,8 @@ async fn a_parked_after_hook_keeps_a_complete_receipt_across_the_deadline() {
         "after-new-session",
         Some(&format!("wait-for {channel}")),
     )
-    .await;
+    .await
+    .expect("parked creation hook is installed");
     let timed = Server::builder()
         .socket_path(server.socket_path())
         .tmux_executable(server.tmux_executable())
@@ -137,9 +140,11 @@ async fn a_parked_after_hook_keeps_a_complete_receipt_across_the_deadline() {
         .await
         .expect("warm the checked daemon version");
     let result = timed
-        .create_session(NewSession::new(unique_name("parked-receipt")))
+        .new_session(NewSession::new(unique_name("parked-receipt")))
         .await;
-    hook(server, "after-new-session", None).await;
+    hook(server, "after-new-session", None)
+        .await
+        .expect("creation hook is unset");
     assert!(
         server
             .cmd(Command::new("wait-for").arg("-S").arg(channel))
@@ -179,7 +184,7 @@ async fn pane_keys_refuse_another_endpoint_before_dispatch() {
     let other = TestServer::new().await.expect("other fixture starts");
     let receipt = owner
         .server()
-        .create_session(NewSession::new(unique_name("endpoint-key")))
+        .new_session(NewSession::new(unique_name("endpoint-key")))
         .await
         .expect("creation");
     let error = other

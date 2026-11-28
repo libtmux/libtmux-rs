@@ -884,8 +884,7 @@ fn empty_caller_variables_are_detached_and_malformed_ones_are_logged() {
     let (guard, pane) = runtime.block_on(async {
         let guard = TestServer::builder().start().await.expect("tmux starts");
         let pane = guard
-            .server()
-            .new_session("caller")
+            .session("caller")
             .await
             .expect("session starts")
             .panes()

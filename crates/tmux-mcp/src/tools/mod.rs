@@ -146,11 +146,10 @@ impl TmuxTools {
         let target = self.find_pane(pane).await?;
         // The daemon runs the capture, so its version decides the flags; the
         // client executable's can differ.
-        let supported = self
-            .server
-            .daemon_version()
-            .await
-            .is_ok_and(|version| version.has_behavior(&libtmux_tokio::since::CAPTURE_LINE_FLAGS));
+        let supported =
+            self.server.daemon_version().await.is_ok_and(|version| {
+                version.has_behavior(&libtmux_tokio::since::CAPTURE_LINE_FLAGS)
+            });
 
         let (rendered, marks) = if supported {
             let lines = target
@@ -420,12 +419,13 @@ impl TmuxTools {
     /// And `@01` resolves, where a string comparison against the canonical
     /// `@1` called it missing.
     pub(super) async fn find_window(&self, id: &str) -> Result<libtmux_tokio::Window, ToolError> {
-        let window: libtmux_tokio::WindowId = id.parse().map_err(|error: libtmux_tokio::IdParseError| {
-            let sigil = error.expected_sigil();
-            bad_input(format!(
-                "{id} is not a window id: expected {sigil} followed by digits, as in {sigil}1"
-            ))
-        })?;
+        let window: libtmux_tokio::WindowId =
+            id.parse().map_err(|error: libtmux_tokio::IdParseError| {
+                let sigil = error.expected_sigil();
+                bad_input(format!(
+                    "{id} is not a window id: expected {sigil} followed by digits, as in {sigil}1"
+                ))
+            })?;
 
         self.server
             .window_by_id(&window)
@@ -438,12 +438,13 @@ impl TmuxTools {
     ///
     /// Shares the reasoning on [`Self::find_window`].
     pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux_tokio::Pane, ToolError> {
-        let pane: libtmux_tokio::PaneId = id.parse().map_err(|error: libtmux_tokio::IdParseError| {
-            let sigil = error.expected_sigil();
-            bad_input(format!(
-                "{id} is not a pane id: expected {sigil} followed by digits, as in {sigil}1"
-            ))
-        })?;
+        let pane: libtmux_tokio::PaneId =
+            id.parse().map_err(|error: libtmux_tokio::IdParseError| {
+                let sigil = error.expected_sigil();
+                bad_input(format!(
+                    "{id} is not a pane id: expected {sigil} followed by digits, as in {sigil}1"
+                ))
+            })?;
 
         self.server
             .pane_by_id(&pane)
@@ -457,7 +458,10 @@ impl TmuxTools {
     /// An id is looked up as one, because the server's instructions tell an
     /// agent to prefer ids. Text that starts with `$` and is neither an id
     /// nor a session's name is invalid input, not a session that went away.
-    pub(super) async fn find_session(&self, target: &str) -> Result<libtmux_tokio::Session, ToolError> {
+    pub(super) async fn find_session(
+        &self,
+        target: &str,
+    ) -> Result<libtmux_tokio::Session, ToolError> {
         if target.starts_with('$')
             && let Ok(id) = target.parse::<libtmux_tokio::SessionId>()
         {

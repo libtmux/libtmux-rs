@@ -290,7 +290,8 @@ impl Client {
     /// # runtime.block_on(async {
     /// let guard = libtmux_tokio::test::TestServer::new().await?;
     /// let server = guard.server();
-    /// let session = server.new_session("work").await?;
+    /// let receipt = server.new_session("work").await?;
+    /// let session = server.inspect_session(&receipt).await?;
     ///
     /// // A control-mode connection is a client, so the server has one to find.
     /// # #[cfg(feature = "control-mode")]

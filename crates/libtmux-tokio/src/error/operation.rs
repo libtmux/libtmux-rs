@@ -3,6 +3,16 @@ use libtmux_core::{CreatedSession, Effect};
 use super::{Error, ErrorKind};
 
 impl Error {
+    /// Preserve the acknowledged IDs when a later step fails.
+    #[must_use]
+    pub fn after_creation(self, receipt: CreatedSession) -> Self {
+        Self::OperationFailure {
+            effect: Effect::Created,
+            receipt: Some(Box::new(receipt)),
+            source: Box::new(self),
+        }
+    }
+
     /// Borrow a creation receipt verified before a later failure.
     #[must_use]
     pub fn creation_receipt(&self) -> Option<&CreatedSession> {
