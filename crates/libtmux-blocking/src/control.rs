@@ -235,6 +235,11 @@ impl ControlSender {
 
     /// Dispatch without allowing a cancelled reply to answer another caller.
     ///
+    /// Raw commands return their output once the whole reply is drained. If an
+    /// after-hook stalls, an interrupted caller can lose output from a command
+    /// that already ran. Use [`Server::new_session_with`](crate::Server::new_session_with)
+    /// to retain a verified creation receipt across an interruption.
+    ///
     /// # Errors
     ///
     /// Refusal before the owner commits to writing is `NotSubmitted`.
