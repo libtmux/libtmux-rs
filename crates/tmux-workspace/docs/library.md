@@ -98,6 +98,12 @@ pane cells, with at most 256 nested groups. Geometry correction and pruning
 remain tmux's responsibility. An empty layout string leaves the default
 arrangement in place.
 
+If the first creation has no verified receipt, `build` returns
+[`BuildError::CreationUnconfirmed`](crate::BuildError::CreationUnconfirmed)
+with the requested session name and original tmux error. It adopts no session
+by name and runs no later build step. Inspect the server before repeating the
+build: creation may have run even when a duplicate-name diagnostic was printed.
+
 `cargo run --example build` does all of this end to end: parse, list the
 plan's steps, build, and freeze the result back to YAML.
 

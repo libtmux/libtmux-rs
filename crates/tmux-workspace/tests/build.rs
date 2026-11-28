@@ -233,7 +233,7 @@ windows:
 }
 
 #[tokio::test]
-async fn building_over_an_existing_session_is_refused() {
+async fn an_unconfirmed_build_does_not_adopt_an_existing_session() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
@@ -241,18 +241,56 @@ async fn building_over_an_existing_session_is_refused() {
         Workspace::from_yaml("session_name: taken\nwindows: []").expect("configuration parses");
     let builder = WorkspaceBuilder::new(server);
 
-    builder.build(&workspace).await.expect("first build");
+    let original = builder.build(&workspace).await.expect("first build");
+    let original_windows = original.windows().await.expect("original windows");
+    let conflicting = Workspace::from_yaml("session_name: taken\nwindows:\n- window_name: must-not-replace\n  panes: [blank]\n- window_name: must-not-add\n  panes: [blank]\n").expect("conflicting workspace");
     let error = builder
-        .build(&workspace)
+        .build(&conflicting)
         .await
         .expect_err("a second build is refused");
 
-    assert!(
-        matches!(error, BuildError::SessionExists { .. }),
-        "building into an existing session would interleave windows, got {error:?}",
+    let message = error.to_string();
+    let BuildError::CreationUnconfirmed { name, source } = error else {
+        panic!("a missing receipt must preserve its creation uncertainty: {message}");
+    };
+    assert_eq!(name, "taken");
+    assert_eq!(
+        source.operation_effect(),
+        Some(libtmux_core::Effect::Unknown)
     );
+    assert!(source.creation_receipt().is_none());
+    assert!(!source.is_transient());
+    assert!(message.contains("taken") && message.contains("inspect the server"));
+    let sessions = server.sessions().await.expect("inspect actual effects");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id(), original.id());
+    let windows = sessions[0].windows().await.expect("unchanged topology");
+    assert_eq!(windows.len(), original_windows.len());
+    assert_eq!(windows[0].key(), original_windows[0].key());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn layout_preflight_on_a_closed_executor_preserves_its_original_error() {
+    let guard = TestServer::new().await.expect("tmux starts");
+    let server = guard.server().clone();
+    guard.shutdown().await.expect("executor shuts down");
+    let workspace =
+        Workspace::from_yaml("session_name: never-submitted\nwindows: []").expect("workspace");
+    let error = WorkspaceBuilder::new(&server)
+        .build(&workspace)
+        .await
+        .expect_err("a closed executor cannot build");
+    let BuildError::Tmux(error) = error else {
+        panic!("pre-dispatch rejection must retain its phase: {error}");
+    };
+    assert!(
+        matches!(&error, libtmux_tokio::Error::ExecutorShutdown { .. }),
+        "layout validation fails before a typed creation starts: {error:?}"
+    );
+    assert_eq!(error.operation_effect(), None);
+    assert!(error.creation_receipt().is_none());
 }
 
 #[tokio::test]
