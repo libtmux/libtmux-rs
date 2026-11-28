@@ -241,16 +241,17 @@ And `Server::shutdown` kills parked clients instead of waiting on tmux; on
 affected older releases, the tmux registration remains on any channel that
 still had one parked.
 
-A blocking `wait-for` over control mode is refused for a different reason.
+A blocking `wait-for` needs a separate client when a control connection is open.
 `cmdq_fire_command` writes the block's `end` guard as soon as `entry->exec`
 returns, and `cmd_wait_for_wait` returns `CMD_RETURN_WAIT` with its item still
 on the queue, so a control client is told the command finished and then runs
 nothing else until the channel releases it. Measured through the crate on
 3.7d, a routed `wait_for_channel` on a channel nobody signalled returned
 `Signalled` in 190us, and the next routed call answered nothing within two
-seconds. `wait_for_channel` and `lock_channel` therefore refuse a routed handle
-with `ControlModeErrorKind::BlockingCommand`; `signal_channel` and
-`unlock_channel` do not block and still route.
+seconds. The Tokio server sends waits and locks through an ordinary client
+bound to the connection's daemon. Signals and unlocks can use the control
+connection. The low-level control sender refuses a blocking request before
+putting it on the wire.
 
 ## Poll loops and deadlines that made tests flaky under load
 
@@ -869,8 +870,8 @@ for what a literal needle cannot express. It also polls on a handle from
 does not apply. There the reason is ownership. A connection's `%output` goes to
 whoever holds its events, and the handle holds only the sender, so waking on
 output would attach a second client for every wait, a cost the `streamed` bench
-lane leaves out of its number. Over a connection a look is a line instead of a
-process, so the round trip a doorbell would save is smaller too.
+lane leaves out of its number. The capture itself uses an ordinary client so
+arbitrary pane bytes cannot be confused with a control reply delimiter.
 
 ## Why pane waits poll the scrollback
 

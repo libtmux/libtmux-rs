@@ -291,6 +291,12 @@ impl CommandRequest {
         self
     }
 
+    /// Select the route before either executor can submit the request.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn can_share_control(&self) -> bool {
+        self.control_line.is_some() && self.require_shared_control().is_ok()
+    }
+
     /// Take the control-mode line, when one was rendered and representable.
     #[cfg(feature = "control-mode")]
     pub(crate) fn into_control_line(self) -> Option<String> {

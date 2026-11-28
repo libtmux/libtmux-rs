@@ -854,7 +854,7 @@ impl Server {
     /// endpoint checks the executable that would start it. A queue guard
     /// refuses a replacement with a different version before effects.
     /// Standalone `-V` and `-h` retain native executable diagnostics below the
-    /// floor; an open control connection cannot represent those client flags.
+    /// floor, including on a handle with an open control connection.
     ///
     /// # Errors
     ///
@@ -2100,37 +2100,28 @@ impl Server {
         }
     }
 
-    /// Return a handle whose commands run over an open control connection.
+    /// Use an attached control connection for commands with bounded, unambiguous replies.
     ///
-    /// Every typed call on the returned server -- `sessions`, `send_keys`,
-    /// `capture`, the option and hook accessors -- is written to `sender` as
-    /// one control-mode line and answered from its `%begin`/`%end` block,
-    /// rather than spawning `tmux`. Handles reached through it inherit the
-    /// route, because they carry the same connection.
+    /// Numeric projections and commands such as `send-keys` can share the connection.
+    /// A command that waits, prints arbitrary text or cannot be encoded as a control
+    /// line runs through an ordinary tmux client. A chain uses one route for all of
+    /// its commands. Route selection happens before submission. A failed command
+    /// is never submitted again on the other route.
     ///
-    /// The original server is unchanged and still dispatches processes. Use it
-    /// for the two things a connection is wrong for: a command that answers at
-    /// once and then parks the client's queue, such as `wait-for` or a
-    /// foreground `run-shell`, and a command whose arguments are not valid
-    /// UTF-8, which a text protocol cannot carry.
+    /// Ordinary commands use the configured executable and tmux's ordinary client
+    /// context. Pass an explicit target when the selected session or pane matters.
+    /// The daemon generation checked at attach applies on both routes. Standalone
+    /// executable diagnostics such as `-V` run without contacting that daemon.
     ///
-    /// Commands wait for the sender's own [`reply_timeout`], not this server's
-    /// [`default_timeout`]. They are not the same budget: one bounds a round
-    /// trip on an open connection, the other bounds forking tmux.
-    ///
-    /// # Draining events
-    ///
-    /// The connection stops reading tmux once a caller is far enough behind on
-    /// [`ControlEvents`], and refuses commands past that. Either keep reading
-    /// events, drop the watching half, or narrow what tmux reports with
-    /// [`ControlSender::watch_only`].
+    /// The sender's [reply timeout] bounds control replies. The server's
+    /// [default timeout] bounds ordinary dispatch. A slow event consumer can
+    /// receive a gap while the connection continues processing command replies.
     ///
     /// # Errors
     ///
-    /// Returns an error when the sender reaches a different server, or when
-    /// the tmux version cannot be detected. Detection runs here, once, through
-    /// this server's process transport, because `tmux -V` is a client flag and
-    /// has no control-mode spelling; the returned handle never probes.
+    /// Returns an error when the sender belongs to another endpoint or the
+    /// server expects another daemon generation. Also returns an error if the
+    /// configured executable cannot report its version.
     ///
     /// # Examples
     ///
@@ -2155,10 +2146,8 @@ impl Server {
     ///     .split();
     /// let routed = guard.server().over_control_mode(&sender).await?;
     ///
-    /// // One line on the connection, not a process.
     /// assert_eq!(routed.sessions().await?.len(), 1);
     ///
-    /// // And a handle it found keeps the route.
     /// let pane = routed.panes().await?.remove(0);
     /// pane.send_line("true").await?;
     ///
@@ -2170,10 +2159,8 @@ impl Server {
     /// # }
     /// ```
     ///
-    /// [`reply_timeout`]: crate::control::ControlSender::reply_timeout
-    /// [`default_timeout`]: Server::default_timeout
-    /// [`ControlEvents`]: crate::control::ControlEvents
-    /// [`ControlSender::watch_only`]: crate::control::ControlSender::watch_only
+    /// [reply timeout]: crate::control::ControlSender::reply_timeout
+    /// [default timeout]: Server::default_timeout
     #[cfg(feature = "control-mode")]
     pub async fn over_control_mode(
         &self,
