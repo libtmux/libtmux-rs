@@ -35,3 +35,9 @@ Notable changes to `libtmux-tokio`.
 - `Server::kill` reports a refused shutdown when the daemon generation has changed. An endpoint already stopped at the initial check still succeeds. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 - **Breaking.** Select, move and swap an observed placement through `WindowLink::{select, move_to, swap_with}`. Obtain it with `window.link()`. Reindexed links are refused, and successful moves and swaps refresh the returned placement. `Window::kill` still kills the intrinsic window, and `Window::link_to` can link it after its discovery session has gone. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
+### Fixed
+
+- Generation discovery and session, window or pane listings report
+  `Error::ServerGone` when the daemon has stopped, instead of a decode error.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
