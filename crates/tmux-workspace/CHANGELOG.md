@@ -18,6 +18,11 @@ which a published crate cannot link by a relative path.
 
 ### Fixed
 
+- Rust library setup now declares the unpublished `libtmux-tokio` checkout
+  imported by the examples. Fixture examples explicitly enable its
+  `test-support` feature; the preview uses the ordinary client dependency.
+- The MCP inspect description names listing and capture operations without
+  promising that configured tmux behaviour has no effects. (#155)
 - A suspended workspace now resumes when the shell brings it back to the
   foreground. A second stop signal could previously strand the resumed job.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
