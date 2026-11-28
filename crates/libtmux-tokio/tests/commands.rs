@@ -2582,7 +2582,7 @@ async fn a_window_acts_on_itself_after_its_index_moved() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let session = guard.session("renumber").await.expect("session");
 
-    let mut moved = session
+    let moved = session
         .new_window(NewWindowOptions::new("moved"))
         .await
         .expect("window");
@@ -2607,8 +2607,12 @@ async fn a_window_acts_on_itself_after_its_index_moved() {
     assert_eq!(intruder.index(), cached, "the slot is occupied again");
     assert_ne!(intruder_id, moved_id, "by a different window");
 
-    // Selecting through the stale handle must reach the handle's own window.
-    moved.select().await.expect("select succeeds");
+    // The old placement refuses, while a fresh observation reaches the window.
+    assert!(matches!(
+        moved.link().select().await.unwrap_err(),
+        libtmux_tokio::Error::LinkGone { .. }
+    ));
+    after.link().select().await.expect("fresh select succeeds");
     let active = session
         .active_window()
         .await

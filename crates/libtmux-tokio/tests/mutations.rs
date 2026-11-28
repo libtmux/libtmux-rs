@@ -867,10 +867,12 @@ async fn window_operations_move_and_resize() {
         .await
         .expect("window is created");
 
-    window
+    let mut moved = window.link();
+    moved
         .move_to(&destination, 20)
         .await
         .expect("window is moved");
+    window = moved.into_window();
     assert_eq!(window.index(), 20);
     assert_eq!(window.session_id(), destination.id());
     assert!(
@@ -915,7 +917,7 @@ async fn handle_mutations_reject_another_server() {
     let right_guard = TestServer::builder().start().await.expect("tmux starts");
     let left_session = left_guard.session("left").await.expect("left session");
     let right_session = right_guard.session("right").await.expect("right session");
-    let mut left_window = left_session
+    let left_window = left_session
         .active_window()
         .await
         .expect("left window lookup")
@@ -934,9 +936,9 @@ async fn handle_mutations_reject_another_server() {
     let original_index = left_window.index();
 
     let kinds = [
-        error_kind!(left_window.swap_with(&right_window)),
+        error_kind!(left_window.link().swap_with(&right_window.link())),
         error_kind!(left_window.link_to(&right_session, Some(29))),
-        error_kind!(left_window.move_to(&right_session, 30)),
+        error_kind!(left_window.link().move_to(&right_session, 30)),
         error_kind!(left_pane.swap_with(&right_pane)),
         error_kind!(
             left_pane
@@ -1136,10 +1138,12 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
         .expect("target link is selected");
     assert!(selected.success());
 
-    window
+    let mut placement = window.link();
+    placement
         .move_to(&destination, 9)
         .await
         .expect("the source link moves");
+    window = placement.into_window();
     assert!(
         !source
             .windows()
@@ -2058,7 +2062,7 @@ fn place(windows: &[libtmux_tokio::Window], id: &str) -> i32 {
 /// consults before dropping a handle, and it answered `true` for a window that
 /// was alive and listed.
 #[tokio::test]
-async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
+async fn stale_swap_link_refuses_after_renumber_then_fresh_links_swap() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = guard.session("home").await.expect("session");
@@ -2071,7 +2075,7 @@ async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
 
     let windows = session.windows().await.expect("windows");
     assert_eq!(windows.len(), 4, "four windows to renumber");
-    let mut first = windows[0].clone();
+    let first = windows[0].clone();
     let last = windows[3].clone();
     let (first_id, last_id) = (first.id().to_string(), last.id().to_string());
 
@@ -2085,11 +2089,20 @@ async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
         "the renumber moved the window out from under its cached index",
     );
 
-    // Neither handle has been refreshed: this is what a caller holds.
-    first
-        .swap_with(&last)
+    let mut placement = first.link();
+    assert!(matches!(
+        placement.swap_with(&last.link()).await.unwrap_err(),
+        libtmux_tokio::Error::LinkGone { .. }
+    ));
+    let fresh_target = last
+        .refreshed()
         .await
-        .expect("the windows are swapped");
+        .expect("the target window remains")
+        .link();
+    placement
+        .swap_with(&fresh_target)
+        .await
+        .expect("fresh links are swapped");
 
     let after = session.windows().await.expect("windows");
     assert_eq!(
@@ -2120,10 +2133,12 @@ async fn swapping_windows_across_sessions_refreshes_the_destination_link() {
     let right_id = right_window.id().clone();
     let destination_index = right_window.index();
 
-    left_window
-        .swap_with(&right_window)
+    let mut placement = left_window.link();
+    placement
+        .swap_with(&right_window.link())
         .await
         .expect("the windows are swapped");
+    left_window = placement.into_window();
 
     assert_eq!(left_window.id(), &left_id);
     assert_eq!(left_window.session_id(), right.id());

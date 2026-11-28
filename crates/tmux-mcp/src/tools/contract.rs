@@ -806,12 +806,12 @@ impl TmuxTools {
         }): Parameters<MoveWindowArgs>,
     ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&destination_session).await?;
-        let mut window = self.find_window(&window).await?;
-        window
+        let mut placement = self.find_window(&window).await?.link();
+        placement
             .move_to(&session, destination_index)
             .await
             .map_err(|error| tmux_error(&error))?;
-        Ok(Json(Self::one_window(&window)))
+        Ok(Json(Self::one_window(placement.window())))
     }
 
     #[tool(

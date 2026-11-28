@@ -59,24 +59,30 @@ impl WindowLinkSnapshot {
         format!("{}:{}", self.session, self.index)
     }
 
+    /// Check this generation, session, index and window in the command queue.
+    ///
+    /// Resolve by window ID so reindexing fails the index comparison before
+    /// a following mutation can reach a replacement in the observed slot.
+    /// Run the chain with a non-starting client at this key's endpoint.
+    pub fn guard_command(&self) -> Command {
+        let generation = self.window.generation();
+        Command::new("if-shell")
+            .arg("-F")
+            .arg("-t")
+            .arg(format!("{}:{}", self.session, self.window.id()))
+            .arg(format!(
+                "#{{&&:#{{&&:#{{==:#{{pid}},{}}},#{{==:#{{start_time}},{}}}}},#{{&&:#{{==:#{{session_id}},{}}},#{{&&:#{{==:#{{window_index}},{}}},#{{==:#{{window_id}},{}}}}}}}}}",
+                generation.pid(), generation.unix_start_time(), self.session, self.index, self.window.id()
+            ))
+            .arg("")
+            .arg("}")
+    }
+
     /// Remove this link if the same daemon still holds the window at this index.
     ///
     /// Run the returned chain with a non-starting client at the observed endpoint.
     pub fn unlink_command(&self) -> CommandChain {
-        let target = self.target();
-        let placement = Command::new("if-shell")
-            .arg("-F")
-            .arg("-t")
-            .arg(target.clone())
-            .arg(format!(
-                "#{{&&:#{{==:#{{session_id}},{}}},#{{==:#{{window_id}},{}}}}}",
-                self.session,
-                self.window.id()
-            ))
-            .arg("")
-            .arg("}");
-        CommandChain::new(self.window.generation().queue_guard())
-            .then(placement)
-            .then(Command::new("unlink-window").arg("-t").arg(target))
+        CommandChain::new(self.guard_command())
+            .then(Command::new("unlink-window").arg("-t").arg(self.target()))
     }
 }
