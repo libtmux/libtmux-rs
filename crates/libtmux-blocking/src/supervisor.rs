@@ -1,0 +1,473 @@
+use std::fs::File;
+use std::io::{self, ErrorKind, Read};
+use std::os::fd::OwnedFd;
+use std::os::unix::process::CommandExt as _;
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
+
+use libtmux_core::supervision::{
+    Budget, CLEANUP_ALLOWANCE, CleanupErrors, Event, MAX_IN_FLIGHT, after_cleanup,
+};
+use libtmux_core::{CreationNonce, Error};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
+
+use crate::RequestOptions;
+
+const POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+#[derive(Clone, Debug)]
+pub(super) struct Children {
+    available: Arc<AtomicUsize>,
+    limit: usize,
+    #[cfg(test)]
+    pub(super) reject_pipe_setup: Option<PathBuf>,
+}
+
+impl Default for Children {
+    fn default() -> Self {
+        Self::with_limit(MAX_IN_FLIGHT)
+    }
+}
+
+struct Permit(Arc<AtomicUsize>);
+
+enum CreationReceipt {
+    #[cfg(test)]
+    Control(PathBuf),
+    Ordinary {
+        socket: PathBuf,
+        nonce: CreationNonce,
+    },
+}
+
+fn interrupted(receipt: Option<&CreationReceipt>, stdout: &[u8], cause: Error) -> Error {
+    match receipt {
+        #[cfg(test)]
+        Some(CreationReceipt::Control(socket)) => {
+            libtmux_core::Reply::interrupted(Some(socket), stdout, cause)
+        }
+        Some(CreationReceipt::Ordinary { socket, nonce }) => {
+            libtmux_core::Reply::interrupted_ordinary_creation(socket, *nonce, stdout, cause)
+        }
+        None => cause,
+    }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Release);
+    }
+}
+
+impl Children {
+    fn with_limit(limit: usize) -> Self {
+        Self {
+            available: Arc::new(AtomicUsize::new(limit)),
+            limit,
+            #[cfg(test)]
+            reject_pipe_setup: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn dispatch(
+        &self,
+        command: Command,
+        options: RequestOptions,
+        creation_socket: Option<PathBuf>,
+    ) -> Result<(Output, bool), Error> {
+        self.dispatch_inner(
+            command,
+            options,
+            creation_socket.map(CreationReceipt::Control),
+        )
+    }
+
+    pub(super) fn dispatch_ordinary(
+        &self,
+        command: Command,
+        options: RequestOptions,
+        creation: Option<(PathBuf, CreationNonce)>,
+    ) -> Result<(Output, bool), Error> {
+        self.dispatch_inner(
+            command,
+            options,
+            creation.map(|(socket, nonce)| CreationReceipt::Ordinary { socket, nonce }),
+        )
+    }
+
+    fn dispatch_inner(
+        &self,
+        command: Command,
+        options: RequestOptions,
+        creation: Option<CreationReceipt>,
+    ) -> Result<(Output, bool), Error> {
+        check_before_spawn(&options)?;
+        let mut available = self.available.load(Ordering::Acquire);
+        loop {
+            let next = available
+                .checked_sub(1)
+                .ok_or(Error::Busy { limit: self.limit })?;
+            match self.available.compare_exchange_weak(
+                available,
+                next,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => available = observed,
+            }
+        }
+        let permit = Permit(Arc::clone(&self.available));
+        let budget = options.budget;
+        let (tx, rx) = mpsc::channel();
+        #[cfg(test)]
+        let reject_pipe_setup = self.reject_pipe_setup.clone();
+        std::thread::Builder::new()
+            .name("libtmux blocking child".into())
+            .spawn(move || {
+                supervise(
+                    command,
+                    options,
+                    creation.as_ref(),
+                    permit,
+                    &tx,
+                    #[cfg(test)]
+                    reject_pipe_setup.as_deref(),
+                );
+            })
+            .map_err(Error::Spawn)?;
+        let latest = budget.deadline.checked_add(CLEANUP_ALLOWANCE);
+        let remaining = || {
+            latest.map_or(CLEANUP_ALLOWANCE, |deadline| {
+                deadline.saturating_duration_since(Instant::now())
+            })
+        };
+        match rx.recv_timeout(remaining()) {
+            Ok(Event::Done(result)) => result,
+            Ok(Event::Failed(primary)) => Err(after_cleanup(
+                primary,
+                rx.recv_timeout(remaining().min(CLEANUP_ALLOWANCE)).ok(),
+            )),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(Error::CleanupPending(Box::new(Error::Deadline)))
+            }
+            Ok(Event::Cleaned(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(Error::CleanupPending(Box::new(Error::LostReply(
+                    io::Error::other("subprocess supervisor stopped before reporting completion"),
+                ))))
+            }
+        }
+    }
+}
+
+pub(super) fn check_before_spawn(options: &RequestOptions) -> Result<(), Error> {
+    if options.cancellation.is_cancelled() {
+        Err(Error::CancelledBeforeSpawn)
+    } else if Instant::now() >= options.budget.deadline {
+        Err(Error::BeforeSpawn)
+    } else {
+        Ok(())
+    }
+}
+
+fn supervise(
+    mut command: Command,
+    options: RequestOptions,
+    creation: Option<&CreationReceipt>,
+    permit: Permit,
+    tx: &mpsc::Sender<Event<(Output, bool)>>,
+    #[cfg(test)] reject_pipe_setup: Option<&Path>,
+) {
+    if let Err(error) = check_before_spawn(&options) {
+        drop(permit);
+        let _ = tx.send(Event::Done(Err(error)));
+        return;
+    }
+    let spawned = command
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let child = match spawned {
+        Ok(child) => child,
+        Err(error) => {
+            drop(permit);
+            let _ = tx.send(Event::Done(Err(Error::Spawn(error))));
+            return;
+        }
+    };
+    let mut child = OwnedChild::new(child);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let drained = drain(
+        &mut child,
+        &options,
+        &mut stdout,
+        &mut stderr,
+        #[cfg(test)]
+        reject_pipe_setup,
+    );
+    match drained {
+        Ok(()) => match child.finish() {
+            Ok(status) => {
+                let output = Output {
+                    status,
+                    stdout,
+                    stderr,
+                };
+                drop(permit);
+                let _ = tx.send(Event::Done(Ok((
+                    output,
+                    options.budget.is_late(Instant::now()),
+                ))));
+            }
+            Err(errors) => {
+                let cause = Error::LostReply(io::Error::other("subprocess group cleanup failed"));
+                let primary = interrupted(creation, &stdout, cause);
+                let _ = tx.send(Event::Failed(primary));
+                publish_cleanup(child, permit, tx, Err(errors));
+            }
+        },
+        Err(cause) => {
+            let primary = interrupted(creation, &stdout, cause);
+            let _ = tx.send(Event::Failed(primary));
+            let cleanup = child.finish().map(|_| ());
+            publish_cleanup(child, permit, tx, cleanup);
+        }
+    }
+}
+
+fn publish_cleanup(
+    mut child: OwnedChild,
+    permit: Permit,
+    tx: &mpsc::Sender<Event<(Output, bool)>>,
+    cleanup: Result<(), CleanupErrors>,
+) {
+    if child.child.is_none() {
+        drop(permit);
+        let _ = tx.send(Event::Cleaned(cleanup));
+    } else {
+        let _ = tx.send(Event::Cleaned(cleanup));
+        // An unreaped child keeps its admission slot even after its caller returns.
+        child.reap();
+        drop(permit);
+    }
+}
+
+struct OwnedChild {
+    child: Option<Child>,
+    group: Option<Pid>,
+}
+
+impl OwnedChild {
+    fn new(child: Child) -> Self {
+        let group = i32::try_from(child.id()).ok().and_then(Pid::from_raw);
+        Self {
+            child: Some(child),
+            group,
+        }
+    }
+
+    fn has_exited(&self) -> io::Result<bool> {
+        let pid = self
+            .group
+            .ok_or_else(|| io::Error::other("subprocess identity is unavailable"))?;
+        waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        )
+        .map(|status| status.is_some())
+        .map_err(Into::into)
+    }
+
+    fn finish(&mut self) -> Result<ExitStatus, CleanupErrors> {
+        let Some(child) = self.child.as_mut() else {
+            return Err(CleanupErrors {
+                kill: None,
+                reap: Some(io::Error::other("subprocess was already reaped")),
+            });
+        };
+        let Some(group) = self.group.take() else {
+            return Err(CleanupErrors {
+                kill: Some(io::Error::other("subprocess group identity is unavailable")),
+                reap: None,
+            });
+        };
+        let ownership = waitid(
+            WaitId::Pid(group),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        );
+        if let Err(error) = ownership {
+            if error == rustix::io::Errno::CHILD {
+                self.child = None;
+            }
+            return Err(CleanupErrors {
+                kill: None,
+                reap: Some(error.into()),
+            });
+        }
+        // The unreaped group leader prevents its numeric identity from being reused.
+        let signalled = match kill_process_group(group, Signal::KILL) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+            Err(error) => Err(io::Error::from(error)),
+        };
+        // A child can leave its original group, so signal its still-owned PID too.
+        let direct = child.kill();
+        let kill_error = match (signalled, direct) {
+            (Ok(()), Ok(())) => None,
+            (Err(group), Ok(())) => Some(group),
+            (Ok(()), Err(direct)) => Some(direct),
+            (Err(group), Err(direct)) => {
+                return Err(CleanupErrors {
+                    kill: Some(io::Error::other(format!(
+                        "process group signal: {group}; direct child signal: {direct}"
+                    ))),
+                    reap: Some(io::Error::other("child is still owned; reaping continues")),
+                });
+            }
+        };
+        let waited = child.wait();
+        if waited.is_ok() {
+            self.child = None;
+        }
+        match (kill_error, waited) {
+            (None, Ok(status)) => Ok(status),
+            (kill, reap) => Err(CleanupErrors {
+                kill,
+                reap: reap.err(),
+            }),
+        }
+    }
+
+    fn reap(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            while let Err(error) = child.wait() {
+                if error.kind() != ErrorKind::Interrupted {
+                    break;
+                }
+            }
+        }
+        self.child = None;
+    }
+}
+
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if self.child.is_some() {
+            let _ = self.finish();
+            self.reap();
+        }
+    }
+}
+
+struct Pipe {
+    reader: Option<File>,
+    stream: &'static str,
+}
+
+impl Pipe {
+    fn new(fd: impl Into<OwnedFd>, stream: &'static str) -> Result<Self, Error> {
+        let file = File::from(fd.into());
+        fcntl_getfl(&file)
+            .and_then(|flags| fcntl_setfl(&file, flags | OFlags::NONBLOCK))
+            .map_err(|error| Error::LostReply(error.into()))?;
+        Ok(Self {
+            reader: Some(file),
+            stream,
+        })
+    }
+
+    fn read_ready(&mut self, budget: Budget, bytes: &mut Vec<u8>) -> Result<(), Error> {
+        let Some(reader) = self.reader.as_mut() else {
+            return Ok(());
+        };
+        let mut scratch = [0; 8192];
+        match reader.read(&mut scratch) {
+            Ok(0) => self.reader = None,
+            Ok(count) => {
+                let available = budget.bytes_per_stream.saturating_sub(bytes.len());
+                budget.append(self.stream, bytes, &scratch[..count.min(available)])?;
+                if count > available {
+                    return Err(Error::OutputLimit {
+                        stream: self.stream,
+                        limit: budget.bytes_per_stream,
+                    });
+                }
+            }
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+            Err(error) => return Err(Error::LostReply(error)),
+        }
+        Ok(())
+    }
+}
+
+fn drain(
+    child: &mut OwnedChild,
+    options: &RequestOptions,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    #[cfg(test)] reject_pipe_setup: Option<&Path>,
+) -> Result<(), Error> {
+    #[cfg(test)]
+    if let Some(pid_file) = reject_pipe_setup {
+        while !pid_file.exists() && Instant::now() < options.budget.deadline {
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        return Err(Error::LostReply(io::Error::other(
+            "injected pipe setup failure",
+        )));
+    }
+    let process = child
+        .child
+        .as_mut()
+        .ok_or_else(|| Error::LostReply(io::Error::other("subprocess is unavailable")))?;
+    let missing_pipe =
+        || Error::LostReply(io::Error::other("subprocess output pipe is unavailable"));
+    let mut out = Pipe::new(process.stdout.take().ok_or_else(missing_pipe)?, "stdout")?;
+    let mut err = Pipe::new(process.stderr.take().ok_or_else(missing_pipe)?, "stderr")?;
+    loop {
+        if options.cancellation.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        if Instant::now() >= options.budget.deadline {
+            return Err(Error::Deadline);
+        }
+        out.read_ready(options.budget, stdout)?;
+        err.read_ready(options.budget, stderr)?;
+        if out.reader.is_none()
+            && err.reader.is_none()
+            && child.has_exited().map_err(Error::LostReply)?
+        {
+            return Ok(());
+        }
+        let mut fds: Vec<_> = [out.reader.as_ref(), err.reader.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|reader| PollFd::new(reader, PollFlags::IN))
+            .collect();
+        let remaining = options
+            .budget
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .min(POLL_INTERVAL);
+        let timeout = Timespec::try_from(remaining)
+            .map_err(|error| Error::LostReply(io::Error::other(error)))?;
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(error) => return Err(Error::LostReply(error.into())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

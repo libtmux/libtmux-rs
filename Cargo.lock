@@ -888,6 +888,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libtmux-blocking"
+version = "0.1.2"
+dependencies = [
+ "getrandom 0.3.4",
+ "libtmux-core",
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "libtmux-core"
 version = "0.1.2"
 dependencies = [
