@@ -4,6 +4,8 @@
 //! `libtmux-core`. Ordinary subprocess requests preserve the tmux 3.3a floor
 //! without acquiring a control client or attaching to a session.
 
+#![doc = include_str!("../README.md")]
+
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Output;

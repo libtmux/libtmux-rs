@@ -55,3 +55,5 @@ drivers in one process.
 > Releases are numbered `0.1.N`, and each release increments `N`. The API is not
 > settled: any release may change or remove exported identifiers, and the
 > changelog marks each break. Pin an exact version to avoid one.
+
+[Changelog](CHANGELOG.md)

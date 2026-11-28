@@ -43,6 +43,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 CRATES = {
     "libtmux": "crates/libtmux",
+    "libtmux-core": "crates/libtmux-core",
+    "libtmux-blocking": "crates/libtmux-blocking",
+    "libtmux-tokio": "crates/libtmux-tokio",
     "libtmux-macros": "crates/libtmux-macros",
     "tmux-mcp": "crates/tmux-mcp",
     "tmux-workspace": "crates/tmux-workspace",
@@ -65,6 +68,32 @@ CRATES = {
 # check fails in the time a file listing takes.
 REQUIRED = {
     "libtmux": [
+        "CHANGELOG.md",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "README.md",
+        "docs/design.md",
+        "docs/adr/0001-native-blocking-and-tokio.md",
+        "examples/api_mixed.rs",
+        "examples/api/manifest.json",
+        "examples/api/consumer.toml",
+    ],
+    "libtmux-core": [
+        "CHANGELOG.md",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "README.md",
+        "src/receipt.rs",
+        "src/new_session.rs",
+    ],
+    "libtmux-blocking": [
+        "CHANGELOG.md",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "README.md",
+        "src/supervisor.rs",
+    ],
+    "libtmux-tokio": [
         "CHANGELOG.md",
         "LICENSE-APACHE",
         "LICENSE-MIT",
@@ -330,7 +359,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         problems += check_required(root, crate, listing, REQUIRED[crate])
         problems += check_versions(root, crate, listing, versions)
         problems += check_links(root, crate, listing)
-    problems += check_sandbox_tests(listings["libtmux"])
+    problems += check_sandbox_tests(listings["libtmux-tokio"])
     problems += [
         f"libtmux package contains macro source: {entry}"
         for entry in listings["libtmux"]

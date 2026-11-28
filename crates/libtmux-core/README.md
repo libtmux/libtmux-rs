@@ -42,3 +42,5 @@ in the error. An ambiguous action frame leaves the requested effect unknown.
 
 The observation and capture decoders return data only from complete, unique
 action frames. Hook output and partial capture bytes never become a result.
+
+[Changelog](CHANGELOG.md)

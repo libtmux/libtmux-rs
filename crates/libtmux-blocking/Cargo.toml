@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Native blocking tmux client for an explicit socket"
 repository.workspace = true
 license.workspace = true
+include = ["/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE-*", "/src/**", "/docs/**", "/tests/**"]
 categories = ["api-bindings", "os::unix-apis"]
 keywords = ["tmux", "terminal", "multiplexer", "blocking"]
 

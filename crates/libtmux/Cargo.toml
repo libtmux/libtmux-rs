@@ -18,7 +18,10 @@ include = [
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
     "/README.md",
-    "/docs/**/*.md",
+    "/docs/adr/*.md",
+    "/docs/design.md",
+    "/docs/migration.md",
+    "/docs/workspace-readme.md",
     "/examples/**/*.rs",
     "/examples/api/*.json",
     "/examples/api/*.toml",
@@ -45,7 +48,7 @@ libtmux-core.workspace = true
 libtmux-tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [[example]]
 name = "api_mixed"

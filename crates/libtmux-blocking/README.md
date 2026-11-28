@@ -11,3 +11,5 @@ client connected to the same socket.
 
 The [runtime architecture decision](https://github.com/libtmux/libtmux-rs/pull/186)
 describes how the two clients share operation semantics.
+
+[Changelog](CHANGELOG.md)

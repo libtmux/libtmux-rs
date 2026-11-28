@@ -9,6 +9,7 @@ documentation = "https://docs.rs/libtmux-core"
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+include = ["/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE-*", "/src/**", "/docs/**", "/tests/**"]
 keywords = ["tmux", "terminal", "multiplexer"]
 categories = ["api-bindings"]
 
