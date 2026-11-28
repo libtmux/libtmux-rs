@@ -67,6 +67,7 @@ impl Fixture {
         output
     }
 
+    #[track_caller]
     fn start(&self) {
         let output = Command::new(&self.executable)
             .arg("-S")
