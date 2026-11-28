@@ -7,7 +7,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{BufRead as _, Write as _};
+use std::io::{BufRead as _, Read as _, Write as _};
 #[cfg(feature = "plan")]
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::PermissionsExt as _;
@@ -201,8 +201,12 @@ fn control_process_helper() {
     );
     std::io::stdout().flush().unwrap();
     let mut fences = 0;
-    for line in std::io::stdin().lock().lines() {
-        let line = line.unwrap();
+    let mut input = std::io::stdin().lock();
+    loop {
+        let mut line = String::new();
+        if input.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
         if let Some(nonce) = marker(&line, "libtmux-control-challenge:") {
             block(&mut number, "", true, 1);
             let generation = if mode == "wrong-challenge" {
@@ -222,7 +226,10 @@ fn control_process_helper() {
             std::io::stdout().flush().unwrap();
             fences += 1;
             if fences == 2 {
-                if mode == "never-read" {
+                if mode == "partial-write" {
+                    let mut prefix = [0; 64];
+                    input.read_exact(&mut prefix).unwrap();
+                    fs::write(root.join("partial-input"), prefix).unwrap();
                     loop {
                         std::thread::park();
                     }
@@ -447,23 +454,61 @@ async fn an_opening_deadline_cleans_up_the_owned_process_group() {
 
 #[tokio::test]
 async fn a_blocked_partial_write_closes_and_reaps_the_connection() {
-    let fixture = Fixture::new("never-read", "3.8", TEST_TIMEOUT);
-    let (sender, events) = fixture
-        .attach()
-        .await
-        .unwrap()
-        .reply_timeout(Duration::from_millis(100))
-        .split();
+    let fixture = Fixture::new("partial-write", "3.8", TEST_TIMEOUT);
+    let (sender, mut events) = fixture.attach().await.unwrap().split();
     let child = fixture.child().await;
-    let error = sender
-        .send(
-            Command::new("display-message")
-                .arg("-p")
-                .sensitive_arg("x".repeat(1024 * 1024)),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Timeout);
+    let descendant = wait_pid(&fixture.path("descendant")).await;
+    let first = sender.clone();
+    let pending = tokio::spawn(async move {
+        first
+            .send(
+                Command::new("display-message")
+                    .arg("-p")
+                    .sensitive_arg("x".repeat(1024 * 1024)),
+            )
+            .await
+    });
+    let prefix = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            if let Ok(prefix) = fs::read(fixture.path("partial-input")) {
+                if prefix.len() == 64 {
+                    break prefix;
+                }
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("the stalled peer receives the command prefix");
+    assert!(prefix.starts_with(b"display-message -p "));
+    assert!(!prefix.contains(&b'\n'));
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    let reuse = tokio::time::timeout(
+        TEST_TIMEOUT,
+        sender.send(Command::new("display-message").arg("-p").arg("second")),
+    )
+    .await
+    .expect("the partial connection rejects a later request")
+    .unwrap_err();
+    assert!(!reuse.is_transient());
+    let error = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            match events.next_event().await {
+                Some(Err(error)) => break error,
+                Some(Ok(_)) => {}
+                None => panic!("a partial write must fail the connection"),
+            }
+        }
+    })
+    .await
+    .expect("cancelling a partial write closes the connection");
+    assert!(matches!(
+        error,
+        Error::ControlProtocol {
+            fault: ControlFault::Cancelled,
+        }
+    ));
     assert!(!error.is_transient());
     assert!(!format!("{error:?} {error}").contains(&"x".repeat(32)));
     assert!(
@@ -473,6 +518,7 @@ async fn a_blocked_partial_write_closes_and_reaps_the_connection() {
     let _ = events.shutdown().await;
     fixture.server.shutdown().await.unwrap();
     gone(child).await;
+    gone(descendant).await;
 }
 
 #[tokio::test]
