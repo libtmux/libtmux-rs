@@ -35,6 +35,11 @@ archives. It requires exact sibling versions and checks that every native
 dependency resolves to its extracted archive. The pure, blocking,
 blocking-control, Tokio and mixed configurations each run separately.
 
+Seven Tokio programs use the guide's consumer manifest and the sources in the
+Tokio archive. The proof records each program's digest, stdout bytes and
+cleanup result so the docs job can compare them with the examples copied
+from its HTML and Markdown.
+
 The mixed program is copied from the facade archive. The pinned bare
 recorder from `libtmux/docs` verifies its raw stdout against native captures
 of the same pane and generation, and checks endpoint cleanup.

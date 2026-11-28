@@ -6,11 +6,43 @@ import io
 import json
 import os
 import tarfile
+import tomllib
 from pathlib import Path
 
 import installed_clients as clients
 import pytest
 import yaml
+
+
+def test_archived_guides_preserve_reader_setup_and_source(tmp_path: Path) -> None:
+    crate = tmp_path / "archive"
+    examples = crate / "examples"
+    (examples / "api").mkdir(parents=True)
+    source = b'fn main() { println!("compiled guide"); }\n'
+    (examples / "api_read.rs").write_bytes(source)
+    (examples / "api/consumer.toml").write_text(
+        '[dependencies]\nlibtmux-tokio = { path = "checkout", features = ["query"] }\n'
+    )
+    manifest = examples / "api/manifest.json"
+    entry = {
+        "id": "rust-read",
+        "cargoExample": "api_read",
+        "sourceFile": "crates/libtmux-tokio/examples/api_read.rs",
+    }
+    staged = {"libtmux-tokio": crate}
+    manifest.write_text(json.dumps({"examples": [entry]}))
+    project = tmp_path / "reader"
+    programs = clients.prepare_guide_readers(project, staged)
+    package = tomllib.loads((project / "Cargo.toml").read_text())
+    assert package["dependencies"]["libtmux-tokio"] == {"path": str(crate), "features": ["query"]}
+    assert programs["api_read"][0].read_bytes() == source
+
+    manifest.write_text(json.dumps({"examples": [{**entry, "sourceFile": "crates/other.rs"}]}))
+    with pytest.raises(ValueError, match="source"):
+        clients.prepare_guide_readers(tmp_path / "wrong-source", staged)
+    manifest.write_text(json.dumps({"examples": [entry, entry]}))
+    with pytest.raises(ValueError, match="duplicate"):
+        clients.prepare_guide_readers(tmp_path / "duplicate", staged)
 
 
 def test_native_dependency_identity_requires_the_selected_archive(tmp_path: Path) -> None:

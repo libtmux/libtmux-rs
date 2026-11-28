@@ -52,7 +52,7 @@ jobs:
   # A pull request builds `latest` without publishing; this port has no
   # preview role.
   build:
-    uses: libtmux/docs/.github/workflows/port-docs.yml@ab14de12f812eeb6a449888e5058cd58b7593693
+    uses: libtmux/docs/.github/workflows/port-docs.yml@4eb53c0bec3a686d4e6585c423dffe1c8c0fddab
     with:
       port: rs
       tag-prefix: libtmux@
@@ -63,13 +63,74 @@ jobs:
       resolves-to: ${{ inputs.resolves-to }}
       publish: ${{ inputs.publish == true }}
 
+  installed-examples:
+    name: Rendered Rust examples against staged crates
+    needs: build
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Download this build's reader and repeat-build receipts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rust-copy-proof-latest
+          path: copy
+      - name: Find the CI archive for the same source revision
+        id: native
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          name="native-clients-$SOURCE_SHA"
+          for _ in {1..90}; do
+            run_id=$(gh api --method GET "repos/$GH_REPO/actions/artifacts" -f name="$name" \
+              | jq -r --arg sha "$SOURCE_SHA" '[.artifacts[] | select(.expired == false and .workflow_run.head_sha == $sha)] | max_by(.id) | .workflow_run.id // empty')
+            if [[ -n "$run_id" ]]; then
+              workflow=$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq .path)
+              [[ "$workflow" == .github/workflows/ci.yml ]]
+              echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::CI did not produce $name" >&2
+          exit 1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          run-id: ${{ steps.native.outputs.run-id }}
+          github-token: ${{ github.token }}
+          name: native-clients-${{ env.SOURCE_SHA }}
+          path: native
+      - name: Check out the verifier used to record the examples
+        uses: actions/checkout@v7
+        with:
+          repository: libtmux/docs
+          ref: 4eb53c0bec3a686d4e6585c423dffe1c8c0fddab
+          path: verifier
+          sparse-checkout: scripts/verify-rust-archives.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Match the copied programs, both site builds and the downloaded crates
+        run: |
+          node verifier/scripts/verify-rust-archives.mjs \
+            copy/proof.json native/proof.json native copy/repeat.json \
+            "$SOURCE_SHA" "$(git -C verifier rev-parse HEAD)"
+
   # One publication to this port's prefixes at a time, a tag's two legs
   # included: both rewrite manifest/rs.json. Only publishing queues; a pull
   # request's build never waits behind a deploy. `max`, so a queued tag is
   # never dropped for a newer run.
   publish:
-    needs: build
-    if: needs.build.outputs.should-publish == 'true'
+    needs: [build, installed-examples]
+    if: >-
+      always() && needs.build.result == 'success' && needs.build.outputs.should-publish == 'true'
+      && (needs.installed-examples.result == 'success' || needs.installed-examples.result == 'skipped')
     concurrency:
       group: docs-deploy-${{ github.repository }}
       queue: max
@@ -79,7 +140,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@ab14de12f812eeb6a449888e5058cd58b7593693
+    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@4eb53c0bec3a686d4e6585c423dffe1c8c0fddab
     with:
       # Unprefixed by locale: reusable-deploy prepends <locale>/ itself when
       # `port` is set, so this becomes en/rs/<version>.

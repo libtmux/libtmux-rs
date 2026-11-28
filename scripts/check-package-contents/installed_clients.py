@@ -34,7 +34,7 @@ APPLICATIONS = ("tmux-mcp", "tmux-workspace")
 PACKAGES = (*LIBRARIES, *APPLICATIONS)
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path("/tmp/libtmux-rs-test")
-RECORDER_REVISION = "5a763a4aabd017cefb88456169e96296f0ac9237"
+RECORDER_REVISION = "4eb53c0bec3a686d4e6585c423dffe1c8c0fddab"
 STREAM_LIMIT = 8 * 1024 * 1024
 
 BLOCKING_PROGRAM = """\
@@ -293,6 +293,67 @@ def recorder_identity(recorder: Path) -> dict[str, str]:
     }
 
 
+def registry_patches(staged: Mapping[str, Path]) -> str:
+    return "[patch.crates-io]\n" + "".join(
+        f"{name} = {{ path = {json.dumps(str(path))} }}\n" for name, path in staged.items()
+    )
+
+
+def prepare_guide_readers(
+    project: Path, staged: Mapping[str, Path]
+) -> dict[str, tuple[Path, dict]]:
+    """Copy each archived guide into a standalone binary target."""
+    crate = staged["libtmux-tokio"]
+    examples = crate / "examples"
+    entries = json.loads((examples / "api/manifest.json").read_bytes())["examples"]
+    binaries = project / "src/bin"
+    binaries.mkdir(parents=True)
+    manifest = (examples / "api/consumer.toml").read_text()
+    path = tomllib.loads(manifest)["dependencies"]["libtmux-tokio"]["path"]
+    # Keep the guide's feature selection and supporting dependencies. Its
+    # source checkout is supplied here by the unpacked crate.
+    manifest = manifest.replace(json.dumps(path), json.dumps(str(crate)))
+    if tomllib.loads(manifest)["dependencies"]["libtmux-tokio"]["path"] != str(crate):
+        raise ValueError("the guide manifest did not resolve the staged Tokio crate")
+    (project / "Cargo.toml").write_text(manifest + "\n" + registry_patches(staged))
+    programs = {}
+    for entry in entries:
+        name = entry["cargoExample"]
+        if not re.fullmatch(r"api_[a-z_]+", name) or name in programs:
+            raise ValueError("duplicate or invalid guide binary name")
+        if entry["sourceFile"] != f"crates/libtmux-tokio/examples/{name}.rs":
+            raise ValueError("guide source disagrees with its Cargo example")
+        source = binaries / f"{name}.rs"
+        source.write_bytes((examples / source.name).read_bytes())
+        programs[name] = (source, entry)
+    return programs
+
+
+def run_guide_examples(
+    cargo: Cargo, directory: Path, staged: dict[str, Path], recorder: Path, output: Path
+) -> list[dict]:
+    """Run the published Tokio guide programs with their reader's dependencies."""
+    project = directory / "guide-readers"
+    programs = prepare_guide_readers(project, staged)
+    check_dependency_tree(cargo.tree(project), staged, expect_tokio=True)
+    cargo.run(project, "build", "--locked", "--quiet", "--bins")
+    records = []
+    for name, (source, entry) in programs.items():
+        target = output / "guide-readers" / name
+        expected = (entry["expectedOutput"] + "\n").encode()
+        observed = record(recorder, target, [str(cargo.target / "debug" / name)], "")
+        check_record(observed, target, expected, require_capture=False)
+        records.append(
+            {
+                "program": entry["id"],
+                "programSha256": sha256(source),
+                "stdoutHex": observed["stdoutHex"],
+                "cleanup": observed["cleanup"],
+            }
+        )
+    return records
+
+
 def consume(
     cargo: Cargo,
     directory: Path,
@@ -302,9 +363,7 @@ def consume(
     output: Path,
 ) -> tuple[list[dict], dict, Path]:
     """Build and execute pure, blocking, Tokio and mixed external programs."""
-    patches = "\n".join(
-        f"{name} = {{ path = {json.dumps(str(path))} }}" for name, path in staged.items()
-    )
+    patches = registry_patches(staged)
     facade = staged["libtmux"]
     mixed = tomllib.loads((facade / "examples/api/consumer.toml").read_text())["dependencies"]
     extras = "\n".join(
@@ -338,7 +397,7 @@ def consume(
         (project / "Cargo.toml").write_text(
             f'[package]\nname = "reader-{lane}"\nversion = "0.0.0"\nedition = "2024"\n'
             f'[dependencies]\n{package} = {{ version = "={versions[package]}", default-features = {str(lane == "blocking").lower()}, features = {json.dumps(features)} }}\n'
-            f"{extras if lane in {'tokio', 'mixed'} else ''}\n[patch.crates-io]\n{patches}\n"
+            f"{extras if lane in {'tokio', 'mixed'} else ''}\n{patches}"
         )
         (project / "src/main.rs").write_text(source)
         selected = check_dependency_tree(
@@ -397,13 +456,7 @@ def verify_external_pins(shipped: Mapping, resolved: Mapping, staged: Mapping[st
 def install_apps(cargo: Cargo, directory: Path, staged: dict[str, Path]) -> tuple[Path, list[dict]]:
     """Install the extracted commands without changing their shipped manifests."""
     config = directory / "staged-registry.toml"
-    config.write_text(
-        "[patch.crates-io]\n"
-        + "\n".join(
-            f"{name} = {{ path = {json.dumps(str(path))} }}" for name, path in staged.items()
-        )
-        + "\n"
-    )
+    config.write_text(registry_patches(staged))
     installed = directory / "installed"
     records = []
     for package in APPLICATIONS:
@@ -721,6 +774,7 @@ def check_consumers(directory: Path, recorder: Path, output: Path) -> None:
     staged, versions, archives = stage_archives(cargo, directory, output, revision)
     consumers, mixed, fixture_binary = consume(cargo, directory, staged, versions, recorder, output)
     mixed["recorderSha256"] = recorder_provenance["sha256"]
+    guides = run_guide_examples(cargo, directory, staged, recorder, output)
     binaries, apps = install_apps(cargo, directory, staged)
     app_output = output / "application-stdio"
     driver_output = directory / "application-driver"
@@ -768,6 +822,7 @@ def check_consumers(directory: Path, recorder: Path, output: Path) -> None:
         "recorder": recorder_provenance,
         "consumers": consumers,
         "mixed": mixed,
+        "guideExamples": guides,
         "applications": {
             "installed": apps,
             "stdio": stdio,
