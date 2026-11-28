@@ -588,6 +588,20 @@ fn cancel(phase: &AtomicU8) -> bool {
 }
 
 fn wire(command: &Command, nonce: CreationNonce, limit: usize) -> Result<Vec<u8>, ControlError> {
+    let mut minimum = 0usize;
+    for word in command.logical_words() {
+        let bytes = word.as_encoded_bytes();
+        if bytes.iter().any(|byte| matches!(byte, 0 | b'\r' | b'\n')) {
+            return Err(ControlError::protocol(ControlFault::InvalidCommand, false));
+        }
+        minimum = minimum.saturating_add(bytes.len().saturating_add(1));
+        if minimum > limit {
+            return Err(ControlError::protocol(
+                ControlFault::CommandLimit { limit },
+                false,
+            ));
+        }
+    }
     let mut line = command
         .control_mode_line()
         .ok_or_else(|| ControlError::protocol(ControlFault::InvalidCommand, false))?;

@@ -144,6 +144,25 @@ fn managed_control_refuses_the_ordinary_supported_floor() {
 }
 
 #[test]
+fn control_input_rejects_record_boundaries_nul_and_non_utf8_operands() {
+    use std::os::unix::ffi::OsStringExt as _;
+    for bytes in [
+        b"before\nafter".as_slice(),
+        b"before\rafter",
+        b"before\0after",
+        b"before\xffafter",
+    ] {
+        let command = Command::new("set-environment")
+            .arg("-g")
+            .arg("VALUE")
+            .sensitive_arg(std::ffi::OsString::from_vec(bytes.to_vec()));
+        let error = wire(&command, CreationNonce::from_bytes([0x33; 16]), 1024).unwrap_err();
+        assert_eq!(error.fault(), Some(ControlFault::InvalidCommand));
+        assert_eq!(error.effect(), Effect::NotSubmitted);
+    }
+}
+
+#[test]
 fn bounded_notices_preserve_private_qualification_and_pause_gaps() {
     let fixture = Fixture::new();
     let identity = probe(
