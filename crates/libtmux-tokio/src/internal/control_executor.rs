@@ -33,6 +33,9 @@ impl Executor for ControlModeExecutor {
     fn control_line_limit(&self) -> Option<usize> {
         Some(self.sender.line_limit())
     }
+    fn checked_control_version(&self) -> Option<&crate::TmuxVersion> {
+        Some(self.sender.version())
+    }
     fn execute(&self, request: CommandRequest) -> DispatchFuture {
         if let Err(error) = request.require_shared_control() {
             return DispatchFuture::new(async move { Err(error) });

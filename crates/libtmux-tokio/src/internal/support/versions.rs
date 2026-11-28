@@ -69,6 +69,10 @@ pub(crate) fn dispatch(
         let summary = request.summary().clone();
         let unbounded = request.is_unbounded();
         let version_check = async {
+            #[cfg(feature = "control-mode")]
+            if let Some(version) = executor.checked_control_version() {
+                return Ok(Some((version.clone(), false)));
+            }
             if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
                 return Ok(Some((version, false)));
             }
@@ -76,7 +80,7 @@ pub(crate) fn dispatch(
             if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
                 return Ok(Some((version, false)));
             }
-            let live = live_version(&executor, &configuration, endpoint_probe, &versions).await?;
+            let live = live_version(&executor, &configuration, endpoint_probe).await?;
             if absent_cleanup && live.is_none() {
                 if let Some(version) = versions.get() {
                     versions.forget(&version);
@@ -118,33 +122,38 @@ pub(crate) fn dispatch(
         } else {
             request.live_only()
         };
-        // The guard and effects share tmux's queue, so replacing its daemon
-        // after the probe cannot run effects on an unverified version.
+        // Native clients put their version check and effects on the same queue.
         let typed = operation.is_some();
-        let result = match operation {
-            Some(operation) => {
-                match executor
-                    .execute_operation(request.fence_ordinary_version(&version), operation)
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(error) => {
-                        versions.forget(&version);
-                        return Err(error);
-                    }
+        let result = if let Some(operation) = operation {
+            match executor
+                .execute_operation(request.fence_ordinary_version(&version), operation)
+                .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    versions.forget(&version);
+                    return Err(error);
                 }
             }
-            None => {
-                within(
-                    executor.execute(request.fence_version(&version)),
-                    if unbounded { None } else { deadline },
-                    request_id,
-                    &summary,
-                    configuration.timeout(),
-                    false,
-                )
-                .await?
-            }
+        } else {
+            // A challenged persistent client cannot reconnect to a replacement.
+            #[cfg(feature = "control-mode")]
+            let request = if executor.renders_control_line() {
+                request
+            } else {
+                request.fence_version(&version)
+            };
+            #[cfg(not(feature = "control-mode"))]
+            let request = request.fence_version(&version);
+            within(
+                executor.execute(request),
+                if unbounded { None } else { deadline },
+                request_id,
+                &summary,
+                configuration.timeout(),
+                false,
+            )
+            .await?
         };
         if typed && !result.success() && result.stderr().trim_ascii() == b"syntax error" {
             // The ordinary guard has no private response block. Invalidating
@@ -162,7 +171,7 @@ pub(crate) fn dispatch(
             // failure still learns the floor. The probe shares the caller's
             // remaining deadline; nothing was sent, so it times out as such.
             let replacement = within(
-                live_version(&executor, &configuration, endpoint_probe, &versions),
+                live_version(&executor, &configuration, endpoint_probe),
                 deadline,
                 request_id,
                 &summary,
@@ -229,6 +238,10 @@ pub(crate) async fn format_version(
     binary_probe: RequestId,
     versions: &VersionCache,
 ) -> Result<TmuxVersion, Error> {
+    #[cfg(feature = "control-mode")]
+    if let Some(version) = executor.checked_control_version() {
+        return Ok(version.clone());
+    }
     if let Some(version) = versions.get() {
         return Ok(version);
     }
@@ -253,7 +266,7 @@ pub(crate) async fn endpoint_version(
     binary_probe: RequestId,
     versions: &VersionCache,
 ) -> Result<TmuxVersion, Error> {
-    if let Some(version) = live_version(executor, configuration, endpoint_probe, versions).await? {
+    if let Some(version) = live_version(executor, configuration, endpoint_probe).await? {
         version.ensure_supported()?;
         versions.remember(version.clone());
         Ok(version)
@@ -268,18 +281,21 @@ async fn live_version(
     executor: &Arc<dyn Executor>,
     configuration: &CoreConfiguration,
     request_id: RequestId,
-    #[cfg_attr(not(feature = "control-mode"), allow(unused_variables))] versions: &VersionCache,
 ) -> Result<Option<TmuxVersion>, Error> {
     // Over a control connection the probe's refusal is printed outside any
     // block, so it cannot be read back. A routed handle is seeded with the
     // version its connection attached under, and has no other source.
     #[cfg(feature = "control-mode")]
     if executor.renders_control_line() {
-        return versions.get().map(Some).ok_or_else(|| {
-            Error::control_mode(std::io::Error::other(
-                "a control-routed handle holds no checked daemon version",
-            ))
-        });
+        return executor
+            .checked_control_version()
+            .cloned()
+            .map(Some)
+            .ok_or_else(|| {
+                Error::control_mode(std::io::Error::other(
+                    "a control-routed handle holds no checked daemon version",
+                ))
+            });
     }
     let probe = crate::layout::VersionProbe::new();
     let command = probe.command();
@@ -374,6 +390,119 @@ fn is_cold(stderr: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{is_cold, is_pre_probe_usage};
+
+    #[cfg(all(feature = "control-mode", feature = "test-support"))]
+    #[tokio::test]
+    async fn a_control_gate_uses_its_challenged_version_after_native_cache_changes() {
+        use std::sync::Arc;
+
+        use super::{VersionCache, dispatch, format_version};
+        use crate::command::{CommandRequest, RequestId};
+        use crate::control::ControlMode;
+        use crate::internal::control_executor::ControlModeExecutor;
+        use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
+        use crate::internal::executor::Executor;
+        use crate::test::TestServer;
+        use crate::{Command, OutputLimits, ReleaseSuffix, ReleaseVersion, TmuxVersion};
+
+        let fixture = TestServer::new().await.expect("private daemon starts");
+        let server = fixture.server();
+        if !server
+            .daemon_version()
+            .await
+            .expect("daemon version")
+            .has_behavior(&crate::since::CONTROL_ACQUISITION)
+        {
+            fixture.shutdown().await.expect("ineligible fixture stops");
+            return;
+        }
+        let session = fixture.session("pinned-version").await.expect("session");
+        let (sender, events) = ControlMode::attach(server, session.id())
+            .await
+            .expect("qualified client")
+            .split();
+        let checked = sender.version().clone();
+        let executor: Arc<dyn Executor> =
+            Arc::new(ControlModeExecutor::new(sender, OutputLimits::default()));
+        let configuration = CoreConfiguration::resolve(
+            &SocketSelection::Path(server.socket_path().to_owned()),
+            None,
+            None,
+            server.tmux_executable().to_os_string(),
+            server.default_timeout(),
+            BuildContext::capture(),
+        )
+        .expect("endpoint configuration");
+        let versions = Arc::new(VersionCache::default());
+        let stale =
+            TmuxVersion::parse_output(b"tmux 99.0\n").expect("synthetic replacement report");
+        versions.remember(stale.clone());
+        assert_eq!(
+            format_version(
+                &executor,
+                &configuration,
+                RequestId::new(1),
+                RequestId::new(2),
+                &versions
+            )
+            .await
+            .expect("pinned format version"),
+            checked
+        );
+        let command = Command::new("set-environment")
+            .arg("-g")
+            .arg("LIBTMUX_BAD_CACHE")
+            .arg("changed")
+            .requires_tmux(
+                "synthetic future capability",
+                ReleaseVersion::new(99, 0, ReleaseSuffix::FINAL),
+            );
+        let line = command.control_mode_line();
+        let request = CommandRequest::with_global_argv(
+            RequestId::new(3),
+            configuration.global_argv(),
+            command,
+        )
+        .with_control_line(line);
+        let error = dispatch(
+            executor.clone(),
+            configuration.clone(),
+            request,
+            RequestId::new(4),
+            RequestId::new(5),
+            false,
+            Arc::clone(&versions),
+            None,
+        )
+        .await
+        .expect_err("the stale endpoint report cannot admit a control command");
+        assert_eq!(error.kind(), crate::ErrorKind::UnsupportedVersion);
+        versions.forget(&stale);
+        assert_eq!(
+            format_version(
+                &executor,
+                &configuration,
+                RequestId::new(6),
+                RequestId::new(7),
+                &versions
+            )
+            .await
+            .expect("clearing endpoint cache does not clear actor qualification"),
+            checked
+        );
+        let unchanged = server
+            .cmd(
+                Command::new("show-environment")
+                    .arg("-g")
+                    .arg("LIBTMUX_BAD_CACHE"),
+            )
+            .await
+            .expect("inspect daemon environment");
+        assert!(!unchanged.success());
+        drop(executor);
+        events.shutdown().await.expect("control client stops");
+        fixture.shutdown().await.expect("private daemon stops");
+    }
 
     #[cfg(feature = "test-support")]
     #[tokio::test]

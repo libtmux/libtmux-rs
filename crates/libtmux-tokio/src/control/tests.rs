@@ -242,6 +242,70 @@ async fn pane_output_yields_a_gap_and_then_the_original_terminal_cause() {
     output.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn unrelated_notices_yield_before_the_next_pane_chunk() {
+    use futures_core::Stream as _;
+    use std::pin::Pin;
+    use std::task::Poll;
+
+    let (events, wire) = events(ControlLimits::default(), Ok(()));
+    let (commands, _queued) = mpsc::channel(1);
+    let mut output = PaneOutput::new(
+        "%3".parse().unwrap(),
+        events,
+        sender(commands, Duration::from_secs(1)),
+    );
+    wire.feed(
+        b"%output %4 other\n"
+            .repeat(super::PANE_NOTICE_BATCH + 1)
+            .as_slice(),
+    )
+    .unwrap();
+    wire.feed(b"%output %3 wanted\n").unwrap();
+    let first =
+        std::future::poll_fn(|context| Poll::Ready(Pin::new(&mut output).poll_next(context))).await;
+    assert!(
+        first.is_pending(),
+        "one poll cannot consume an endless unrelated stream"
+    );
+    assert_eq!(output.next_chunk().await.unwrap().unwrap(), b"wanted");
+    output.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn snapshot_consumes_a_bounded_batch_even_when_output_keeps_arriving() {
+    let (events, wire) = events(ControlLimits::default().max_events(1), Ok(()));
+    let (commands, _queued) = mpsc::channel(1);
+    let mut output = PaneOutput::new(
+        "%3".parse().unwrap(),
+        events,
+        sender(commands, Duration::from_secs(1)),
+    );
+    wire.feed(b"%output %3 first\n").unwrap();
+    let mut delivered = 0;
+    let error = output
+        .snapshot(|_| {
+            delivered += 1;
+            assert!(
+                delivered <= 1,
+                "new arrivals cannot keep snapshot from capturing"
+            );
+            wire.feed(b"%output %3 later\n").unwrap();
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(delivered, 1);
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: crate::ControlModeErrorKind::UnrepresentableCommand,
+            ..
+        }
+    ));
+    assert_eq!(output.next_chunk().await.unwrap().unwrap(), b"later");
+    output.shutdown().await.unwrap();
+}
+
 fn event(line: &[u8]) -> Event {
     let mut tracker = tracker();
     let mut bytes = line.to_vec();

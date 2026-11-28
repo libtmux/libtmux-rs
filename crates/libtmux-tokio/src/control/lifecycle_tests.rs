@@ -8,6 +8,8 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead as _, Write as _};
+#[cfg(feature = "plan")]
+use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -19,8 +21,10 @@ use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
 use super::ControlMode;
+#[cfg(feature = "test-support")]
+use crate::ControlModeErrorKind;
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
-use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId};
+use crate::{Command, Error, ErrorKind, Server, SessionId};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -60,6 +64,14 @@ for argument do
     libtmux-control-challenge:*)
         printf 'unknown command: %s@@VERSION@@,123,456,$1\n' "${argument%%#*}" >&2
         exit 1
+        ;;
+    libtmux-create:*)
+        nonce=${argument#libtmux-create:}
+        nonce=${nonce%% *}
+        printf 'libtmux-create:%s 123 456 %%7 $2 @9 :end\n' "$nonce"
+        printf 'native\n' >> @@ROOT@@/native-creations
+        printf '%s\0' "$@" > @@ROOT@@/native-argv
+        exit 0
         ;;
     esac
 done
@@ -227,13 +239,22 @@ fn control_process_helper() {
         } else if mode.starts_with("creation-") && line.contains("new-session") {
             if mode == "creation-before-receipt" {
                 number += 1;
-                println!("%begin 1 {number} 1\n123 456 %7");
+                println!("%begin 1 {number} 1\n123 456 %7 $2 @9");
                 std::io::stdout().flush().unwrap();
                 loop {
                     std::thread::park();
                 }
             }
-            block(&mut number, "123 456 %7 $2 @9\n", true, 1);
+            block(
+                &mut number,
+                if mode == "creation-wrong-generation" {
+                    "999 456 %7 $2 @9\n"
+                } else {
+                    "123 456 %7 $2 @9\n"
+                },
+                true,
+                1,
+            );
             match mode.as_str() {
                 "creation-input-failure" => block(&mut number, "private-later-failure\n", false, 1),
                 "creation-hook-failure" => block(&mut number, "private-hook-failure\n", false, 0),
@@ -241,7 +262,7 @@ fn control_process_helper() {
                     number += 1;
                     println!("%begin 1 {number} 1\n%end 2 {number} 1");
                 }
-                "creation-timeout" => {
+                "creation-timeout" | "creation-wrong-generation" => {
                     std::io::stdout().flush().unwrap();
                     loop {
                         std::thread::park();
@@ -317,10 +338,14 @@ async fn acquisition_uses_the_captured_context_and_pinned_client() {
 
 #[tokio::test]
 async fn metadata_and_attached_challenges_refuse_unqualified_connections() {
-    for version in ["3.6a", "next-3.7", "3.7rc1"] {
+    for version in ["3.6a", "next-3.7", "3.7-rc1"] {
         let fixture = Fixture::new("quiet", version, TEST_TIMEOUT);
         let error = fixture.attach().await.unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::UnsupportedVersion);
+        assert_eq!(
+            error.kind(),
+            ErrorKind::UnsupportedVersion,
+            "{version}: {error:?}"
+        );
         assert!(
             !fixture.path("pid").exists(),
             "no control process before a checked daemon floor"
@@ -381,6 +406,10 @@ async fn a_blocked_partial_write_closes_and_reaps_the_connection() {
     assert_eq!(error.kind(), ErrorKind::Timeout);
     assert!(!error.is_transient());
     assert!(!format!("{error:?} {error}").contains(&"x".repeat(32)));
+    assert!(
+        sender.is_closed(),
+        "a partial input cannot enter a reusable drain"
+    );
     let _ = events.shutdown().await;
     fixture.server.shutdown().await.unwrap();
     gone(child).await;
@@ -436,8 +465,10 @@ async fn idle_event_overflow_never_stops_command_progress() {
     assert!(reply.succeeded());
     let dropped = tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
-            if let Some(Ok(ControlNotice::Gap { dropped, .. })) = events.next_notice().await {
-                break dropped;
+            match events.next_notice().await {
+                Some(Ok(ControlNotice::Gap { dropped, .. })) => break dropped,
+                Some(Ok(_)) => {}
+                other => panic!("connection closed before its gap: {other:?}"),
             }
         }
     })
@@ -478,17 +509,23 @@ async fn mismatched_frame_tuples_fail_the_reply_and_stream_once() {
             fault: ControlFault::WrongTerminator
         }
     ));
-    loop {
-        if let Some(Err(error)) = events.next_event().await {
-            assert!(matches!(
-                error,
-                Error::ControlProtocol {
-                    fault: ControlFault::WrongTerminator
-                }
-            ));
-            break;
+    let terminal = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            match events.next_event().await {
+                Some(Err(error)) => break error,
+                Some(Ok(_)) => {}
+                None => panic!("stream omitted its terminal failure"),
+            }
         }
-    }
+    })
+    .await
+    .expect("stream yields the original terminal failure");
+    assert!(matches!(
+        terminal,
+        Error::ControlProtocol {
+            fault: ControlFault::WrongTerminator
+        }
+    ));
     assert!(events.next_event().await.is_none());
     events.shutdown().await.unwrap();
     fixture.server.shutdown().await.unwrap();
@@ -574,6 +611,54 @@ async fn an_incomplete_control_creation_row_never_becomes_a_receipt() {
 
 #[cfg(feature = "plan")]
 #[tokio::test]
+async fn aborting_the_actor_retains_only_a_completed_verified_creation() {
+    for (mode, complete) in [
+        ("creation-timeout", true),
+        ("creation-before-receipt", false),
+        ("creation-wrong-generation", false),
+    ] {
+        let fixture = Fixture::new(mode, "3.8", TEST_TIMEOUT);
+        let (sender, events) = fixture.attach().await.unwrap().split();
+        let child = fixture.child().await;
+        let creating = tokio::spawn(async move {
+            sender
+                .create_session(libtmux_core::NewSession::new("actor-abort"))
+                .await
+        });
+        tokio::time::timeout(TEST_TIMEOUT, async {
+            loop {
+                if if complete {
+                    events.events.creation_receipt_ready()
+                } else {
+                    events.events.creation_input_seen()
+                } {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the actor observes this request's bytes");
+        events.connection.as_ref().unwrap().abort();
+        let error = creating.await.unwrap().unwrap_err();
+        assert_eq!(
+            error.operation_effect(),
+            Some(if complete {
+                libtmux_core::Effect::Created
+            } else {
+                libtmux_core::Effect::Unknown
+            })
+        );
+        assert_eq!(error.creation_receipt().is_some(), complete);
+        assert!(!error.is_transient());
+        let _ = events.shutdown().await;
+        fixture.server.shutdown().await.unwrap();
+        gone(child).await;
+    }
+}
+
+#[cfg(feature = "plan")]
+#[tokio::test]
 async fn a_verified_control_creation_receipt_binds_the_shared_session_value() {
     let fixture = Fixture::new("creation-success", "3.8", TEST_TIMEOUT);
     let (sender, events) = fixture.attach().await.unwrap().split();
@@ -582,6 +667,56 @@ async fn a_verified_control_creation_receipt_binds_the_shared_session_value() {
     let result = sender.run_plan(&plan).await.unwrap();
     assert!(result.is_complete());
     assert_eq!(result.created(0).unwrap(), "$2");
+    events.shutdown().await.unwrap();
+    fixture.server.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "plan")]
+#[tokio::test]
+async fn unrepresentable_control_creation_uses_one_native_operation() {
+    let fixture = Fixture::new("quiet", "3.8", TEST_TIMEOUT);
+    let (sender, events) = ControlMode::attach_with_limits(
+        &fixture.server,
+        &session(),
+        crate::ControlLimits::default().max_line_bytes(512),
+    )
+    .await
+    .unwrap()
+    .split();
+    for (index, (request, argument)) in [
+        (
+            libtmux_core::NewSession::new("raw-environment")
+                .environment("LIBTMUX_RAW", OsString::from_vec(b"native-\xff".to_vec())),
+            b"LIBTMUX_RAW=native-\xff".to_vec(),
+        ),
+        (
+            libtmux_core::NewSession::new("x".repeat(512)),
+            vec![b'x'; 512],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let receipt = sender.create_session(request).await.unwrap();
+        assert_eq!(receipt.session().to_string(), "$2");
+        assert_eq!(receipt.generation(), sender.generation());
+        assert_eq!(
+            fs::read_to_string(fixture.path("native-creations"))
+                .unwrap()
+                .lines()
+                .count(),
+            index + 1
+        );
+        let argv = fs::read(fixture.path("native-argv")).unwrap();
+        assert!(argv.split(|byte| *byte == 0).any(|word| word == argument));
+    }
+    assert!(
+        sender
+            .send(Command::new("display-message").arg("-p").arg("second"))
+            .await
+            .unwrap()
+            .succeeded()
+    );
     events.shutdown().await.unwrap();
     fixture.server.shutdown().await.unwrap();
 }

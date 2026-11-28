@@ -309,6 +309,13 @@ impl CommandRequest {
         self.control_line.is_some() && self.require_shared_control().is_ok()
     }
 
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn control_line_fits(&self, limit: usize) -> bool {
+        self.control_line
+            .as_ref()
+            .is_some_and(|line| line.len() <= limit)
+    }
+
     /// Take the control-mode line, when one was rendered and representable.
     #[cfg(feature = "control-mode")]
     pub(crate) fn into_control_line(self) -> Option<String> {

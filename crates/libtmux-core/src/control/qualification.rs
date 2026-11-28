@@ -12,11 +12,19 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use libtmux_core::control::ControlIdentity;
+/// use libtmux_core::{CreationNonce, ServerGeneration, control::ControlProbe};
 ///
-/// # fn inspect(identity: &ControlIdentity) {
-/// let session = identity.session();
-/// # let _ = session;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let probe = ControlProbe::new("$0".parse()?, CreationNonce::from_bytes([0x10; 16]));
+/// let report = concat!(
+///     "unknown command: libtmux-control-challenge:",
+///     "10101010101010101010101010101010:3.8,123,456,$0\n",
+/// );
+/// let identity = probe.decode_ordinary(Some(1), b"", report.as_bytes(), false)?;
+/// assert_eq!(identity.session().to_string(), "$0");
+/// assert_eq!(identity.generation(), ServerGeneration::from_raw(123, 456));
+/// assert_eq!(identity.version().raw(), "3.8");
+/// # Ok(())
 /// # }
 /// ```
 #[derive(Clone, Debug)]
@@ -67,9 +75,15 @@ impl ControlIdentity {
 /// ```
 /// use libtmux_core::{CreationNonce, control::ControlProbe};
 ///
-/// # fn example(nonce: CreationNonce) -> Result<(), libtmux_core::IdParseError> {
-/// let probe = ControlProbe::new("$0".parse()?, nonce);
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let probe = ControlProbe::new("$0".parse()?, CreationNonce::from_bytes([0x10; 16]));
 /// assert_eq!(probe.arguments()[0], "-N");
+/// let report = concat!(
+///     "unknown command: libtmux-control-challenge:",
+///     "10101010101010101010101010101010:3.8,123,456,$0\n",
+/// );
+/// assert!(probe.decode_control_report(report.as_bytes()).is_ok());
+/// assert!(probe.decode_control_report(b"unknown command: another-nonce\n").is_err());
 /// # Ok(())
 /// # }
 /// ```

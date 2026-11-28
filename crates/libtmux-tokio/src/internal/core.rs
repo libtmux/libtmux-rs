@@ -519,12 +519,6 @@ impl Core {
         capabilities: EngineCapabilities,
     ) -> Self {
         let generation = sender.generation();
-        // A version cannot be asked over the connection without a hook:
-        // `run-shell -C` reports its answer outside any block. The attach
-        // already checked the daemon this connection reaches, so carry that.
-        self.driver
-            .server_version
-            .remember(sender.version().clone());
         let executor = crate::internal::control_executor::ControlModeExecutor::new(
             sender,
             self.driver.configuration.output_limits,
@@ -718,7 +712,10 @@ impl Core {
         let request = request.for_generation(self.generation);
         let executor = &self.driver.executor;
         #[cfg(feature = "control-mode")]
-        let executor = if executor.renders_control_line() && !request.can_share_control() {
+        let executor = if executor.renders_control_line()
+            && (!request.can_share_control()
+                || !request.control_line_fits(executor.control_line_limit().unwrap_or(usize::MAX)))
+        {
             &self.driver.ordinary_executor
         } else {
             executor
@@ -900,12 +897,21 @@ impl Core {
                     .with_launch_context(launch.clone())
                     .with_output_limits(self.driver.configuration.output_limits)
                     .with_dispatch_limits(self.driver.configuration.dispatch_limits);
-            let binary = pinned_native
-                .execute(CommandRequest::new(
-                    self.next_request_id(),
-                    Command::new("-V"),
-                ))
-                .await?;
+            let binary = loop {
+                match pinned_native
+                    .execute(CommandRequest::new(self.next_request_id(), Command::new("-V")))
+                    .await
+                {
+                    // A concurrent fork can retain the copy writer until exec.
+                    Err(Error::Spawn { source, .. })
+                        if source.kind() == std::io::ErrorKind::ExecutableFileBusy
+                            && deadline.is_some_and(|end| tokio::time::Instant::now() < end) =>
+                    {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    result => break result?,
+                }
+            };
             if !binary.success() {
                 return Err(Error::control_mode_closed());
             }

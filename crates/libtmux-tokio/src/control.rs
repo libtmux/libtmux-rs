@@ -513,23 +513,24 @@ impl ControlSender {
         &self,
         request: libtmux_core::NewSession,
     ) -> Result<libtmux_core::CreatedSession, Error> {
+        let deadline = Some(
+            Instant::now()
+                .checked_add(self.timeout)
+                .ok_or_else(Error::control_mode_dispatch_timeout)
+                .map_err(crate::internal::operation::OperationContext::before_dispatch)?,
+        );
+        let command = Command::new_session(&request, libtmux_core::NewSession::RECEIPT_FORMAT);
+        let Some(line) = command.control_mode_line_bounded(self.line_limit()) else {
+            return self
+                .native_server()
+                .new_session_until(request, deadline)
+                .await;
+        };
         let dispatch = async {
-            let deadline = Some(
-                Instant::now()
-                    .checked_add(self.timeout)
-                    .ok_or_else(Error::control_mode_dispatch_timeout)?,
-            );
-            let command = Command::new_session(&request, libtmux_core::NewSession::RECEIPT_FORMAT);
-            let line = command
-                .control_mode_line_bounded(self.line_limit())
-                .ok_or_else(Error::control_mode_unrepresentable)?;
             crate::command::require_features(&command, &self.version)?;
             policy::require_shared(&command.logical_words().collect::<Vec<_>>())?;
-            let creation = actor::Creation {
-                request: request.clone(),
-                server: self.identity.clone(),
-                generation: self.generation,
-            };
+            let creation =
+                actor::Creation::new(request.clone(), self.identity.clone(), self.generation);
             self.dispatch_until(
                 line,
                 true,
@@ -686,17 +687,16 @@ impl ControlSender {
         }
         let (result, mut answer) = oneshot::channel();
         let (commit, mut commitment) = oneshot::channel();
-        let creating = creation.is_some();
+        let evidence = creation.as_ref().map(actor::Creation::evidence);
         let finish = |answer: Result<Result<BlockResult, Error>, oneshot::error::RecvError>| {
             let mut block = answer
                 .map_err(|_| Error::control_mode_closed())
                 .and_then(std::convert::identity)
                 .map_err(|source| {
-                    if creating && source.operation_effect().is_none() {
-                        Error::OperationFailure {
-                            effect: libtmux_core::Effect::Unknown,
-                            receipt: None,
-                            source: Box::new(source),
+                    if source.operation_effect().is_none() {
+                        match &evidence {
+                            Some(evidence) => evidence.interrupted(source),
+                            None => source,
                         }
                     } else {
                         source
@@ -1246,6 +1246,14 @@ impl ControlEvents {
     /// Return the next notice, including an explicit subscriber gap.
     ///
     /// A gap preserves command progress and requires the subscriber to resynchronise.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal failures described by [`Self::next_event`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Dropping a pending call consumes no notice or terminal error.
     pub async fn next_notice(&mut self) -> Option<Result<ControlNotice, Error>> {
         poll_fn(|context| self.poll_notice(context)).await
     }
@@ -1295,6 +1303,7 @@ impl Stream for ControlEvents {
 const NARROW_IDLE: u8 = 0;
 const NARROW_RUNNING: u8 = 1;
 const NARROW_DIRTY: u8 = 2;
+const PANE_NOTICE_BATCH: usize = 64;
 
 /// An observed terminal condition for one pane output stream.
 ///
@@ -1395,9 +1404,9 @@ impl PaneOutput {
 
     /// Capture this pane's grid through an independent generation-bound request.
     ///
-    /// Already buffered chunks are passed to `on_output` first and stay
-    /// consumed. The captured grid may overlap them or later output; it is
-    /// not a continuity boundary or an offset in this stream.
+    /// A bounded batch of buffered chunks is passed to `on_output` first and
+    /// stays consumed. The captured grid may overlap them or later output;
+    /// it is not a continuity boundary or an offset in this stream.
     ///
     /// # Errors
     ///
@@ -1411,9 +1420,17 @@ impl PaneOutput {
         &mut self,
         mut on_output: impl FnMut(&[u8]),
     ) -> Result<Vec<TmuxText>, Error> {
-        loop {
+        let (chunks, byte_limit) = self.events.events.snapshot_budget();
+        let mut collected = 0usize;
+        for _ in 0..chunks {
+            if collected >= byte_limit {
+                break;
+            }
             match poll_fn(|context| Poll::Ready(Pin::new(&mut *self).poll_next(context))).await {
-                Poll::Ready(Some(Ok(bytes))) => on_output(&bytes),
+                Poll::Ready(Some(Ok(bytes))) => {
+                    collected = collected.saturating_add(bytes.len());
+                    on_output(&bytes);
+                }
                 Poll::Ready(Some(Err(error))) => return Err(error),
                 Poll::Ready(None) | Poll::Pending => break,
             }
@@ -1433,7 +1450,11 @@ impl PaneOutput {
     /// Return one exact output chunk, a gap or terminal failure, then `None`.
     ///
     /// A gap is nonterminal; callers must resynchronise before claiming
-    /// continuity. Dropping a pending call consumes no chunk or error.
+    /// continuity.
+    ///
+    /// # Cancel safety
+    ///
+    /// Dropping a pending call consumes no chunk or error.
     pub async fn next_chunk(&mut self) -> Option<Result<Vec<u8>, Error>> {
         poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
@@ -1478,7 +1499,8 @@ impl Stream for PaneOutput {
                 }
             }
         }
-        loop {
+        // Unrelated notices must not keep one stream poll from returning.
+        for _ in 0..PANE_NOTICE_BATCH {
             match std::task::ready!(this.events.poll_notice(context)) {
                 Some(Ok(ControlNotice::Event(
                     Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. },
@@ -1519,6 +1541,8 @@ impl Stream for PaneOutput {
                 None => return this.ended(PaneOutputEnd::ConnectionEnded),
             }
         }
+        context.waker().wake_by_ref();
+        Poll::Pending
     }
 }
 

@@ -22,24 +22,29 @@ use crate::limits::ControlLimits;
 use crate::{Error, SessionId};
 
 pub(super) struct Creation {
-    pub(super) request: libtmux_core::NewSession,
-    pub(super) server: crate::ServerIdentity,
-    pub(super) generation: crate::ServerGeneration,
+    request: libtmux_core::NewSession,
+    server: crate::ServerIdentity,
+    generation: crate::ServerGeneration,
+    evidence: CreationEvidence,
 }
 
-impl Creation {
-    fn interrupted(
-        &self,
-        source: Error,
-        first: Option<&libtmux_core::control::ControlBlock>,
-    ) -> Error {
-        let receipt = first
-            .and_then(|first| {
-                self.request
-                    .decode(self.server.socket_path(), first.output())
-                    .ok()
-            })
-            .filter(|receipt| receipt.generation() == self.generation);
+#[derive(Clone, Default)]
+pub(super) struct CreationEvidence(Arc<Mutex<CreationCheckpoint>>);
+
+#[derive(Default)]
+struct CreationCheckpoint {
+    checked: bool,
+    receipt: Option<libtmux_core::CreatedSession>,
+}
+
+impl CreationEvidence {
+    pub(super) fn interrupted(&self, source: Error) -> Error {
+        let receipt = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .receipt
+            .clone();
         match receipt {
             Some(receipt) => source.after_creation(receipt),
             None => Error::OperationFailure {
@@ -51,10 +56,60 @@ impl Creation {
     }
 }
 
+impl Creation {
+    #[cfg(feature = "plan")]
+    pub(super) fn new(
+        request: libtmux_core::NewSession,
+        server: crate::ServerIdentity,
+        generation: crate::ServerGeneration,
+    ) -> Self {
+        Self {
+            request,
+            server,
+            generation,
+            evidence: CreationEvidence::default(),
+        }
+    }
+
+    pub(super) fn evidence(&self) -> CreationEvidence {
+        self.evidence.clone()
+    }
+
+    fn checkpoint(&self, first: Option<&libtmux_core::control::ControlBlock>) -> bool {
+        let mut evidence = self
+            .evidence
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !evidence.checked {
+            if let Some(first) = first {
+                evidence.checked = true;
+                evidence.receipt = self
+                    .request
+                    .decode(self.server.socket_path(), first.output())
+                    .ok()
+                    .filter(|receipt| receipt.generation() == self.generation);
+            }
+        }
+        evidence.receipt.is_some()
+    }
+
+    fn interrupted(
+        &self,
+        source: Error,
+        first: Option<&libtmux_core::control::ControlBlock>,
+    ) -> Error {
+        self.checkpoint(first);
+        self.evidence.interrupted(source)
+    }
+}
+
 struct Shared {
     tracker: Mutex<Tracker>,
     changed: Arc<Notify>,
     closed: AtomicBool,
+    #[cfg(test)]
+    creation_progress: std::sync::atomic::AtomicU8,
 }
 
 struct CloseEvents(Arc<Shared>);
@@ -76,6 +131,7 @@ impl Shared {
 
 pub(super) struct EventReceiver {
     shared: Arc<Shared>,
+    limits: ControlLimits,
     waiting: Option<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
     closed: bool,
 }
@@ -90,6 +146,17 @@ impl fmt::Debug for EventReceiver {
 }
 
 impl EventReceiver {
+    #[cfg(all(test, feature = "plan"))]
+    pub(super) fn creation_input_seen(&self) -> bool {
+        self.shared.creation_progress.load(Ordering::Acquire) >= 1
+    }
+    #[cfg(all(test, feature = "plan"))]
+    pub(super) fn creation_receipt_ready(&self) -> bool {
+        self.shared.creation_progress.load(Ordering::Acquire) >= 2
+    }
+    pub(super) const fn snapshot_budget(&self) -> (usize, usize) {
+        (self.limits.max_events, self.limits.max_event_bytes)
+    }
     pub(super) fn is_qualified(&self) -> bool {
         self.shared.tracker().is_qualified()
     }
@@ -165,10 +232,13 @@ pub(super) fn event_fixture(
         tracker: Mutex::new(Tracker::new(session, limits.shared())),
         changed: Arc::new(Notify::new()),
         closed: AtomicBool::new(false),
+        #[cfg(test)]
+        creation_progress: std::sync::atomic::AtomicU8::new(0),
     });
     (
         EventReceiver {
             shared: Arc::clone(&shared),
+            limits,
             waiting: None,
             closed: false,
         },
@@ -201,6 +271,8 @@ pub(super) async fn open(
         tracker: Mutex::new(Tracker::new(session, limits.shared())),
         changed: Arc::new(Notify::new()),
         closed: AtomicBool::new(false),
+        #[cfg(test)]
+        creation_progress: std::sync::atomic::AtomicU8::new(0),
     });
     let admission = Arc::new(Semaphore::new(limits.max_pending_requests));
     let (commands, requests) = mpsc::channel(limits.max_pending_requests.max(1));
@@ -250,6 +322,7 @@ pub(super) async fn open(
         admission,
         events: EventReceiver {
             shared,
+            limits,
             waiting: None,
             closed: false,
         },
@@ -413,6 +486,7 @@ impl Connection {
     async fn serve(&mut self) -> Result<(), Error> {
         let mut bytes = [0; 4096];
         while self.sending || self.watching || self.active.is_some() {
+            self.checkpoint_creation();
             self.complete(None);
             let has_active = self.active.is_some();
             let receive_request = self.sending && !has_active;
@@ -449,6 +523,16 @@ impl Connection {
                         .tracker()
                         .feed(&bytes[..read])
                         .map_err(protocol_error)?;
+                    #[cfg(test)]
+                    if self
+                        .active
+                        .as_ref()
+                        .is_some_and(|active| active.creation.is_some())
+                    {
+                        self.shared
+                            .creation_progress
+                            .fetch_max(1, Ordering::Release);
+                    }
                     if !self.watching {
                         self.shared.tracker().discard_notices();
                     }
@@ -550,6 +634,10 @@ impl Connection {
             return;
         }
         let wire = format!("{}\n{fence_line}\n", request.line).into_bytes();
+        #[cfg(test)]
+        if request.creation.is_some() {
+            self.shared.creation_progress.store(0, Ordering::Release);
+        }
         self.active = Some(Active {
             token,
             wire,
@@ -560,6 +648,21 @@ impl Connection {
             _permit: request.permit,
             creation: request.creation,
         });
+    }
+
+    fn checkpoint_creation(&self) {
+        if let Some(active) = &self.active {
+            if let Some(creation) = &active.creation {
+                let verified =
+                    creation.checkpoint(self.shared.tracker().first_input_block(active.token));
+                #[cfg(test)]
+                if verified {
+                    self.shared.creation_progress.store(2, Ordering::Release);
+                }
+                #[cfg(not(test))]
+                let _ = verified;
+            }
+        }
     }
 
     fn cancel(&mut self, deadline: bool) -> Result<(), Error> {

@@ -86,11 +86,7 @@ impl Pane {
             kind: crate::ObjectKind::Pane,
             id: self.id().to_string(),
         })?;
-        let key = crate::PaneKey::new(
-            window.key().server_identity().clone(),
-            window.key().generation(),
-            self.id().clone(),
-        );
+        let key = self.key().clone();
         let server = crate::Server::from_core(Arc::clone(&self.core)).bound_to(key.generation())?;
         let (sender, events) =
             crate::control::ControlMode::attach_with_limits(&server, window.session_id(), limits)

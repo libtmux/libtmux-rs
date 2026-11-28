@@ -15,10 +15,12 @@ use libtmux_core::{
 ///
 /// ```
 /// use libtmux_blocking::control::ControlError;
-/// # fn inspect(error: &ControlError) {
-/// let effect = error.effect();
-/// # let _ = effect;
-/// # }
+/// use libtmux_core::{Effect, Error};
+///
+/// let error = ControlError::from(Error::BeforeSpawn);
+/// assert_eq!(error.effect(), Effect::NotSubmitted);
+/// assert!(error.fault().is_none());
+/// assert!(!error.is_cleanup_pending());
 /// ```
 #[derive(Clone, Debug)]
 pub struct ControlError(Arc<Failure>);

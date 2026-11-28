@@ -133,8 +133,9 @@ pub enum ControlModeErrorKind {
     ///
     /// A command's deadline starts before queue admission and runs until tmux
     /// closes its response block. Once the connection commits the command for
-    /// writing, tmux may execute it. The connection ends rather than reuse a
-    /// possibly partial line, so this does not prove a mutation is safe to retry.
+    /// writing, tmux may execute it. A complete write is drained within a
+    /// separate bound or the connection closes; a partial write closes it.
+    /// Neither case proves a mutation is safe to retry.
     TimedOut,
     /// A retained error kind from an earlier subscriber backpressure policy.
     ///

@@ -51,6 +51,8 @@ impl DispatchSpan {
                 transport,
                 outcome = tracing::field::Empty,
                 error_kind = tracing::field::Empty,
+                submission = tracing::field::Empty,
+                effect = tracing::field::Empty,
             ),
         }
     }
@@ -104,6 +106,32 @@ impl OutcomeRecorder {
                 .record("outcome", "error")
                 .record("error_kind", tracing::field::debug(error.kind())),
         };
+        match result {
+            Ok(_) => self.span.record("submission", "acknowledged"),
+            Err(error) => {
+                let effect = error.operation_effect();
+                if let Some(effect) = effect {
+                    self.span.record("effect", tracing::field::debug(effect));
+                }
+                let before_dispatch = effect == Some(libtmux_core::Effect::NotSubmitted)
+                    || matches!(
+                        error,
+                        Error::InvalidCommandInput { .. }
+                            | Error::Timeout {
+                                before_dispatch: true,
+                                ..
+                            }
+                    );
+                self.span.record(
+                    "submission",
+                    if before_dispatch {
+                        "not_submitted"
+                    } else {
+                        "unknown"
+                    },
+                )
+            }
+        };
         self.recorded = true;
     }
 }
@@ -112,7 +140,9 @@ impl OutcomeRecorder {
 impl Drop for OutcomeRecorder {
     fn drop(&mut self) {
         if !self.recorded {
-            self.span.record("outcome", "cancelled");
+            self.span
+                .record("outcome", "cancelled")
+                .record("submission", "unknown");
         }
     }
 }
@@ -152,6 +182,10 @@ pub(crate) trait Executor: Send + Sync + 'static {
     }
     #[cfg(feature = "control-mode")]
     fn control_line_limit(&self) -> Option<usize> {
+        None
+    }
+    #[cfg(feature = "control-mode")]
+    fn checked_control_version(&self) -> Option<&crate::TmuxVersion> {
         None
     }
     fn execute(&self, request: CommandRequest) -> DispatchFuture;

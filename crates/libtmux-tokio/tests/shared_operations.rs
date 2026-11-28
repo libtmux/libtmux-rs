@@ -117,6 +117,156 @@ async fn a_failed_after_hook_preserves_the_created_identities() {
     guard.shutdown().await.expect("fixture shuts down");
 }
 
+#[cfg(all(feature = "control-mode", feature = "plan"))]
+#[tokio::test]
+async fn a_control_creation_keeps_its_receipt_when_later_hook_blocks_fail() {
+    use libtmux_tokio::control::ControlMode;
+    use libtmux_tokio::plan::Plan;
+
+    let guard = TestServer::new().await.expect("tmux starts");
+    let server = guard.server();
+    if !server
+        .daemon_version()
+        .await
+        .expect("daemon version")
+        .has_behavior(&libtmux_tokio::since::CONTROL_ACQUISITION)
+    {
+        guard
+            .shutdown()
+            .await
+            .expect("unsupported control fixture stops");
+        return;
+    }
+    let session = guard
+        .session("receipt-observer")
+        .await
+        .expect("attached session");
+    let (sender, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("qualified control client")
+        .split();
+    hook(
+        server,
+        "after-new-session",
+        Some("display-message -p private-hook-payload ; select-pane -t %4294967295"),
+    )
+    .await
+    .expect("failing hook is installed");
+    let mut plan = Plan::new();
+    plan.add(NewSession::new(unique_name("control-receipt")));
+    let result = sender.run_plan(&plan).await;
+    hook(server, "after-new-session", None)
+        .await
+        .expect("hook is unset");
+    let error = result.expect_err("a later hook block failed");
+    assert_eq!(error.operation_effect(), Some(Effect::Created));
+    assert!(!error.is_transient());
+    assert!(!format!("{error:?} {error}").contains("private-hook-payload"));
+    let receipt = error
+        .creation_receipt()
+        .expect("the first complete block acknowledges creation");
+    assert!(server.inspect_session(receipt).await.is_ok());
+    events.shutdown().await.expect("control client stops");
+    guard.shutdown().await.expect("fixture stops");
+}
+
+#[cfg(all(feature = "control-mode", feature = "plan"))]
+#[tokio::test]
+async fn control_creation_falls_back_before_writing_unrepresentable_arguments() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    use libtmux_tokio::ControlLimits;
+    use libtmux_tokio::control::ControlMode;
+    use libtmux_tokio::plan::{OperationValue, Plan};
+
+    let guard = TestServer::new().await.expect("tmux starts");
+    let server = guard.server();
+    if !server
+        .daemon_version()
+        .await
+        .expect("daemon version")
+        .has_behavior(&libtmux_tokio::since::CONTROL_ACQUISITION)
+    {
+        guard
+            .shutdown()
+            .await
+            .expect("unsupported control fixture stops");
+        return;
+    }
+    let session = guard
+        .session("creation-fallback")
+        .await
+        .expect("attached session");
+    let (sender, events) = ControlMode::attach_with_limits(
+        server,
+        session.id(),
+        ControlLimits::default().max_line_bytes(512),
+    )
+    .await
+    .expect("qualified control client")
+    .split();
+    let invalid_name = NewSession::new(OsString::from_vec(b"native-\xff".to_vec()));
+    let mut refused = Plan::new();
+    refused.add(invalid_name);
+    let error = sender
+        .run_plan(&refused)
+        .await
+        .expect_err("tmux refuses an invalid name");
+    assert_eq!(error.operation_effect(), Some(Effect::Unknown));
+    assert!(!error.is_transient());
+
+    let raw = OsString::from_vec(b"native-\xff".to_vec());
+    let oversized = "x".repeat(512);
+    for (request, format, expected) in [
+        (
+            NewSession::new(unique_name("raw-environment")).environment("LIBTMUX_RAW", raw),
+            "#{LIBTMUX_RAW}",
+            b"native-\xff\n".to_vec(),
+        ),
+        (
+            NewSession::new(oversized.clone()),
+            "#{session_name}",
+            format!("{oversized}\n").into_bytes(),
+        ),
+    ] {
+        let mut plan = Plan::new();
+        plan.add(request);
+        let result = sender
+            .run_plan(&plan)
+            .await
+            .expect("one ordinary creation returns a receipt");
+        let Some(OperationValue::CreatedSession(receipt)) = result.operations()[0].value() else {
+            panic!("the plan did not preserve its creation receipt");
+        };
+        let named = server
+            .cmd(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(format!("{}:", receipt.session()))
+                    .arg(format),
+            )
+            .await
+            .expect("read the actual native name");
+        assert!(named.success());
+        assert_eq!(named.stdout(), expected);
+    }
+    assert!(
+        sender
+            .send(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("still-qualified")
+            )
+            .await
+            .expect("preflight fallback leaves control writable")
+            .succeeded()
+    );
+    events.shutdown().await.expect("control client stops");
+    guard.shutdown().await.expect("fixture stops");
+}
+
 #[tokio::test]
 async fn a_parked_after_hook_keeps_a_complete_receipt_across_the_deadline() {
     let guard = TestServer::new().await.expect("tmux starts");

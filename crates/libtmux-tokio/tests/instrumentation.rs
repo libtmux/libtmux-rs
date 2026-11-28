@@ -208,11 +208,22 @@ async fn each_dispatch_runs_in_one_span_on_either_transport() {
         expected.extend([
             (transport, "set-environment", Some("success"), None),
             (transport, "set-environment", Some("exit"), None),
-            (transport, "set-environment", Some("error"), Some(kind)),
+            ("subprocess", "set-environment", Some("error"), Some(kind)),
             (transport, "set-environment", Some("cancelled"), None),
         ]);
     }
     assert_eq!(observed, expected, "one span per dispatch");
+
+    for dispatch in &recorded.dispatches {
+        let fields = &dispatch.fields;
+        let expected = match fields.get("outcome") {
+            Some("success" | "exit") => "acknowledged",
+            Some("error") => "not_submitted",
+            Some("cancelled") => "unknown",
+            other => panic!("missing dispatch outcome: {other:?}"),
+        };
+        assert_eq!(fields.get("submission"), Some(expected), "{dispatch:?}");
+    }
 
     for dispatch in &recorded.dispatches {
         let request_id = dispatch.fields.get("request_id").unwrap();
