@@ -1,6 +1,6 @@
 # check-package-contents
 
-Verifies what the four published crates contain, from `cargo package --list`.
+Verifies what the seven published crates contain, from `cargo package --list`.
 It fails when:
 
 - a file a crate's front page or tests depend on does not ship;
@@ -12,7 +12,7 @@ It fails when:
   `libtmux` without its default features depends on an optional crate.
 
 It reports every problem, not the first. `just package` runs it with `--build`,
-which packages the four crates into a fresh target directory first, and so does
+which packages the seven crates into a fresh target directory first, and so does
 `just check` in CI. Cargo treats staged registry versions as immutable, so a
 fresh target keeps a same-version edit from reusing source an earlier run
 extracted.
@@ -27,3 +27,37 @@ Run its tests, which build small trees and break each rule:
 ```console
 $ uv run --project scripts pytest scripts/check-package-contents
 ```
+
+## Installed clients
+
+`installed_clients.py` builds external consumers from the seven packaged
+archives. It requires exact sibling versions and checks that every native
+dependency resolves to its extracted archive. The pure, blocking,
+blocking-control, Tokio and mixed configurations each run separately.
+
+The mixed program is copied from the facade archive. The pinned bare
+recorder from `libtmux/docs` verifies its raw stdout against native captures
+of the same pane and generation, and checks endpoint cleanup.
+
+Both apps are installed from their archives with an explicit Cargo registry
+patch configuration. On a library-owned fixture, the installed
+`tmux-workspace` emits a JSON load result and the installed `tmux-mcp` serves
+JSON-RPC over stdio, inspects that workspace and captures its keeper pane.
+The app protocol transcript and native pane witness are recorded separately.
+
+The `native-clients` CI job checks out the recorder at the revision named by
+`RECORDER_REVISION`, then retains `proof.json`, the original archives and
+recorder output in the `native-clients-<source SHA>` artefact. The report
+includes source, archive, program, recorder and installed-binary hashes.
+A dirty source tree is reported as such and cannot certify an exact revision.
+
+With that exact docs revision checked out beside this repository:
+
+```console
+$ uv run scripts/check-package-contents/installed_clients.py \
+    --recorder ../docs/scripts/example_tmux_sandbox.py \
+    --output-dir artifacts/native-clients
+```
+
+The script creates a fresh Cargo target for every run. Its unit tests use
+small archives and pipes and do not build Rust packages.

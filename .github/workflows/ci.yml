@@ -111,6 +111,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
         with:
           update: "true"
@@ -123,8 +125,23 @@ jobs:
         run: cargo test --locked -p libtmux-tokio --all-features --test shared_operations
       - name: Exercise native process registration and cleanup
         run: cargo test --locked -p libtmux-tokio --all-features --lib internal::subprocess::tests::typed_
-      - name: Run independent readers against staged crates
-        run: uv run scripts/check-package-contents/installed_clients.py
+      - name: Check out the shared native recorder
+        uses: actions/checkout@v7
+        with:
+          repository: libtmux/docs
+          ref: c39c570da700424e24b4b19b7dc36194548e50cf
+          path: .native-proof-docs
+          sparse-checkout: scripts/example_tmux_sandbox.py
+          sparse-checkout-cone-mode: false
+      - name: Run independent readers and installed applications against staged crates
+        run: uv run scripts/check-package-contents/installed_clients.py --recorder .native-proof-docs/scripts/example_tmux_sandbox.py --output-dir artifacts/native-clients
+      - name: Retain archive and native capture provenance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-clients-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/native-clients
+          if-no-files-found: warn
 
   # Everything `just check` runs: formatting, Clippy, tests, doctests, docs,
   # the feature powerset, cargo-deny, both MSRV floors, and packaging.
