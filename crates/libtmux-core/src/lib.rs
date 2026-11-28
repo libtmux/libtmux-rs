@@ -4,6 +4,7 @@
 extern crate self as libtmux_core;
 
 mod command;
+pub mod control;
 #[cfg(feature = "serde")]
 mod creation_wire;
 mod error;
