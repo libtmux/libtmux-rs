@@ -126,6 +126,8 @@ impl Error {
             | Self::OptionScopeMismatch { .. }
             | Self::OptionValueRefused { .. } => ErrorKind::InvalidInput,
             #[cfg(feature = "plan")]
+            Self::PlanInterrupted { source, .. } => source.kind(),
+            #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => ErrorKind::InvalidInput,
             Self::Spawn { .. }
             | Self::ReadOutput { .. }
@@ -256,6 +258,8 @@ impl Error {
             | Self::NoEffect { .. }
             | Self::DecodeListing { .. }
             | Self::UnreadableAccessRule { .. } => false,
+            #[cfg(feature = "plan")]
+            Self::PlanInterrupted { source, .. } => source.is_transient(),
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => false,
             #[cfg(feature = "control-mode")]

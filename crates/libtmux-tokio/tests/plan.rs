@@ -628,6 +628,75 @@ async fn operation_reports_keep_typed_values_aligned_across_planners() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+fn duplicate_session_plan(name: &str) -> Plan {
+    let mut plan = Plan::new();
+    plan.add(NewSession::new(name));
+    plan.add(NewSession::new(name));
+    plan
+}
+
+async fn verify_completed_creation(server: &Server, name: &str, error: &libtmux_tokio::Error) {
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::PartialEffect);
+    assert!(!error.is_transient());
+    let libtmux_tokio::Error::PlanInterrupted { completed, .. } = error else {
+        panic!("lost the first creation: {error:?}");
+    };
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].index(), 0);
+    assert_eq!(completed[0].outcome(), Outcome::Complete);
+    let Some(OperationValue::CreatedSession(receipt)) = completed[0].value() else {
+        panic!("missing creation receipt");
+    };
+    let session = server.session(name).await.unwrap().unwrap();
+    assert_eq!(session.id(), &receipt.session());
+    let pane = session
+        .active_window()
+        .await
+        .unwrap()
+        .unwrap()
+        .active_pane()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pane.id(), &receipt.pane().id());
+}
+
+#[tokio::test]
+async fn a_later_creation_failure_preserves_the_completed_session() {
+    let guard = TestServer::new().await.unwrap();
+    let name = "plan-completed";
+    let error = guard
+        .server()
+        .run_plan(&duplicate_session_plan(name), Planner::Folding)
+        .await
+        .unwrap_err();
+    verify_completed_creation(guard.server(), name, &error).await;
+    guard.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn an_attached_plan_preserves_the_completed_session_after_a_later_failure() {
+    let guard = TestServer::new().await.unwrap();
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
+    let keeper = guard.session("plan-keeper").await.unwrap();
+    let (sender, events) =
+        libtmux_tokio::control::ControlMode::attach(guard.server(), keeper.id())
+            .await
+            .unwrap()
+            .split();
+    let name = "control-completed";
+    let error = sender
+        .run_plan(&duplicate_session_plan(name))
+        .await
+        .unwrap_err();
+    verify_completed_creation(guard.server(), name, &error).await;
+    events.shutdown().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

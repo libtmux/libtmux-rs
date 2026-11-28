@@ -304,6 +304,72 @@ impl PlanResult {
     }
 }
 
+struct Progress<'a> {
+    ops: &'a [Op],
+    outcomes: Vec<Outcome>,
+    reported: Vec<StepOutcome>,
+    bound: HashMap<(usize, Part), OsString>,
+    effect_seen: bool,
+}
+
+impl<'a> Progress<'a> {
+    fn new(ops: &'a [Op], dispatch_capacity: usize) -> Self {
+        Self {
+            ops,
+            outcomes: vec![Outcome::Skipped; ops.len()],
+            reported: Vec::with_capacity(dispatch_capacity),
+            bound: HashMap::new(),
+            effect_seen: false,
+        }
+    }
+
+    fn record_session(&mut self, index: usize, receipt: CreatedSession) {
+        self.reported.push(StepOutcome::created_session(
+            index,
+            receipt,
+            &mut self.bound,
+        ));
+        self.outcomes[index] = Outcome::Complete;
+        self.effect_seen = true;
+    }
+
+    fn interrupted(&self, error: Error) -> Error {
+        let source = if self.effect_seen {
+            error.after_effect("plan")
+        } else {
+            error
+        };
+        let Some(&last) = self
+            .reported
+            .last()
+            .and_then(|step| step.step.indices().last())
+        else {
+            return source;
+        };
+        // The planner dispatches contiguous operations in recording order.
+        let completed = operation_reports(
+            &self.ops[..=last],
+            &self.outcomes,
+            &self.reported,
+            &self.bound,
+        );
+        Error::PlanInterrupted {
+            completed: completed.into_boxed_slice(),
+            source: Box::new(source),
+        }
+    }
+
+    fn finish(self) -> PlanResult {
+        let operations = operation_reports(self.ops, &self.outcomes, &self.reported, &self.bound);
+        PlanResult {
+            operations,
+            dispatches: self.reported.len(),
+            steps: self.reported,
+            bound: self.bound,
+        }
+    }
+}
+
 struct Execution<'a>(&'a Plan);
 
 impl std::ops::Deref for Execution<'_> {
@@ -319,7 +385,8 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns a validation or transport error with evidence of earlier effects.
+    /// Returns a validation or transport error. After an earlier step completes,
+    /// [`Error::PlanInterrupted`] retains its typed results and replay evidence.
     pub async fn run_plan(&self, plan: &Plan, planner: Planner) -> Result<PlanResult, Error> {
         Execution(plan).run(self, planner).await
     }
@@ -335,6 +402,7 @@ impl crate::control::ControlSender {
     /// # Errors
     ///
     /// Returns an error for an unsupported operation or a lost connection.
+    /// [`Error::PlanInterrupted`] retains results for earlier completed steps.
     pub async fn run_plan(&self, plan: &Plan) -> Result<PlanResult, Error> {
         Execution(plan).run_over_control_mode(self).await
     }
@@ -367,11 +435,7 @@ impl Execution<'_> {
         self.validate_layouts(server).await?;
         let mut server = server.clone();
         let steps = planner.steps(self);
-        let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
-        let mut outcomes = vec![Outcome::Skipped; self.len()];
-        let mut reported = Vec::with_capacity(steps.len());
-        let mut dispatches = 0;
-        let mut effect_seen = false;
+        let mut progress = Progress::new(self.steps(), steps.len());
 
         for step in steps {
             if let [index] = step.indices() {
@@ -379,24 +443,23 @@ impl Execution<'_> {
                     let receipt = server
                         .new_session(request.clone())
                         .await
-                        .map_err(|error| after_plan_effect(error, effect_seen))?;
-                    server = server.bound_to(receipt.generation())?;
-                    reported.push(StepOutcome::created_session(*index, receipt, &mut bound));
-                    outcomes[*index] = Outcome::Complete;
-                    effect_seen = true;
-                    dispatches += 1;
+                        .map_err(|error| progress.interrupted(error))?;
+                    let generation = receipt.generation();
+                    progress.record_session(*index, receipt);
+                    server = server
+                        .bound_to(generation)
+                        .map_err(|error| progress.interrupted(error))?;
                     continue;
                 }
             }
             server = server
                 .for_discovery()
                 .await
-                .map_err(|error| after_plan_effect(error, effect_seen))?;
+                .map_err(|error| progress.interrupted(error))?;
             let (result, marked_creation) = self
-                .dispatch(&server, &step, &bound)
+                .dispatch(&server, &step, &progress.bound)
                 .await
-                .map_err(|error| after_plan_effect(error, effect_seen))?;
-            dispatches += 1;
+                .map_err(|error| progress.interrupted(error))?;
 
             let succeeded = result.success();
             let step_committed = (succeeded
@@ -406,26 +469,26 @@ impl Execution<'_> {
                         .is_some_and(|op| !op.effects().read_only)
                 }))
                 || (marked_creation && !result.stdout().is_empty());
-            let effect_through_step = effect_seen || step_committed;
+            progress.effect_seen |= step_committed;
             let step_outcomes = attribute(step.indices().len(), succeeded);
             for (position, index) in step.indices().iter().enumerate() {
-                outcomes[*index] = step_outcomes[position];
+                progress.outcomes[*index] = step_outcomes[position];
             }
             if succeeded || (marked_creation && !result.stdout().is_empty()) {
-                bind(&mut bound, self.steps(), &step, result.stdout())
-                    .map_err(|error| after_plan_effect(error, effect_through_step))?;
+                bind(&mut progress.bound, self.steps(), &step, result.stdout())
+                    .map_err(|error| progress.interrupted(error))?;
                 // A merged step reports `Unknown` because nothing distinguishes
                 // its members. A creation whose id came back is distinguished:
                 // tmux prints the id only once it has made the object, so the
                 // evidence that names the object also settles its outcome.
                 for index in step.indices() {
-                    if bound.contains_key(&(*index, Part::Created)) {
-                        outcomes[*index] = Outcome::Complete;
+                    if progress.bound.contains_key(&(*index, Part::Created)) {
+                        progress.outcomes[*index] = Outcome::Complete;
                     }
                 }
             }
 
-            reported.push(StepOutcome {
+            progress.reported.push(StepOutcome {
                 creation: None,
                 attribution: if step.indices().len() == 1 {
                     Attribution::PerCommand
@@ -447,16 +510,9 @@ impl Execution<'_> {
             if !succeeded {
                 break;
             }
-            effect_seen = effect_through_step;
         }
 
-        let operations = operation_reports(self.steps(), &outcomes, &reported, &bound);
-        Ok(PlanResult {
-            operations,
-            steps: reported,
-            bound,
-            dispatches,
-        })
+        Ok(progress.finish())
     }
 
     /// Send one invocation, sharing it when the step carries several.
@@ -805,25 +861,18 @@ impl Execution<'_> {
         self.validate_option_scopes()?;
         self.validate_control_layouts(sender)?;
         let server = sender.native_server().over_control_mode(sender).await?;
-        let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
-        let mut outcomes = vec![Outcome::Skipped; self.len()];
-        let mut reported = Vec::with_capacity(self.len());
-        let mut dispatches = 0;
-        let mut effect_seen = false;
+        let mut progress = Progress::new(self.steps(), self.len());
 
         for (index, op) in self.steps().iter().enumerate() {
             if let Op::NewSession(request) = op {
                 let receipt = sender
                     .create_session(request.clone())
                     .await
-                    .map_err(|error| after_plan_effect(error, effect_seen))?;
-                reported.push(StepOutcome::created_session(index, receipt, &mut bound));
-                outcomes[index] = Outcome::Complete;
-                effect_seen = true;
-                dispatches += 1;
+                    .map_err(|error| progress.interrupted(error))?;
+                progress.record_session(index, receipt);
                 continue;
             }
-            let resolve = |slot: usize, part: Part| bound.get(&(slot, part)).cloned();
+            let resolve = |slot: usize, part: Part| progress.bound.get(&(slot, part)).cloned();
             let command = op
                 .render(&resolve)
                 .ok_or_else(|| Error::CommandFailed {
@@ -834,14 +883,16 @@ impl Execution<'_> {
                      a plan cannot address what it has not made"
                     ),
                 })
-                .map_err(|error| after_plan_effect(error, effect_seen))?;
+                .map_err(|error| progress.interrupted(error))?;
 
             if matches!(op, Op::CapturePane(_)) {
                 let pane = command
                     .target()
                     .and_then(|target| target.to_str())
                     .and_then(|target| target.parse::<PaneId>().ok())
-                    .ok_or_else(|| Error::invalid_command_input(0, "plan capture target"))?;
+                    .ok_or_else(|| {
+                        progress.interrupted(Error::invalid_command_input(0, "plan capture target"))
+                    })?;
                 let escapes = command.logical_words().any(|word| word == "-e");
                 let key = libtmux_core::PaneKey::new(
                     sender.identity().clone(),
@@ -852,9 +903,9 @@ impl Execution<'_> {
                     .native_server()
                     .capture_grid(&key, escapes)
                     .await
-                    .map_err(|error| after_plan_effect(error, effect_seen))?;
-                outcomes[index] = Outcome::Complete;
-                reported.push(StepOutcome {
+                    .map_err(|error| progress.interrupted(error))?;
+                progress.outcomes[index] = Outcome::Complete;
+                progress.reported.push(StepOutcome {
                     creation: None,
                     step: Step::single(index),
                     command: op.name(),
@@ -864,7 +915,6 @@ impl Execution<'_> {
                     stdout: bytes,
                     stderr: Vec::new(),
                 });
-                dispatches += 1;
                 continue;
             }
 
@@ -872,8 +922,7 @@ impl Execution<'_> {
             let result = server
                 .cmd(command)
                 .await
-                .map_err(|error| after_plan_effect(error, effect_seen))?;
-            dispatches += 1;
+                .map_err(|error| progress.interrupted(error))?;
 
             let succeeded = result.success();
             let outcome = if succeeded {
@@ -881,17 +930,17 @@ impl Execution<'_> {
             } else {
                 Outcome::Failed
             };
-            outcomes[index] = outcome;
-            let effect_through_step = effect_seen || (succeeded && !op.effects().read_only);
+            progress.outcomes[index] = outcome;
+            progress.effect_seen |= succeeded && !op.effects().read_only;
 
             let (stdout, stderr) = result.into_streams();
             if succeeded {
                 let step = Step::single(index);
-                bind(&mut bound, self.steps(), &step, &stdout)
-                    .map_err(|error| after_plan_effect(error, effect_through_step))?;
+                bind(&mut progress.bound, self.steps(), &step, &stdout)
+                    .map_err(|error| progress.interrupted(error))?;
             }
 
-            reported.push(StepOutcome {
+            progress.reported.push(StepOutcome {
                 creation: None,
                 step: Step::single(index),
                 command: op.name(),
@@ -906,24 +955,9 @@ impl Execution<'_> {
             if !succeeded {
                 break;
             }
-            effect_seen = effect_through_step;
         }
 
-        let operations = operation_reports(self.steps(), &outcomes, &reported, &bound);
-        Ok(PlanResult {
-            operations,
-            steps: reported,
-            bound,
-            dispatches,
-        })
-    }
-}
-
-fn after_plan_effect(error: Error, effect_seen: bool) -> Error {
-    if effect_seen {
-        error.after_effect("plan")
-    } else {
-        error
+        Ok(progress.finish())
     }
 }
 
@@ -1119,8 +1153,8 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                Error::AfterEffect { operation: "plan", source }
-                    if source.kind() == crate::ErrorKind::Refused && source.is_transient()
+                Error::PlanInterrupted { completed, source }
+                    if completed.len() == 1 && source.kind() == crate::ErrorKind::PartialEffect
             ),
             "{error:?}",
         );
@@ -1145,7 +1179,7 @@ mod tests {
         assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
         assert_eq!(error.kind(), crate::ErrorKind::Refused);
         assert!(error.is_transient());
-        assert!(!matches!(error, Error::AfterEffect { .. }));
+        assert!(matches!(error, Error::PlanInterrupted { completed, .. } if completed.len() == 1));
     }
 
     #[tokio::test]

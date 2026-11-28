@@ -19,6 +19,8 @@ impl Error {
         match self {
             Self::CoreOperation { source } => core_receipt(source),
             Self::OperationFailure { receipt, .. } => receipt.as_deref(),
+            #[cfg(feature = "plan")]
+            Self::PlanInterrupted { source, .. } => source.creation_receipt(),
             Self::OperationAndCleanup { primary, .. } => primary.creation_receipt(),
             Self::OperationCleanupPending { source } | Self::AfterEffect { source, .. } => {
                 source.creation_receipt()
@@ -37,6 +39,8 @@ impl Error {
         match self {
             Self::CoreOperation { source } => Some(source.effect()),
             Self::OperationFailure { effect, .. } => Some(*effect),
+            #[cfg(feature = "plan")]
+            Self::PlanInterrupted { source, .. } => source.operation_effect(),
             Self::OperationAndCleanup { primary, .. } => primary.operation_effect(),
             Self::OperationCleanupPending { source } | Self::AfterEffect { source, .. } => {
                 source.operation_effect()

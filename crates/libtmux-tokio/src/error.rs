@@ -784,6 +784,22 @@ pub enum Error {
         candidates: Vec<&'static str>,
     },
 
+    /// A later plan operation failed after earlier operations returned results.
+    ///
+    /// Each completed operation retains the same typed value as a successful
+    /// plan. A creation receipt for the failing operation, when available, is
+    /// accessible through [`Self::creation_receipt`].
+    #[cfg(feature = "plan")]
+    #[non_exhaustive]
+    #[error("plan stopped after {} completed operations: {source}", completed.len())]
+    PlanInterrupted {
+        /// The completed prefix, in recording order.
+        completed: Box<[crate::plan::OperationReport]>,
+        /// The failure that stopped execution, including evidence of earlier effects.
+        #[source]
+        source: Box<Error>,
+    },
+
     /// A plan has a dependency that cannot be resolved before dispatch.
     #[cfg(feature = "plan")]
     #[error("invalid plan: {source}")]
@@ -1698,6 +1714,12 @@ impl fmt::Debug for Error {
             Self::ServerMismatch { operation } => formatter
                 .debug_struct("ServerMismatch")
                 .field("operation", operation)
+                .finish(),
+            #[cfg(feature = "plan")]
+            Self::PlanInterrupted { completed, source } => formatter
+                .debug_struct("PlanInterrupted")
+                .field("completed", &completed.len())
+                .field("source", source)
                 .finish(),
             #[cfg(feature = "plan")]
             Self::InvalidPlan { source } => formatter
