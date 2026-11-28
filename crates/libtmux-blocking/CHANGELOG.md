@@ -10,6 +10,11 @@ Notable changes to `libtmux-blocking`.
 
 ### Fixed
 
+- A control subscriber can read the final `%exit` notice and reach the end of
+  the stream. An unexpected disconnect delivers its error once after queued
+  notices and cleanup.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - `Server::snapshots` preserves non-ASCII names when the caller uses the C
   locale.
 - `ControlMode::attach` preserves session environment variables selected by
