@@ -622,8 +622,8 @@ fn start_native_child(
     );
     let ownership = ChildOwnership {
         process_group,
-        child,
         readers,
+        child,
         #[cfg(feature = "test-support")]
         synchronous_reap_on_drop: configuration.synchronous_reap_on_supervisor_drop,
     };
