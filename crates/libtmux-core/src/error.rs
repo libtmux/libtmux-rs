@@ -15,6 +15,12 @@ use crate::{CreatedSession, PaneId};
 pub enum CommandKind {
     /// Create a detached session and its first window and pane.
     NewSession,
+    /// List observed sessions.
+    ListSessions,
+    /// List observed windows across all sessions.
+    ListWindows,
+    /// List attached clients.
+    ListClients,
     /// Observe an exact pane's generation and identity.
     ListPanes,
     /// Capture bytes from a generation-checked pane.
@@ -29,6 +35,9 @@ impl fmt::Display for CommandKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NewSession => "new-session",
+            Self::ListSessions => "list-sessions",
+            Self::ListWindows => "list-windows",
+            Self::ListClients => "list-clients",
             Self::ListPanes => "list-panes",
             Self::CapturePane => "capture-pane",
             Self::KillSession => "kill-session",
@@ -96,6 +105,9 @@ pub enum Error {
         /// The configured subprocess limit.
         limit: usize,
     },
+    /// A snapshot listing returned an invalid row. The error carries only coordinates.
+    #[error(transparent)]
+    SnapshotRow(#[from] crate::formats::FormatCodecError),
     /// The server handle has stopped accepting new requests.
     #[error("server is closed to new requests")]
     Closed,
@@ -283,14 +295,20 @@ impl Error {
             | Self::CreationInterrupted { .. }
             | Self::CreationFollowup { .. }
             | Self::LateCreation { .. } => Effect::Created,
-            Self::LateObservation { .. }
+            Self::SnapshotRow(_)
+            | Self::LateObservation { .. }
             | Self::ObservationFailed { .. }
             | Self::FramedRead
             | Self::InvalidKey
             | Self::PaneNotFound(_)
             | Self::StalePane
             | Self::Command {
-                operation: CommandKind::ListPanes | CommandKind::CapturePane,
+                operation:
+                    CommandKind::ListPanes
+                    | CommandKind::CapturePane
+                    | CommandKind::ListSessions
+                    | CommandKind::ListWindows
+                    | CommandKind::ListClients,
                 ..
             } => Effect::Observation,
             Self::Command { .. }

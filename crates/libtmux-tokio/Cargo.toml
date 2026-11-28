@@ -140,7 +140,7 @@ default = ["query"]
 full = ["control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
 # Exposes internal parsers to a fuzzer. Not a supported API, not in
 # `full`, and nothing but `fuzz/` turns it on.
-unstable-fuzzing = ["control-mode", "query", "serde"]
+unstable-fuzzing = ["libtmux-core/unstable-fuzzing", "control-mode", "query", "serde"]
 control-mode = ["dep:tempfile", "dep:futures-core", "tokio/io-util", "tokio/process", "tokio/sync"]
 # The derive writes `impl Filterable`, which does not exist without `query`.
 derive = ["libtmux-core/derive", "query"]
@@ -169,6 +169,7 @@ tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "s
 tracing = { version = "0.1.36", optional = true }
 
 [dev-dependencies]
+libtmux-core = { workspace = true, features = ["conformance"] }
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 futures-core = "0.3"
 jsonschema.workspace = true

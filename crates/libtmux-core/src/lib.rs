@@ -10,6 +10,8 @@ mod creation_wire;
 mod error;
 #[path = "formats/catalog.rs"]
 mod format_catalog;
+#[doc(hidden)]
+pub mod formats;
 mod framed;
 mod new_session;
 mod operand;
@@ -22,6 +24,8 @@ pub mod plan;
 pub mod query;
 mod receipt;
 mod reply;
+#[doc(hidden)]
+pub mod snapshot;
 #[doc(hidden)]
 pub mod supervision;
 mod target;
@@ -36,6 +40,7 @@ pub use libtmux_macros::Filterable;
 
 pub use command::{Command, CommandChain, CommandSummary};
 pub use error::{CommandKind, Effect, Error};
+pub use formats::FormatCodecError;
 pub use new_session::NewSession;
 pub use operand::{Operand, OperandKind, argv_operand};
 pub use ordinary_creation::CreationNonce;
@@ -47,6 +52,12 @@ pub use receipt::{
     Capture, CreatedSession, ObjectKey, ObservePane, PaneKey, SessionKey, WindowKey,
 };
 pub use reply::Reply;
+pub use snapshot::list::{Snapshot, SnapshotList};
+pub use snapshot::{
+    Availability, ClientSnapshot, PaneProgressState, PaneSnapshot, SessionSnapshot, WindowSnapshot,
+};
+#[cfg(feature = "query")]
+pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{
     IdParseError, PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName,
     SessionNameError, SessionTarget, TmuxArg, WindowId, WindowTarget, escape_format,

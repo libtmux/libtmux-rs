@@ -296,6 +296,7 @@ impl_handle_traits!(OneRelation<From, To>);
 impl<T, V> TextField<T, V> {
     /// Build a handle whose snapshot value is `V`.
     #[doc(hidden)]
+    #[must_use]
     pub const fn typed(target: &'static str, field: &'static str) -> Self {
         Self {
             id: FieldId { target, field },

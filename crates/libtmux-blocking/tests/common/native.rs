@@ -400,3 +400,36 @@ fn cleanup_cannot_kill_a_replacement_session_with_the_same_id() {
     );
     fixture.server.kill_created_session(&replacement).unwrap();
 }
+
+#[test]
+fn snapshots_keep_the_observed_session_name_and_count_a_linked_window_once() {
+    use libtmux_core::{ClientSnapshot, PaneSnapshot, SessionSnapshot, WindowSnapshot};
+
+    let fixture = Fixture::new();
+    let original = fixture
+        .server
+        .snapshots::<SessionSnapshot>()
+        .unwrap()
+        .remove(0);
+    let peer = fixture.server.new_session(NewSession::new("peer")).unwrap();
+    fixture.checked(["link-window", "-s", "fixture:0", "-t", "peer:7"]);
+    fixture.checked(["rename-session", "-t", "fixture", "renamed"]);
+    assert_eq!(original.session_name().as_bytes(), b"fixture");
+    let current = fixture.server.snapshots::<SessionSnapshot>().unwrap();
+    let renamed = current
+        .iter()
+        .find(|s| s.session_id() == original.session_id())
+        .unwrap();
+    assert_eq!(renamed.session_name().as_bytes(), b"renamed");
+    let windows = fixture.server.snapshots::<WindowSnapshot>().unwrap();
+    assert_eq!(windows.len(), 2);
+    assert!(windows.iter().any(|w| w.window_id() == &peer.window()));
+    assert_eq!(fixture.server.snapshots::<PaneSnapshot>().unwrap().len(), 2);
+    assert!(
+        fixture
+            .server
+            .snapshots::<ClientSnapshot>()
+            .unwrap()
+            .is_empty()
+    );
+}

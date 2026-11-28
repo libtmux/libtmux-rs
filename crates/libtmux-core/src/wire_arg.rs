@@ -10,6 +10,10 @@ pub(crate) enum Argument {
     Bytes(Vec<u8>),
 }
 
+#[cfg_attr(
+    unix,
+    allow(clippy::unnecessary_wraps, reason = "non-Unix conversions can fail")
+)]
 impl Argument {
     pub(crate) fn from_os(value: &OsStr) -> Result<Self, &'static str> {
         if let Some(text) = value.to_str() {

@@ -43,4 +43,18 @@ in the error. An ambiguous action frame leaves the requested effect unknown.
 The observation and capture decoders return data only from complete, unique
 action frames. Hook output and partial capture bytes never become a result.
 
+## Read a saved observation
+
+Both native clients return the same owned snapshots. You can keep one after
+its session exits, compare successive listings, or read the original bytes
+of a session name without contacting tmux.
+
+```rust
+use libtmux_core::SessionSnapshot;
+
+fn names(sessions: &[SessionSnapshot]) -> impl Iterator<Item = &[u8]> {
+    sessions.iter().map(|session| session.session_name().as_bytes())
+}
+```
+
 [Changelog](CHANGELOG.md)

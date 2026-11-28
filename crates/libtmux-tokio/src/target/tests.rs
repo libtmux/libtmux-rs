@@ -5,9 +5,10 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
+use super::ServerIdentity;
 use super::endpoint_resolution::{EndpointInputs, resolve_server_identity};
-use super::{ServerIdentity, WindowLinkIdentity};
 use crate::{SessionId, WindowId};
+use libtmux_core::snapshot::WindowLinkIdentity;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 fn hash(value: &ServerIdentity) -> u64 {
@@ -416,12 +417,6 @@ fn winlink_identity_constructor_accessors_and_traits_are_exact() {
 
     assert_impl_all!(WindowLinkIdentity: Clone, std::fmt::Debug, Eq, Hash, Send, Sync);
     assert_not_impl_any!(WindowLinkIdentity: Copy);
-    let WindowLinkIdentity {
-        server_identity: _,
-        session_id: _,
-        window_index: _,
-        window_id: _,
-    } = &identity;
     assert_eq!(
         server_identity(&identity),
         &ServerIdentity::from_socket_path(PathBuf::from(
