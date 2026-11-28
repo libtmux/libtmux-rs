@@ -45,6 +45,11 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- A control attach waiting for a blocking worker now checks its deadline
+  and caller before spawning. Shutting down the server also stops queued
+  attaches from launching a client.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - `Server::run_plan` excludes `after-capture-pane` hook output from
   `CapturePane` results, including captures that retain ANSI escapes.
   Failed captures return an error without pane bytes, retaining earlier
