@@ -17,6 +17,48 @@ fn managed() -> Option<(Fixture, ControlMode)> {
 }
 
 #[test]
+fn pinned_client_qualification_retries_pre_exec_busy_until_the_deadline() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = Fixture::new();
+    let endpoint =
+        pin::PinnedEndpoint::new(&fixture.server.socket, &fixture.server.executable).unwrap();
+    std::fs::set_permissions(
+        endpoint.executable(),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let writer = std::fs::File::options()
+        .write(true)
+        .open(endpoint.executable())
+        .unwrap();
+    std::fs::set_permissions(
+        endpoint.executable(),
+        std::fs::Permissions::from_mode(0o500),
+    )
+    .unwrap();
+    let pinned = Server {
+        socket: endpoint.socket(),
+        executable: endpoint.executable().as_os_str().to_owned(),
+        children: fixture.server.children.clone(),
+    };
+    let mut options = RequestOptions::default();
+    options.budget.deadline = Instant::now() + Duration::from_millis(30);
+    let error = qualify_client(&pinned, &options).unwrap_err();
+    assert_eq!(error.effect(), Effect::NotSubmitted);
+    assert!(
+        matches!(
+            std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<libtmux_core::Error>()),
+            Some(libtmux_core::Error::BeforeSpawn)
+        ),
+        "{error:?}"
+    );
+    drop(writer);
+    qualify_client(&pinned, &RequestOptions::default()).unwrap();
+}
+
+#[test]
 fn native_attachment_keeps_session_environment() {
     const VARIABLE: &str = "LIBTMUX_TEST_CONTROL_ENVIRONMENT";
     const ABSENT: &str = "LIBTMUX_TEST_CONTROL_ABSENT";

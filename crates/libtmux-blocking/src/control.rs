@@ -110,18 +110,7 @@ impl ControlMode {
             executable: endpoint.executable().as_os_str().to_owned(),
             children: server.children.clone(),
         };
-        let (output, late) = pinned
-            .output(["-V"], options.clone(), None)
-            .map_err(crate::before_submission)?;
-        if late || !output.status.success() {
-            return Err(ControlError::protocol(ControlFault::AttachRejected, false));
-        }
-        let client =
-            libtmux_core::TmuxVersion::parse_executable_output(&pinned.executable, &output.stdout)
-                .map_err(libtmux_core::Error::from)?;
-        client
-            .ensure_supported()
-            .map_err(libtmux_core::Error::from)?;
+        qualify_client(&pinned, &options)?;
         let identity = probe(&pinned, session.clone(), &options)?;
         if identity != initial {
             return Err(ControlError::protocol(
@@ -617,6 +606,38 @@ fn wire(command: &Command, nonce: CreationNonce, limit: usize) -> Result<Vec<u8>
     line.push_str(&fence);
     line.push('\n');
     Ok(line.into_bytes())
+}
+
+fn qualify_client(server: &Server, options: &RequestOptions) -> Result<(), ControlError> {
+    let (output, late) = loop {
+        match server.output(["-V"], options.clone(), None) {
+            // A concurrent fork can retain the copy's writer until exec.
+            // ETXTBSY precedes exec; only this diagnostic probe is retried.
+            Err(libtmux_core::Error::Spawn(source))
+                if source.kind() == std::io::ErrorKind::ExecutableFileBusy =>
+            {
+                supervisor::check_before_spawn(options)?;
+                std::thread::sleep(
+                    options
+                        .budget
+                        .deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(INTERVAL),
+                );
+            }
+            result => break result.map_err(crate::before_submission)?,
+        }
+    };
+    if late || !output.status.success() {
+        return Err(ControlError::protocol(ControlFault::AttachRejected, false));
+    }
+    let client =
+        libtmux_core::TmuxVersion::parse_executable_output(&server.executable, &output.stdout)
+            .map_err(libtmux_core::Error::from)?;
+    client
+        .ensure_supported()
+        .map_err(libtmux_core::Error::from)?;
+    Ok(())
 }
 
 fn probe(
