@@ -36,6 +36,11 @@ Notable changes to `libtmux-core`.
 
 ### Fixed
 
+- An ordinary pane probe can receive an attached client's current pane after
+  its target disappears. A valid reply naming that other pane returns
+  `Error::StalePane`. Malformed metadata still fails decoding.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - One-shot captures validate complete, successful and unambiguous hook tails
   before returning screen bytes. Duplicate closes inside later hook output
   and incomplete notices are refused. Creation replies retain their verified
