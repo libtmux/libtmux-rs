@@ -703,6 +703,9 @@ impl Pane {
     /// Returns an error when tmux refuses the split, which includes a pane
     /// too small to divide.
     ///
+    /// A failing `after-split-window` hook can leave the new pane in the
+    /// window without returning its ID. Inspect the window before retrying.
+    ///
     /// # Examples
     ///
     /// ```

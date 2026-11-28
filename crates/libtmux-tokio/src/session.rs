@@ -647,7 +647,9 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command or its output cannot be
-    /// decoded.
+    /// decoded. A failing `after-new-window` hook can leave the new window
+    /// in this session without returning its ID. Inspect the session before
+    /// repeating the request.
     pub async fn new_window(&self, options: impl Into<NewWindowOptions>) -> Result<Window, Error> {
         let options = options.into();
         let session = self.id().to_string();

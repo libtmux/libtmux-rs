@@ -22,6 +22,11 @@ left behind. Use that receipt for inspection or cleanup. An unknown effect
 means the session may already exist, so replaying creation can duplicate
 the action. [Architecture decision](adr/0001-native-blocking-and-tokio.md)
 
+The typed receipt covers session creation. A failing `after-new-window` or
+`after-split-window` hook can leave a new window or pane behind. The immediate
+call or plan step can report failure without returning its ID. Inspect the
+bound daemon before issuing another creation request.
+
 ## Request limits
 
 | Ordinary subprocess default | Native blocking | Tokio |

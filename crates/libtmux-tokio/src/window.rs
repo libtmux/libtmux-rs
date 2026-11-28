@@ -558,7 +558,9 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the split, which includes a target
-    /// pane that is too small to divide.
+    /// pane that is too small to divide. A failing `after-split-window` hook
+    /// can leave the new pane in this window without returning its ID. Inspect
+    /// the window before repeating the split.
     pub async fn split(&self, options: impl Into<SplitOptions>) -> Result<Pane, Error> {
         let options = options.into();
         let window = self.id().to_string();
