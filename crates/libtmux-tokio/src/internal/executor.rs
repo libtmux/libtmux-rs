@@ -191,6 +191,20 @@ pub(crate) trait Executor: Send + Sync + 'static {
     }
     fn execute(&self, request: CommandRequest) -> DispatchFuture;
 
+    fn execute_until(
+        &self,
+        request: CommandRequest,
+        deadline: Option<tokio::time::Instant>,
+        budget: std::time::Duration,
+    ) -> DispatchFuture {
+        let id = request.request_id();
+        let summary = request.summary().clone();
+        let dispatch = self.execute(request);
+        DispatchFuture::new(async move {
+            super::support::versions::within(dispatch, deadline, id, &summary, budget, false).await
+        })
+    }
+
     fn execute_operation(
         &self,
         request: CommandRequest,

@@ -225,12 +225,13 @@ impl SubprocessExecutor {
         lock_lifecycle(&self.shared).accepting
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "admission, spawn, and supervisor handoff form one atomic lifecycle sequence"
-    )]
     async fn run(self, request: CommandRequest) -> Result<CommandResult, Error> {
-        self.run_operation(request, None).await
+        let deadline = if request.is_unbounded() {
+            None
+        } else {
+            Instant::now().checked_add(self.configuration.timeout)
+        };
+        self.run_operation(request, deadline, None).await
     }
 
     #[allow(
@@ -240,6 +241,7 @@ impl SubprocessExecutor {
     async fn run_operation(
         self,
         request: CommandRequest,
+        deadline: Option<Instant>,
         operation: Option<OperationContext>,
     ) -> Result<CommandResult, Error> {
         let request_id = request.request_id();
@@ -248,16 +250,7 @@ impl SubprocessExecutor {
             request_id,
             command: request.summary().clone(),
             timeout: self.configuration.timeout,
-            deadline: operation.as_ref().map_or_else(
-                || {
-                    if request.is_unbounded() {
-                        None
-                    } else {
-                        Instant::now().checked_add(self.configuration.timeout)
-                    }
-                },
-                OperationContext::deadline,
-            ),
+            deadline,
             operation,
         };
         trace_requested(&context);
@@ -365,13 +358,26 @@ impl Executor for SubprocessExecutor {
         DispatchSpan::new(&request, "subprocess").run(self.clone().run(request))
     }
 
+    fn execute_until(
+        &self,
+        request: CommandRequest,
+        deadline: Option<Instant>,
+        _budget: Duration,
+    ) -> DispatchFuture {
+        DispatchSpan::new(&request, "subprocess")
+            .run(self.clone().run_operation(request, deadline, None))
+    }
+
     fn execute_operation(
         &self,
         request: CommandRequest,
         operation: OperationContext,
     ) -> DispatchFuture {
-        DispatchSpan::new(&request, "subprocess")
-            .run(self.clone().run_operation(request, Some(operation)))
+        DispatchSpan::new(&request, "subprocess").run(self.clone().run_operation(
+            request,
+            operation.deadline(),
+            Some(operation),
+        ))
     }
 
     fn shutdown(&self) -> ShutdownFuture {

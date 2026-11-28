@@ -149,11 +149,13 @@ Literal raw `wait-for` commands and flat chains use this budget while
 retaining the ordinary request deadline. Alias bodies and nested scripts
 keep native semantics, the ordinary deadline and ordinary capacity.
 
-Dropping the command future, reaching its timeout, or shutting the server down
-signals the group and waits for the direct child while the runtime is alive.
-The signal reaches the tmux client, and leaves the tmux server alone. A command
-the server has already received still runs, so a dropped mutation may or may
-not have happened, and a retry can repeat it.
+On timeout the subprocess supervisor signals the group and waits for the
+direct child. An awaited command reports a cleanup failure alongside the
+original error. If the one-second cleanup allowance expires, it returns
+`Error::OperationCleanupPending`. Dropping the future leaves cleanup with
+the supervisor while Tokio is running. The signal reaches the tmux client.
+The daemon can still carry out a command it already received, so retrying a
+mutation can repeat its effect.
 
 A control-mode connection has its own isolated process group. Its attach
 handshake and each command response use the same default timeout. A response's

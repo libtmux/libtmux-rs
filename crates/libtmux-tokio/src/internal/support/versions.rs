@@ -144,15 +144,13 @@ pub(crate) fn dispatch(
             };
             #[cfg(not(feature = "control-mode"))]
             let request = request.fence_ordinary_version(&version);
-            within(
-                executor.execute(request),
-                if unbounded { None } else { deadline },
-                request_id,
-                &summary,
-                configuration.timeout(),
-                false,
-            )
-            .await?
+            executor
+                .execute_until(
+                    request,
+                    if unbounded { None } else { deadline },
+                    configuration.timeout(),
+                )
+                .await?
         };
         if !result.success() && result.stderr().trim_ascii() == b"syntax error" {
             // The ordinary guard has no private response block. Invalidating

@@ -1224,6 +1224,60 @@ async fn wait_failure_is_typed_and_cleanup_reaps_the_child() {
     executor.shutdown().await.expect("shutdown succeeds");
 }
 
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_qualified_ordinary_timeout_reports_its_child_cleanup_outcome() {
+    use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
+    use crate::internal::support::versions::{VersionCache, dispatch};
+    use crate::test::{TestServer, scaled};
+
+    let fixture = TestServer::new().await.unwrap();
+    let server = fixture.server();
+    let budget = scaled(Duration::from_millis(500));
+    let configuration = CoreConfiguration::resolve(
+        &SocketSelection::Path(server.socket_path().to_owned()),
+        None,
+        None,
+        server.tmux_executable().to_os_string(),
+        budget,
+        BuildContext::capture(),
+    )
+    .unwrap();
+    let versions = Arc::new(VersionCache::default());
+    versions.remember(server.daemon_version().await.unwrap());
+    let executor = Arc::new(
+        SubprocessExecutor::new(server.tmux_executable(), budget).with_test_hooks(TestHooks {
+            reported_group_signal_failure: Some(std::io::ErrorKind::PermissionDenied),
+            ..TestHooks::default()
+        }),
+    );
+    let request = CommandRequest::with_global_argv(
+        RequestId::new(1),
+        configuration.global_argv(),
+        Command::new("wait-for").arg("ordinary-timeout-cleanup"),
+    );
+    let error = dispatch(
+        executor.clone(),
+        configuration,
+        request,
+        RequestId::new(2),
+        RequestId::new(3),
+        false,
+        versions,
+        None,
+    )
+    .await
+    .expect_err("tmux holds this channel until the deadline");
+    executor.shutdown().await.unwrap();
+    fixture.shutdown().await.unwrap();
+
+    let Error::OperationAndCleanup { primary, cleanup } = error else {
+        panic!("expected the timeout and supervised cleanup outcome, got {error:?}");
+    };
+    assert!(matches!(*primary, Error::Timeout { .. }));
+    assert!(matches!(*cleanup, Error::WaitChild { .. }));
+}
+
 #[tokio::test]
 async fn ordinary_dispatch_keeps_the_primary_failure_and_cleanup_diagnostic() {
     let directory = tempfile::tempdir().unwrap();
