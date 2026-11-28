@@ -335,6 +335,9 @@ mod command;
 #[cfg(feature = "control-mode")]
 pub mod control;
 mod error;
+#[cfg(any(feature = "test-support", all(test, feature = "control-mode")))]
+#[path = "test/executable.rs"]
+mod executable_fixture;
 mod formats;
 pub mod hooks;
 mod internal;

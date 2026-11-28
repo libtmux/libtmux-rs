@@ -10,7 +10,6 @@ use std::fs;
 use std::io::{BufRead as _, Read as _, Write as _};
 #[cfg(feature = "plan")]
 use std::os::unix::ffi::OsStringExt as _;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
@@ -88,8 +87,7 @@ exec @@EXE@@ --exact @@HELPER@@ --nocapture -- "$@"
             .replace("@@ROOT@@", &shell_quote(directory.path()))
             .replace("@@EXE@@", &shell_quote(&std::env::current_exe().unwrap()))
             .replace("@@HELPER@@", HELPER);
-        fs::write(&executable, script).unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::executable_fixture::install(&executable, &script, TEST_TIMEOUT).unwrap();
         let context = BuildContext::new(
             Some(directory.path().to_owned()),
             Some(OsString::from("/usr/bin:/bin")),

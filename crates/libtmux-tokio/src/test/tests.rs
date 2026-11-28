@@ -532,12 +532,16 @@ fn a_busy_executable_is_waited_for_not_reported() {
         std::thread::sleep(Duration::from_millis(20));
         drop(writer);
     });
-    super::run_until_ready(&path, Instant::now() + scaled(Duration::from_secs(5))).unwrap();
+    crate::executable_fixture::run_until_ready(
+        &path,
+        Instant::now() + scaled(Duration::from_secs(5)),
+    )
+    .unwrap();
     release.join().unwrap();
 
     // Still busy at the deadline is an answer, not a hang.
     let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
-    let error = super::run_until_ready(&path, Instant::now()).unwrap_err();
+    let error = crate::executable_fixture::run_until_ready(&path, Instant::now()).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     drop(writer);
 
