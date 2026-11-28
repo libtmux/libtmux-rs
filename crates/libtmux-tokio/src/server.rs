@@ -1576,6 +1576,8 @@ impl Server {
     /// before 3.7 stores any bytes, a newline included. Each name is read
     /// framed, so one holding a newline or `=` is one name, and
     /// [`Self::buffer`] and [`Self::delete_buffer`] take it back unchanged.
+    /// A configured `after-list-buffers` hook shares the listing's stdout.
+    /// Its output can be decoded as an additional name if it has the same row format.
     ///
     /// # Errors
     ///

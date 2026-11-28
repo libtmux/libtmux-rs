@@ -90,8 +90,10 @@ those lines. A message printed by an `after-capture-pane` hook cannot satisfy
 the wait. The hook can still change tmux state.
 
 For a fixed row range, the ordinary client checks the pane identity and
-extent in the same queue as the capture. Pending escape sequences use tmux's
-octal encoding so a NUL byte survives the client pipe. Joined rows have no
+extent in the same queue as the capture. If a resize or a change to scrollback
+invalidates the observed extent, the read fails. The caller can inspect the
+same pane again. Pending escape sequences use tmux's octal encoding so a NUL
+byte survives the client pipe. Joined rows have no
 fixed count. A qualified one-shot control client can distinguish the capture
 reply from later hook replies. On an unqualified client and daemon pairing,
 the ordinary client checks the global and session hook settings in the capture
