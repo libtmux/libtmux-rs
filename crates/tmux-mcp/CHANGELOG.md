@@ -22,6 +22,11 @@ which a published crate cannot link by a relative path.
 
 ### Changed
 
+- **Behaviour change.** Every tool reports `readOnlyHint: false`,
+  `destructiveHint: true`, `idempotentHint: false`, and `openWorldHint: true`.
+  Configured tmux aliases and hooks can add effects even to inspect calls.
+  Direct capability fields still describe each tool's requested operation.
+  (#155)
 - **Breaking.** `select_window` and `move_window` require the complete `link`
   returned by `list_windows`, including daemon generation, session, index and
   window. A withdrawn or reindexed placement returns `link_gone` with
