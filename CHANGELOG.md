@@ -8,6 +8,9 @@ Changelog](https://keepachangelog.com/en/1.1.0/), and the crates follow
 crate is in that crate's changelog:
 
 - [`libtmux`](crates/libtmux/CHANGELOG.md)
+- [`libtmux-core`](crates/libtmux-core/CHANGELOG.md)
+- [`libtmux-blocking`](crates/libtmux-blocking/CHANGELOG.md)
+- [`libtmux-tokio`](crates/libtmux-tokio/CHANGELOG.md)
 - [`libtmux-macros`](crates/libtmux-macros/CHANGELOG.md)
 - [`tmux-workspace`](crates/tmux-workspace/CHANGELOG.md)
 - [`tmux-mcp`](crates/tmux-mcp/CHANGELOG.md)
