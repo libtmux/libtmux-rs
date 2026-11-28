@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -35,10 +35,10 @@ pub(super) fn run(
     rx: &mpsc::Receiver<Request>,
     options: &RequestOptions,
 ) {
-    let mut child = match command.spawn() {
-        Ok(child) => OwnedChild::new(child),
+    let mut child = match start_client(&mut command, &shared.stop, options) {
+        Ok(child) => child,
         Err(error) => {
-            publish(shared, Some(ControlError::native(error, false)), Ok(()));
+            publish(shared, Some(error), Ok(()));
             return;
         }
     };
@@ -77,6 +77,21 @@ pub(super) fn run(
     if child.child.is_some() {
         child.reap();
     }
+}
+
+fn start_client(
+    command: &mut Command,
+    stopped: &AtomicBool,
+    options: &RequestOptions,
+) -> Result<OwnedChild, ControlError> {
+    crate::supervisor::check_before_spawn(options)?;
+    if stopped.load(Ordering::Acquire) {
+        return Err(ControlError::protocol(ControlFault::Closed, false));
+    }
+    command
+        .spawn()
+        .map(OwnedChild::new)
+        .map_err(|error| ControlError::native(error, false))
 }
 
 fn pipes(child: &mut OwnedChild) -> Result<Pipes, ControlError> {
@@ -411,6 +426,30 @@ fn read_error(
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt as _;
+
+    #[test]
+    fn a_delayed_control_owner_checks_the_opening_state_before_spawn() {
+        let mut expired = RequestOptions::default();
+        expired.budget.deadline = Instant::now();
+        let cancelled = RequestOptions::default();
+        cancelled.cancellation.cancel();
+        for (cause, options, stopped) in [
+            ("deadline", expired, false),
+            ("cancellation", cancelled, false),
+            ("shutdown", RequestOptions::default(), true),
+        ] {
+            let mut command = Command::new("/bin/true");
+            command.process_group(0);
+            match start_client(&mut command, &AtomicBool::new(stopped), &options) {
+                Ok(mut child) => {
+                    let pid = child.child.as_ref().unwrap().id();
+                    child.finish().unwrap();
+                    panic!("{cause} permitted control client {pid} to start");
+                }
+                Err(error) => assert_eq!(error.effect(), libtmux_core::Effect::NotSubmitted),
+            }
+        }
+    }
 
     #[test]
     fn a_pipe_setup_failure_reclaims_the_already_spawned_child() {
