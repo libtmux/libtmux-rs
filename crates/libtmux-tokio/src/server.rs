@@ -975,7 +975,9 @@ impl Server {
     ///
     /// Returns [`Error::ShutdownPending`] if cleanup exceeds the one-second
     /// allowance. Admission stays closed. Keep the runtime alive and call
-    /// this method again to await the same supervisors.
+    /// this method again to await the same supervisors. Once they finish,
+    /// each shutdown call reports the first ordinary subprocess cleanup
+    /// failure, including when its caller dropped the request future.
     ///
     /// # Examples
     ///

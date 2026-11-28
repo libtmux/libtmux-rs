@@ -1286,7 +1286,10 @@ async fn check_probe_timeout(cases: &str, expected_probe: u64) {
     )
     .await
     .expect_err("the version probe parks before the action");
-    executor.shutdown().await.unwrap();
+    assert!(matches!(
+        executor.shutdown().await,
+        Err(Error::WaitChild { request_id, .. }) if request_id == expected_probe
+    ));
     assert_process_reaped(
         fs::read_to_string(probe_pid)
             .unwrap()
@@ -1354,7 +1357,10 @@ async fn a_qualified_ordinary_timeout_reports_its_child_cleanup_outcome() {
     )
     .await
     .expect_err("tmux holds this channel until the deadline");
-    executor.shutdown().await.unwrap();
+    assert!(matches!(
+        executor.shutdown().await,
+        Err(Error::WaitChild { request_id: 1, .. })
+    ));
     fixture.shutdown().await.unwrap();
 
     let Error::OperationAndCleanup { primary, cleanup } = error else {
