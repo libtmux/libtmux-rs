@@ -18,6 +18,12 @@ which a published crate cannot link by a relative path.
 
 ### Changed
 
+- **Breaking.** The Tokio client no longer exposes `Error::ServerReplaced`.
+  An ordinary queue-guard failure returns the native result without claiming
+  that nothing ran. `Error::is_transient` no longer treats diagnostics about
+  an absent server as proof that a mutation can be repeated safely.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - **Breaking.** `libtmux::blocking::Server` is the default client. Enable
   `tokio` for `libtmux::tokio::Server`. The former root `Server` and
   `blocking::Runtime` imports have been removed. A session creation returns a
