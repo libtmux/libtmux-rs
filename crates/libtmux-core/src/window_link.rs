@@ -61,15 +61,16 @@ impl WindowLinkSnapshot {
 
     /// Check this generation, session, index and window in the command queue.
     ///
-    /// Resolve by window ID so reindexing fails the index comparison before
-    /// a following mutation can reach a replacement in the observed slot.
+    /// Resolve the observed index. A window can occupy two indexes in one
+    /// session, and a missing target can resolve to the active window. The
+    /// predicate checks the resolved placement before the next command runs.
     /// Run the chain with a non-starting client at this key's endpoint.
     pub fn guard_command(&self) -> Command {
         let generation = self.window.generation();
         Command::new("if-shell")
             .arg("-F")
             .arg("-t")
-            .arg(format!("{}:{}", self.session, self.window.id()))
+            .arg(self.target())
             .arg(format!(
                 "#{{&&:#{{&&:#{{==:#{{pid}},{}}},#{{==:#{{start_time}},{}}}}},#{{&&:#{{==:#{{session_id}},{}}},#{{&&:#{{==:#{{window_index}},{}}},#{{==:#{{window_id}},{}}}}}}}}}",
                 generation.pid(), generation.unix_start_time(), self.session, self.index, self.window.id()

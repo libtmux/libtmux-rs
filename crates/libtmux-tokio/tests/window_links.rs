@@ -117,6 +117,31 @@ async fn a_reindexed_swap_target_does_not_exchange_a_reused_slot() {
 }
 
 #[tokio::test]
+async fn two_links_to_one_window_in_one_session_keep_their_indexes() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("repeated-link").await.unwrap();
+    let original = active(&session).await;
+    original.link_to(&session, Some(7)).await.unwrap();
+    checked(
+        &guard,
+        Command::new("select-window").arg("-t").arg(format!(
+            "{}:{}",
+            session.id(),
+            original.index()
+        )),
+    )
+    .await;
+    assert_eq!(active(&session).await.index(), original.index());
+    let mut second = at(&session, 7).await;
+    second.select().await.unwrap();
+    assert_eq!(active(&session).await.index(), 7);
+    second.unlink().await.unwrap();
+    assert_eq!(active(&session).await.id(), original.id());
+    assert_eq!(active(&session).await.index(), original.index());
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn selecting_a_tied_window_changes_only_the_named_session() {
     let guard = TestServer::new().await.unwrap();
     let left = guard.session("tied-left").await.unwrap();
