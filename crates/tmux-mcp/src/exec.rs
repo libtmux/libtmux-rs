@@ -404,12 +404,20 @@ pub(crate) async fn wait_for_text_with_limits(
 
 /// Whether `pane` still exists and is running, as the daemon reports now.
 ///
-/// A daemon that cannot answer -- it exited, or the pane is gone -- is not
-/// live.
-async fn pane_is_live(pane: &Pane) -> bool {
-    pane.format("#{pane_dead}")
-        .await
-        .is_ok_and(|dead| dead.to_string_lossy().trim() == "0")
+/// Check the original pane on its bound server after the stream ends.
+async fn pane_is_live(pane: &Pane) -> Result<bool, Error> {
+    match pane.refreshed().await {
+        Ok(current) => Ok(!current.is_dead()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                libtmux_tokio::ErrorKind::ObjectGone | libtmux_tokio::ErrorKind::ServerGone
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// One pane's screen, split at the row still being typed into.
@@ -668,7 +676,7 @@ async fn wait_on_output(
                 // not that the pane stopped: a detached control client ends
                 // it too. Only a pane that cannot be read, or one tmux holds
                 // dead, has closed.
-                outcome = if pane_is_live(pane).await {
+                outcome = if pane_is_live(pane).await? {
                     WaitOutcome::StreamLost
                 } else {
                     WaitOutcome::PaneClosed
