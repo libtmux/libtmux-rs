@@ -16,6 +16,12 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Fixed
+
+- A suspended workspace now resumes when the shell brings it back to the
+  foreground. A second stop signal could previously strand the resumed job.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 ### Changed
 
 - **Breaking.** `BuildError::CreationUnconfirmed { name, source }` replaces
