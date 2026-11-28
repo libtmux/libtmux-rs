@@ -16,6 +16,14 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Added
+
+- The mixed-client example borrows an explicit socket and passes a blocking
+  creation receipt to Tokio. It cleans only the verified session and retains
+  operation and cleanup failures together. Its external fixture recipe
+  checks the borrowed session before retiring its own daemon.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 ### Changed
 
 - **Behaviour change.** Tokio channel waits and queued locks have a separate
