@@ -462,6 +462,36 @@ impl Core {
         self.generation
     }
 
+    pub(crate) fn observed_key<I>(&self, id: I) -> Result<libtmux_core::ObjectKey<I>, Error> {
+        let generation = self
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        Ok(libtmux_core::ObjectKey::new(
+            self.configuration().identity().clone(),
+            generation,
+            id,
+        ))
+    }
+
+    pub(crate) fn require_same_instance(
+        &self,
+        peer: &Self,
+        operation: &'static str,
+    ) -> Result<(), Error> {
+        self.require_same_server(peer.configuration().identity(), operation)?;
+        let expected = self
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        let found = peer
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        if expected == found {
+            Ok(())
+        } else {
+            Err(Error::ServerGenerationChanged { expected, found })
+        }
+    }
+
     /// Bind derived handles to the daemon that supplied their IDs.
     pub(crate) fn bound_to(&self, expected: crate::ServerGeneration) -> Result<Self, Error> {
         if let Some(found) = self.generation {
@@ -576,13 +606,7 @@ impl Core {
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
         if request.is_client_diagnostic() {
-            #[cfg(feature = "control-mode")]
-            if self.driver.executor.renders_control_line() {
-                return crate::internal::executor::DispatchSpan::new(&request, "control")
-                    .run(async { Err(Error::control_mode_unrepresentable()) })
-                    .await;
-            }
-            return self.driver.executor.execute(request).await;
+            return self.driver.ordinary_executor.execute(request).await;
         }
         self.dispatch_checked(request, false).await
     }
@@ -702,11 +726,18 @@ impl Core {
         absent_cleanup: bool,
     ) -> crate::internal::executor::DispatchFuture {
         let request = request.for_generation(self.generation);
+        let executor = &self.driver.executor;
+        #[cfg(feature = "control-mode")]
+        let executor = if executor.renders_control_line() && !request.can_share_control() {
+            &self.driver.ordinary_executor
+        } else {
+            executor
+        };
         if let Err(error) =
             crate::internal::process::validate_request(&self.driver.configuration.launch, &request)
         {
             #[cfg(feature = "control-mode")]
-            let transport = if self.driver.executor.renders_control_line() {
+            let transport = if executor.renders_control_line() {
                 "control"
             } else {
                 "subprocess"
@@ -718,10 +749,10 @@ impl Core {
         }
         #[cfg(test)]
         if !self.check_versions {
-            return self.driver.executor.execute(request);
+            return executor.execute(request);
         }
         crate::internal::support::versions::dispatch(
-            Arc::clone(&self.driver.executor),
+            Arc::clone(executor),
             self.driver.configuration.clone(),
             request,
             self.next_request_id(),

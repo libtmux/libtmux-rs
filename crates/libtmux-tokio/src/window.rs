@@ -17,7 +17,7 @@ use crate::session::Session;
 #[cfg(feature = "query")]
 use crate::snapshot::{Availability, FieldRef, WindowFields, WindowInfo};
 use crate::snapshot::{WindowProjection, stored_time};
-use crate::target::{ServerIdentity, SessionId, WindowId};
+use crate::target::{SessionId, WindowId};
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
 mod navigation;
@@ -300,14 +300,7 @@ impl Window {
 
     /// Build a handle from a hydrated projection.
     pub(crate) fn new(core: Arc<Core>, projection: WindowProjection) -> Result<Self, Error> {
-        let generation = core
-            .expected_generation()
-            .ok_or(libtmux_core::Error::InvalidKey)?;
-        let key = crate::WindowKey::new(
-            core.configuration().identity().clone(),
-            generation,
-            projection.window().window_id().clone(),
-        );
+        let key = core.observed_key(projection.window().window_id().clone())?;
         Ok(Self {
             core,
             projection,
@@ -521,11 +514,6 @@ impl Window {
         *self.projection.window().window_zoomed_flag()
     }
 
-    /// Return the identity of the server this window belongs to.
-    pub(crate) fn server_identity(&self) -> &ServerIdentity {
-        self.core.configuration().identity()
-    }
-
     fn link_target(&self) -> String {
         format!("{}:{}", self.session_id(), self.id())
     }
@@ -584,7 +572,7 @@ impl Window {
             listing::create_pane(&self.core, |format| options.into_command(&window, format))
                 .await?;
 
-        Ok(Pane::new(Arc::clone(&self.core), projection))
+        Pane::new(Arc::clone(&self.core), projection)
     }
 
     /// Rename the window and update this handle.
@@ -1079,7 +1067,7 @@ impl Window {
     /// server, or an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
         self.core
-            .require_same_server(other.server_identity(), "swap-window")?;
+            .require_same_instance(&other.core, "swap-window")?;
         if let Err(error) = listing::mutate(
             &self.core,
             "swap-window",
@@ -1125,7 +1113,7 @@ impl Window {
     /// server, or an error when the destination is occupied or absent.
     pub async fn move_to(&mut self, session: &Session, index: i32) -> Result<&mut Self, Error> {
         self.core
-            .require_same_server(session.server_identity(), "move-window")?;
+            .require_same_instance(&session.core, "move-window")?;
         listing::mutate(
             &self.core,
             "move-window",
@@ -1242,7 +1230,7 @@ impl Window {
     /// ```
     pub async fn link_to(&self, session: &Session, index: Option<i32>) -> Result<(), Error> {
         self.core
-            .require_same_server(session.server_identity(), "link-window")?;
+            .require_same_instance(&session.core, "link-window")?;
         let target = index.map_or_else(
             || session.id().to_string(),
             |index| format!("{}:{index}", session.id()),
@@ -1431,6 +1419,13 @@ impl fmt::Debug for Window {
             .field("session_id", &self.session_id())
             .field("index", &self.index())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Window {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
     }
 }
 
@@ -2361,12 +2356,5 @@ mod layout_version_tests {
             classify("main-vertical-mirrored", b"tmux 3.3a\n"),
             SavedLayout::Unrecognized,
         );
-    }
-}
-
-#[cfg(feature = "query")]
-impl libtmux_core::snapshot::SnapshotFields for Window {
-    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
-        self.stored(name)
     }
 }

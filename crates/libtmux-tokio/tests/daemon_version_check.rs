@@ -1598,3 +1598,106 @@ async fn the_probe_and_the_fence_have_no_after_hook_to_fire() {
     }
     guard.shutdown().await.expect("fixture shuts down");
 }
+
+#[tokio::test]
+async fn reused_ids_on_a_restarted_daemon_make_distinct_handles() {
+    let binary = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&binary)
+        .start()
+        .await
+        .unwrap();
+    let first = guard.server().new_session("original").await.unwrap();
+    let mut old_session = guard.server().inspect_session(&first).await.unwrap();
+    let old_pane = guard
+        .server()
+        .pane_by_id(&first.pane().id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(old_session.key(), &first.session_key());
+    assert_eq!(old_pane.key(), first.pane());
+
+    assert!(
+        native(&binary, guard.socket_path(), &[OsStr::new("kill-server")])
+            .status
+            .success()
+    );
+    wait_until_gone(&binary, guard.socket_path());
+    let start = ["new-session", "-d", "-s", "replacement", "sleep 30"].map(OsStr::new);
+    assert!(
+        native(&binary, guard.socket_path(), &start)
+            .status
+            .success()
+    );
+    let server = Server::builder()
+        .tmux_executable(&binary)
+        .socket_path(guard.socket_path())
+        .build()
+        .unwrap();
+    let current = server
+        .session_by_id(old_session.id())
+        .await
+        .unwrap()
+        .unwrap();
+    let pane = server.pane_by_id(old_pane.id()).await.unwrap().unwrap();
+    assert_eq!(old_session.id(), current.id());
+    assert_eq!(old_pane.id(), pane.id());
+    assert_ne!(old_session, current);
+    assert_ne!(old_pane, pane);
+
+    let window = current.active_window().await.unwrap().unwrap();
+    assert!(matches!(
+        window.link_to(&old_session, Some(7)).await,
+        Err(Error::ServerGenerationChanged { .. })
+    ));
+    assert!(old_session.rename("overwritten").await.is_err());
+    assert_eq!(
+        current.refreshed().await.unwrap().name().as_bytes(),
+        b"replacement"
+    );
+    current.kill().await.unwrap();
+    server.shutdown().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn releasing_a_channel_scope_leaves_the_replacement_daemons_lock_held() {
+    let binary = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&binary)
+        .start()
+        .await
+        .unwrap();
+    guard.session("original").await.unwrap();
+    let socket = guard.socket_path();
+    let result = guard
+        .server()
+        .with_channel_lock("deploy", async |_| {
+            assert!(
+                native(&binary, socket, &[OsStr::new("kill-server")])
+                    .status
+                    .success()
+            );
+            wait_until_gone(&binary, socket);
+            let start = ["new-session", "-d", "-s", "replacement", "sleep 30"].map(OsStr::new);
+            assert!(native(&binary, socket, &start).status.success());
+            let lock = ["-N", "wait-for", "-L", "deploy"].map(OsStr::new);
+            assert!(native(&binary, socket, &lock).status.success());
+            Ok::<(), Error>(())
+        })
+        .await;
+    let unlock = ["-N", "wait-for", "-U", "deploy"].map(OsStr::new);
+    let still_locked = native(&binary, socket, &unlock).status.success();
+    let stop = ["-N", "kill-server"].map(OsStr::new);
+    assert!(native(&binary, socket, &stop).status.success());
+    guard.shutdown().await.unwrap();
+    assert!(matches!(
+        result,
+        Err(libtmux_tokio::ScopeError::Cleanup { .. })
+    ));
+    assert!(
+        still_locked,
+        "cleanup must leave the new daemon's lock for its owner"
+    );
+}

@@ -241,16 +241,17 @@ And `Server::shutdown` kills parked clients instead of waiting on tmux; on
 affected older releases, the tmux registration remains on any channel that
 still had one parked.
 
-A blocking `wait-for` over control mode is refused for a different reason.
+A blocking `wait-for` needs a separate client when a control connection is open.
 `cmdq_fire_command` writes the block's `end` guard as soon as `entry->exec`
 returns, and `cmd_wait_for_wait` returns `CMD_RETURN_WAIT` with its item still
 on the queue, so a control client is told the command finished and then runs
 nothing else until the channel releases it. Measured through the crate on
 3.7d, a routed `wait_for_channel` on a channel nobody signalled returned
 `Signalled` in 190us, and the next routed call answered nothing within two
-seconds. `wait_for_channel` and `lock_channel` therefore refuse a routed handle
-with `ControlModeErrorKind::BlockingCommand`; `signal_channel` and
-`unlock_channel` do not block and still route.
+seconds. The Tokio server sends waits and locks through an ordinary client
+bound to the connection's daemon. Signals and unlocks can use the control
+connection. The low-level control sender refuses a blocking request before
+putting it on the wire.
 
 ## Poll loops and deadlines that made tests flaky under load
 
@@ -485,22 +486,14 @@ Three tmux behaviours make that hazardous:
 - a replacement reissues ids from the start, so its first pane is `%0` too;
 - neither the path nor the id carries any mark of which daemon it belongs to.
 
-A handle held across a restart still resolves, to a different object
-that now has the same id. A stale read is harmless; a stale `kill-pane` or
-`send-keys` lands on the new object.
+An unqualified ID can address the replacement daemon. A discovered handle
+carries the issuing daemon's PID and whole-second start time. Both fields
+are server-scoped. A PID reused within the same second is indistinguishable.
 
-`ServerGeneration` is `(pid, start_time)`, read with one `display-message`. The
-pid alone is not enough, because a replacement daemon can be handed the pid of
-the one it replaced. Both fields are server-scoped (`start_time` is identical
-across every session of one daemon, unlike `session_created`), and both have
-been in the format catalog since 3.2a with `ListScope::All`, so a later change
-can project them into every listing row and give each snapshot its generation
-at no extra round trip.
-
-The caller checks the generation explicitly. Verifying on every dispatch would
-double the command count for a hazard that exists only when a caller holds a
-handle across a restart, so a caller wraps `require_generation` around work
-that must not be misapplied.
+The native drivers read the pair with a nonce-bound `run-shell -C` diagnostic.
+Using `display-message` here would run the user's `after-display-message` hook
+on each discovery. A dependent command checks the expected pair in the same
+tmux queue as its action. This also protects deferred cleanup after a restart.
 
 The socket's inode would be a cheaper token, and measurement ruled it out: the
 inode is unchanged across a restart, because tmux reuses the file instead of
@@ -869,8 +862,8 @@ for what a literal needle cannot express. It also polls on a handle from
 does not apply. There the reason is ownership. A connection's `%output` goes to
 whoever holds its events, and the handle holds only the sender, so waking on
 output would attach a second client for every wait, a cost the `streamed` bench
-lane leaves out of its number. Over a connection a look is a line instead of a
-process, so the round trip a doorbell would save is smaller too.
+lane leaves out of its number. The capture itself uses an ordinary client so
+arbitrary pane bytes cannot be confused with a control reply delimiter.
 
 ## Why pane waits poll the scrollback
 

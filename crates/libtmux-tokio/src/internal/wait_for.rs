@@ -29,7 +29,13 @@ use crate::{ChannelWait, Command, CommandResult, Error};
 /// The `wait-for` channels this process has a client on, or a signal for.
 #[derive(Default)]
 pub(crate) struct ChannelWaits {
-    channels: Mutex<HashMap<String, Channel>>,
+    channels: Mutex<HashMap<ChannelKey, Channel>>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct ChannelKey {
+    generation: crate::ServerGeneration,
+    name: String,
 }
 
 struct Channel {
@@ -69,12 +75,12 @@ impl Channel {
 }
 
 impl ChannelWaits {
-    fn channels(&self) -> MutexGuard<'_, HashMap<String, Channel>> {
+    fn channels(&self) -> MutexGuard<'_, HashMap<ChannelKey, Channel>> {
         self.channels.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Take a kept signal, or join the queue behind the channel's client.
-    fn join(&self, channel: &str) -> Join<'_> {
+    fn join(&self, channel: &ChannelKey) -> Join<'_> {
         let mut channels = self.channels();
         let state = channels.entry(channel.to_owned()).or_default();
         if state.kept {
@@ -103,7 +109,7 @@ impl ChannelWaits {
     }
 
     /// Record how the channel's client ended.
-    fn finish(&self, channel: &str, outcome: Result<(), Error>) {
+    fn finish(&self, channel: &ChannelKey, outcome: Result<(), Error>) {
         let mut channels = self.channels();
         let Some(state) = channels.get_mut(channel) else {
             return;
@@ -135,7 +141,7 @@ enum Join<'a> {
 /// One caller's place on a channel, given up however the caller leaves.
 struct Waiter<'a> {
     waits: &'a ChannelWaits,
-    channel: String,
+    channel: ChannelKey,
     seen: u64,
     released: watch::Receiver<u64>,
     /// Whether this caller is the one that opens the channel's client.
@@ -206,16 +212,20 @@ pub(crate) async fn wait(
     channel: &str,
     budget: Duration,
 ) -> Result<ChannelWait, Error> {
-    #[cfg(feature = "control-mode")]
-    refuse_if_routed(core)?;
     let deadline = Instant::now().checked_add(budget);
+    let key = ChannelKey {
+        generation: core
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?,
+        name: channel.to_owned(),
+    };
     loop {
-        let mut waiter = match core.channel_waits().join(channel) {
+        let mut waiter = match core.channel_waits().join(&key) {
             Join::Kept => return Ok(ChannelWait::Signalled),
             Join::Waiting(waiter) => waiter,
         };
         if waiter.opening {
-            park(core, channel);
+            park(core, key.clone());
         }
 
         tokio::select! {
@@ -238,11 +248,10 @@ pub(crate) async fn wait(
 }
 
 /// Open the channel's client, which stays until tmux releases it.
-fn park(core: &Arc<Core>, channel: &str) {
+fn park(core: &Arc<Core>, channel: ChannelKey) {
     let core = Arc::clone(core);
-    let channel = channel.to_owned();
     spawn(async move {
-        let (_, dispatch) = core.dispatch_without_deadline(channel_command(None, &channel));
+        let (_, dispatch) = core.dispatch_without_deadline(channel_command(None, &channel.name));
         let outcome = mutated(dispatch.await);
         core.channel_waits().finish(&channel, outcome);
     });
@@ -254,8 +263,6 @@ fn park(core: &Arc<Core>, channel: &str) {
 /// place. This call keeps the client queued when the caller gives up and
 /// unlocks as soon as the lock is granted.
 pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> Result<(), Error> {
-    #[cfg(feature = "control-mode")]
-    refuse_if_routed(core)?;
     let command = channel_command(Some("-L"), channel);
     let summary = command.summary();
     let (request_id, dispatch) = core.dispatch_without_deadline(command);
@@ -343,19 +350,6 @@ pub(crate) async fn signal(core: &Arc<Core>, channel: &str) -> Result<(), Error>
     listing::mutate(core, "wait-for", channel_command(Some("-S"), channel)).await
 }
 
-/// Refuse a command that would sit on a connection's one command queue.
-///
-/// tmux closes a blocking `wait-for` as soon as it queues it, so over a
-/// connection the call would report success without waiting and the
-/// connection would answer nothing else until the channel released it.
-#[cfg(feature = "control-mode")]
-fn refuse_if_routed(core: &Arc<Core>) -> Result<(), Error> {
-    if core.routes_over_control_mode() {
-        return Err(Error::control_mode_blocking());
-    }
-    Ok(())
-}
-
 fn channel_command(flag: Option<&'static str>, channel: &str) -> Command {
     let command = Command::new("wait-for");
     let command = match flag {
@@ -394,38 +388,47 @@ fn spawn(task: impl Future<Output = ()> + Send + 'static) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelWaits, Join, Settled};
+    use super::{ChannelKey, ChannelWaits, Join, Settled};
 
     /// What a release does depends on who is left to hear it, and the three
     /// answers are what keeps a signal from being lost or heard twice.
     #[test]
     fn a_release_is_kept_only_when_no_caller_is_left_to_hear_it() {
         let waits = ChannelWaits::default();
+        let key = ChannelKey {
+            generation: crate::ServerGeneration::from_raw(12, 1),
+            name: "build".into(),
+        };
 
         // The caller gave up and left the client parked: the release is kept,
         // and the next caller takes it once.
-        let Join::Waiting(gave_up) = waits.join("build") else {
+        let Join::Waiting(gave_up) = waits.join(&key) else {
             panic!("the channel starts with nothing kept");
         };
         drop(gave_up);
-        waits.finish("build", Ok(()));
-        assert!(matches!(waits.join("build"), Join::Kept));
+        waits.finish(&key, Ok(()));
+        let replacement = ChannelKey {
+            generation: crate::ServerGeneration::from_raw(13, 1),
+            ..key.clone()
+        };
+        assert!(matches!(waits.join(&replacement), Join::Waiting(_)));
+        assert!(matches!(waits.join(&key), Join::Kept));
 
         // A caller is waiting: the release is theirs, and nothing is kept.
-        let Join::Waiting(mut waiting) = waits.join("build") else {
+        let Join::Waiting(mut waiting) = waits.join(&key) else {
             panic!("a kept release is one-shot");
         };
-        waits.finish("build", Ok(()));
+        waits.finish(&key, Ok(()));
         assert!(matches!(waiting.settle(), Settled::Signalled));
-        assert!(matches!(waits.join("build"), Join::Waiting(_)));
+        assert!(matches!(waits.join(&key), Join::Waiting(_)));
 
         // Released, then dropped before settling: the release is nobody's
         // again rather than lost.
-        let Join::Waiting(raced) = waits.join("build") else {
+        let Join::Waiting(raced) = waits.join(&key) else {
             panic!("the release went to the caller that was waiting");
         };
-        waits.finish("build", Ok(()));
+        waits.finish(&key, Ok(()));
         drop(raced);
-        assert!(matches!(waits.join("build"), Join::Kept));
+        assert!(matches!(waits.join(&key), Join::Kept));
     }
 }

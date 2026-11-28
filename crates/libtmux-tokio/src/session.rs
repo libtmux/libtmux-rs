@@ -18,7 +18,7 @@ use crate::query::{FilterSchema, Filterable, ReadField};
 #[cfg(feature = "query")]
 use crate::snapshot::{Availability, FieldRef, SessionFields};
 use crate::snapshot::{SessionInfo, stored_time};
-use crate::target::{ServerIdentity, SessionId};
+use crate::target::SessionId;
 use crate::window::Window;
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
@@ -250,7 +250,8 @@ pub enum EnvironmentEntry {
 /// ```
 #[derive(Clone)]
 pub struct Session {
-    core: Arc<Core>,
+    pub(crate) core: Arc<Core>,
+    key: crate::SessionKey,
     info: SessionInfo,
 }
 
@@ -262,8 +263,15 @@ impl Session {
     }
 
     /// Build a handle from a hydrated snapshot.
-    pub(crate) const fn new(core: Arc<Core>, info: SessionInfo) -> Self {
-        Self { core, info }
+    pub(crate) fn new(core: Arc<Core>, info: SessionInfo) -> Result<Self, Error> {
+        let key = core.observed_key(info.session_id().clone())?;
+        Ok(Self { core, key, info })
+    }
+
+    /// The endpoint, daemon generation and ID that identify this session.
+    #[must_use]
+    pub const fn key(&self) -> &crate::SessionKey {
+        &self.key
     }
 
     /// Find the session this process is running in.
@@ -410,12 +418,6 @@ impl Session {
             .copied()
             .available()
             .map(stored_time)
-    }
-
-    /// Return the identity of the server this session belongs to.
-    #[must_use]
-    pub(crate) fn server_identity(&self) -> &ServerIdentity {
-        self.core.configuration().identity()
     }
 
     /// List the windows linked into this session, preserving any failure.
@@ -592,10 +594,10 @@ impl Session {
         let projections =
             listing::panes(&self.core, listing::Scope::SessionTarget(&target), None).await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .map(|projection| Pane::new(Arc::clone(&self.core), projection))
-            .collect())
+            .collect()
     }
     /// Replace this handle's snapshot with the session's current state.
     ///
@@ -993,14 +995,14 @@ impl Session {
     }
 }
 
-/// Sessions compare by server endpoint and session id.
+/// Sessions compare by endpoint, daemon generation and session ID.
 ///
 /// Equal-looking ids on different servers are different sessions, and two
 /// handles for the same session remain equal even when their snapshots were
 /// taken at different times.
 impl PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
-        self.server_identity() == other.server_identity() && self.id() == other.id()
+        self.key == other.key
     }
 }
 
@@ -1008,8 +1010,7 @@ impl Eq for Session {}
 
 impl Hash for Session {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.server_identity().hash(state);
-        self.id().hash(state);
+        self.key.hash(state);
     }
 }
 
@@ -1023,6 +1024,13 @@ impl fmt::Debug for Session {
             .debug_struct("Session")
             .field("id", &self.id())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Session {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
     }
 }
 
@@ -1358,12 +1366,5 @@ mod option_tests {
         let summary = options.into_command("$1", "#{window_id}").summary();
         assert_eq!(summary.sensitive_argument_count(), 2);
         assert!(!summary.to_string().contains(secret));
-    }
-}
-
-#[cfg(feature = "query")]
-impl libtmux_core::snapshot::SnapshotFields for Session {
-    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
-        self.stored(name)
     }
 }

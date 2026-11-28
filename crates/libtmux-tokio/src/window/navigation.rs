@@ -22,10 +22,10 @@ impl Window {
         let target = self.id().to_string();
         let projections = listing::panes(&self.core, listing::Scope::Target(&target), None).await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .map(|projection| Pane::new(Arc::clone(&self.core), projection))
-            .collect())
+            .collect()
     }
 
     /// The panes under this window that a matcher accepts, reporting why
@@ -245,7 +245,8 @@ impl Window {
                 infos
                     .into_iter()
                     .next()
-                    .map(|info| Session::new(Arc::clone(&self.core), info)),
+                    .map(|info| Session::new(Arc::clone(&self.core), info))
+                    .transpose()?,
             );
         }
 
@@ -263,10 +264,11 @@ impl Window {
     pub async fn session(&self) -> Result<Option<Session>, Error> {
         let infos = listing::sessions(&self.core, None).await?;
 
-        Ok(infos
+        infos
             .into_iter()
             .find(|info| info.session_id() == self.session_id())
-            .map(|info| Session::new(Arc::clone(&self.core), info)))
+            .map(|info| Session::new(Arc::clone(&self.core), info))
+            .transpose()
     }
 
     /// Find this window's pane at the given index.
@@ -283,9 +285,10 @@ impl Window {
         )
         .await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .next()
-            .map(|projection| Pane::new(Arc::clone(&self.core), projection)))
+            .map(|projection| Pane::new(Arc::clone(&self.core), projection))
+            .transpose()
     }
 }

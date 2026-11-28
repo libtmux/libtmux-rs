@@ -45,7 +45,7 @@ pub use formats::FormatCodecError;
 pub use new_session::NewSession;
 pub use operand::{Operand, OperandKind, argv_operand};
 pub use ordinary_creation::CreationNonce;
-pub use ordinary_read::{OrdinaryPaneObservation, OrdinaryPaneProbe};
+pub use ordinary_read::{OrdinaryGenerationProbe, OrdinaryPaneObservation, OrdinaryPaneProbe};
 #[doc(hidden)]
 pub use placement::assignment;
 pub use placement::{OptionScope, SplitDirection};

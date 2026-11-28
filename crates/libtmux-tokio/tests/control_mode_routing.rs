@@ -1,19 +1,6 @@
-//! Typed calls routed over an open control-mode connection.
-//!
-//! The claim under test is that `Server::over_control_mode` moves the whole
-//! typed API onto a connection someone else attached, and that it costs no
-//! process to do it.
-//!
-//! Proving the second half needs a witness. The routed handle is built from a
-//! server whose `tmux` executable is a shell stub that records every argv it
-//! is given, so a dispatch that fell back to a process cannot go unnoticed:
-//! it would appear in the stub's log, and the stub answers nothing but `-V`,
-//! so the call would fail as well.
+//! A recording tmux executable distinguishes control requests from ordinary clients.
 
 #![cfg(all(feature = "control-mode", feature = "test-support"))]
-// The routing proof is one long function on purpose: the stub's log has to
-// stay at one line across every dispatch, and splitting it would mean a second
-// control client whose count says nothing about the first.
 #![allow(
     clippy::expect_used,
     clippy::panic,
@@ -31,26 +18,18 @@ use libtmux_tokio::control::ControlMode;
 use libtmux_tokio::test::TestServer;
 use libtmux_tokio::{Command, CommandChain, Server};
 
-/// Write a `tmux` that logs its argv, answers `-V`, and refuses the rest.
-fn stub_tmux(directory: &Path, version: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    let log = directory.join("spawned.log");
-    let stub = directory.join("tmux");
-    let script = format!(
-        "#!/bin/sh\n\
-         printf '%s\\n' \"$*\" >> '{log}'\n\
-         if [ \"$1\" = '-V' ]; then printf 'tmux {version}\\n'; exit 0; fi\n\
-         printf 'stub tmux was asked to run a command: %s\\n' \"$*\" >&2\n\
-         exit 97\n",
-        log = log.display(),
-    );
-
-    libtmux_tokio::test::install_executable(&stub, &script).expect("the stub is installed");
-    fs::write(&log, "").expect("the log starts empty");
-
-    (stub, log)
+fn recording_tmux(directory: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let executable = directory.join("recording-client");
+    let log = directory.join("recording-client.log");
+    libtmux_tokio::test::install_executable(
+        &executable,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$0.log\"\nexec \"${LIBTMUX_TEST_TMUX:-tmux}\" \"$@\"\n",
+    )
+    .expect("install the recording client");
+    fs::write(&log, "").expect("initialize the process log");
+    (executable, log)
 }
 
-/// Return one line per process the stub was asked to run.
 fn spawned(log: &Path) -> Vec<String> {
     fs::read_to_string(log)
         .expect("the log is readable")
@@ -60,7 +39,7 @@ fn spawned(log: &Path) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
+async fn the_handle_selects_one_route_for_each_command_or_chain() {
     let guard = TestServer::new().await.expect("a private tmux starts");
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
@@ -70,14 +49,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         .session("routed")
         .await
         .expect("the fixture holds a session");
-    let version = real
-        .capabilities()
-        .await
-        .expect("the fixture reports its release")
-        .tmux_version()
-        .raw()
-        .to_owned();
-
     // The connection belongs to the caller. Everything below borrows it.
     let control = ControlMode::attach(&real, session.id())
         .await
@@ -85,10 +56,10 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     let (sender, events) = control.split();
 
     let directory = tempfile::tempdir().expect("a scratch directory");
-    let (stub, log) = stub_tmux(directory.path(), &version);
+    let (executable, log) = recording_tmux(directory.path());
     let probe = Server::builder()
         .socket_path(guard.socket_path())
-        .tmux_executable(&stub)
+        .tmux_executable(&executable)
         .build()
         .expect("a server pointed at the fixture's socket");
 
@@ -97,26 +68,33 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         .await
         .expect("the connection reaches the same server");
 
-    // The version probe is the one process this whole test lets the routed
-    // handle's transport start, and it happens before the switch.
-    assert_eq!(
-        spawned(&log),
-        vec!["-V".to_owned()],
-        "only the release probe ran as a process",
-    );
+    let connected = spawned(&log);
+    let projection = Command::new("display-message")
+        .arg("-p")
+        .arg("-t")
+        .arg(session.id().to_string())
+        .arg("#{session_id}");
+    let projected = routed
+        .cmd(projection)
+        .await
+        .expect("read the ID over control");
+    assert_eq!(projected.stdout(), format!("{}\n", session.id()).as_bytes());
+    assert_eq!(spawned(&log), connected);
+
     for flag in ["-V", "-h"] {
-        let error = routed
+        let expected = real
             .cmd(Command::new(flag))
             .await
-            .expect_err("client flags have no control protocol representation");
-        assert!(matches!(
-            error,
-            libtmux_tokio::Error::ControlMode {
-                kind: libtmux_tokio::ControlModeErrorKind::UnrepresentableCommand,
-                ..
-            }
-        ));
+            .expect("native diagnostic");
+        let actual = routed
+            .cmd(Command::new(flag))
+            .await
+            .expect("routed diagnostic");
+        assert_eq!(actual.exit_code(), expected.exit_code());
+        assert_eq!(actual.stdout(), expected.stdout());
+        assert_eq!(actual.stderr(), expected.stderr());
     }
+    assert_eq!(spawned(&log).len(), connected.len() + 2);
 
     // A listing: the typed call renders a format plan and decodes rows.
     let names: Vec<String> = routed
@@ -128,11 +106,12 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         .collect();
     assert_eq!(names, ["routed"], "the rows came from the real daemon");
 
-    // A mutation, and a chain, which takes the other dispatch path.
+    // The second member prints arbitrary names. The chain needs one ordinary client.
     let window = session
         .new_window("second")
         .await
         .expect("the fixture can be changed through the connection's server");
+    let before_chain = spawned(&log).len();
     let chained = routed
         .chain(
             CommandChain::new(
@@ -144,9 +123,11 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
             .then(Command::new("list-windows").arg("-F").arg("#{window_name}")),
         )
         .await
-        .expect("a chain routes as one line");
-    // tmux answers each command of a chain with its own block, so the last
-    // command's output is only here if every block was read.
+        .expect("the chain is submitted");
+    let invocations = spawned(&log);
+    assert_eq!(invocations.len(), before_chain + 1);
+    assert!(invocations[before_chain].contains("rename-window"));
+    assert!(invocations[before_chain].contains("list-windows"));
     assert!(
         String::from_utf8_lossy(chained.stdout())
             .lines()
@@ -159,8 +140,14 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     // commands it skipped, so the next caller's reply is still its own.
     let stopped = routed
         .chain(
-            CommandChain::new(Command::new("list-panes").arg("-t").arg("%4294967294"))
-                .then(Command::new("display-message").arg("-p").arg("skipped")),
+            CommandChain::new(
+                Command::new("list-panes")
+                    .arg("-t")
+                    .arg("%4294967294")
+                    .arg("-F")
+                    .arg("#{pane_id}"),
+            )
+            .then(Command::new("display-message").arg("-p").arg("skipped")),
         )
         .await
         .expect("a refused chain still answers");
@@ -173,7 +160,13 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     // A refusal is a result, not a transport error, exactly as it is for a
     // process: tmux answers the block with `%error`.
     let refused = routed
-        .cmd(Command::new("list-panes").arg("-t").arg("%4294967294"))
+        .cmd(
+            Command::new("list-panes")
+                .arg("-t")
+                .arg("%4294967294")
+                .arg("-F")
+                .arg("#{pane_id}"),
+        )
         .await
         .expect("a refused command still answers");
     assert!(!refused.success(), "tmux refused the target");
@@ -183,9 +176,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         "the refusal text lands where a process would have put it",
     );
 
-    // A `-f` predicate survives being rendered as a control-mode line. It is
-    // the token most likely not to: `#{==:#{pane_id},%1}` opens with `#` and
-    // carries braces and a comma, so tmux has to be given it quoted.
     assert!(
         routed
             .pane_by_id(&"%4294967294".parse().expect("a well-formed pane id"))
@@ -195,10 +185,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         "the predicate reached tmux intact and matched nothing",
     );
 
-    // And the typed layer reads an `%error` block the way it reads stderr.
-    // This is the assertion that discriminates: `Pane::capture` classifies a
-    // refusal from the text tmux gave, so putting that text on the wrong
-    // stream would make the error generic instead of "the pane is gone".
     let doomed = session
         .new_window("doomed")
         .await
@@ -228,11 +214,9 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         .expect_err("capturing a pane that is gone fails");
     assert!(
         gone.is_object_gone(),
-        "an `%error` block classifies from its text, not from a status: {gone:?}",
+        "the vanished pane is classified on its capture route: {gone:?}",
     );
 
-    // A handle the routed server found dispatches over the connection too,
-    // rather than falling back to the process transport it was built from.
     let pane = routed
         .panes()
         .await
@@ -241,15 +225,6 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     pane.send_line("true")
         .await
         .expect("an inherited handle sends over the connection");
-
-    // Nothing above added a line: every one of those calls was written to the
-    // connection instead of forked.
-    assert_eq!(
-        spawned(&log).len(),
-        1,
-        "routed dispatches spawned no process: {:?}",
-        spawned(&log),
-    );
 
     // And the real daemon agrees the work happened.
     let windows = real.windows().await.expect("the fixture lists its windows");
@@ -266,12 +241,8 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     guard.shutdown().await.expect("the fixture stops");
 }
 
-/// A connection runs one command at a time, and tmux closes a blocking
-/// `wait-for` as soon as it queues it: routed, the wait would report a signal
-/// nobody sent and the connection would answer nothing else until the channel
-/// was signalled.
 #[tokio::test]
-async fn a_blocking_channel_call_is_refused_rather_than_routed() {
+async fn an_attached_client_can_signal_while_its_ordinary_client_waits() {
     let guard = TestServer::new().await.expect("a private tmux starts");
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
@@ -291,31 +262,24 @@ async fn a_blocking_channel_call_is_refused_rather_than_routed() {
         .await
         .expect("the connection reaches the same server");
 
-    for refused in [
+    use std::time::Duration;
+    assert_eq!(
         routed
-            .wait_for_channel("never-signalled", std::time::Duration::from_secs(5))
+            .wait_for_channel("handoff", Duration::from_millis(100))
             .await
-            .err(),
-        routed.lock_channel("never-signalled").await.err(),
-    ] {
-        let refused = refused.expect("a blocking channel call is refused");
-        assert!(
-            matches!(
-                refused,
-                libtmux_tokio::Error::ControlMode {
-                    kind: libtmux_tokio::ControlModeErrorKind::BlockingCommand,
-                    ..
-                }
-            ),
-            "refused for blocking the connection: {refused:?}",
-        );
-    }
-
-    // The connection still answers, and the half that does not block routes.
-    routed
-        .signal_channel("never-signalled")
-        .await
-        .expect("signalling does not block, so it routes");
+            .unwrap(),
+        libtmux_tokio::ChannelWait::TimedOut
+    );
+    routed.signal_channel("handoff").await.unwrap();
+    assert_eq!(
+        routed
+            .wait_for_channel("handoff", Duration::from_secs(3))
+            .await
+            .unwrap(),
+        libtmux_tokio::ChannelWait::Signalled
+    );
+    routed.lock_channel("handoff-lock").await.unwrap();
+    routed.unlock_channel("handoff-lock").await.unwrap();
     assert_eq!(
         routed
             .sessions()
@@ -363,10 +327,7 @@ async fn a_sender_for_another_server_is_refused() {
     second.shutdown().await.expect("the second fixture stops");
 }
 
-/// A routed handle has no process to ask for the daemon's version, and asking
-/// over the connection would run a hook (or, for the hook-free probe, come
-/// back as an empty block). Version-sensitive work such as layout validation
-/// must read what the connection attached under.
+/// A layout plan uses the daemon version qualified during acquisition.
 #[cfg(feature = "plan")]
 #[tokio::test]
 async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
@@ -378,13 +339,6 @@ async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
     };
     let real = guard.server().clone();
     let session = guard.session("routed-plan").await.expect("session");
-    let version = real
-        .capabilities()
-        .await
-        .expect("release")
-        .tmux_version()
-        .raw()
-        .to_owned();
     let window = session.windows().await.expect("windows").remove(0);
 
     let control = ControlMode::attach(&real, session.id())
@@ -392,10 +346,10 @@ async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
         .expect("a control client attaches");
     let (sender, events) = control.split();
     let directory = tempfile::tempdir().expect("a scratch directory");
-    let (stub, log) = stub_tmux(directory.path(), &version);
+    let (executable, log) = recording_tmux(directory.path());
     let probe = Server::builder()
         .socket_path(guard.socket_path())
-        .tmux_executable(&stub)
+        .tmux_executable(&executable)
         .build()
         .expect("a server pointed at the fixture's socket");
     let routed = probe
@@ -411,7 +365,13 @@ async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
         .await
         .expect("the routed plan runs");
     assert!(result.is_complete(), "{result:?}");
-    assert_eq!(spawned(&log), before, "no process asked for the version");
+    for argv in &spawned(&log)[before.len()..] {
+        assert_ne!(argv, "-V", "the executable version was already known");
+        assert!(
+            !argv.contains("libtmux-version-"),
+            "unexpected version probe: {argv}"
+        );
+    }
 
     events.shutdown().await.expect("events shut down");
     guard.shutdown().await.expect("fixture shuts down");

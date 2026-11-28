@@ -1,4 +1,5 @@
 use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt as _;
 
 use super::{Chooser, Server};
 use crate::client::Client;
@@ -6,6 +7,22 @@ use crate::internal::listing;
 use crate::{Command, Error};
 
 impl Server {
+    fn target_client(
+        &self,
+        name: &'static str,
+        client: Option<&Client>,
+        command: Command,
+    ) -> Result<(Self, Command), Error> {
+        let server = self.for_peer(client.map(|client| client.core.as_ref()), name)?;
+        let command = match client {
+            Some(client) => command
+                .arg("-t")
+                .arg(OsStr::from_bytes(client.name().as_bytes())),
+            None => command,
+        };
+        Ok((server, command))
+    }
+
     /// Show a popup over a client, running a command inside it.
     ///
     /// This needs a client with a terminal, so it fails on a server nothing is
@@ -27,16 +44,13 @@ impl Server {
         client: Option<&Client>,
         command: impl Into<OsString>,
     ) -> Result<(), Error> {
-        let mut popup = Command::new("display-popup").arg("-E");
-        if let Some(client) = client {
-            self.core
-                .require_same_server(client.server_identity(), "display-popup")?;
-            popup = popup
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
+        let (server, popup) = self.target_client(
+            "display-popup",
+            client,
+            Command::new("display-popup").arg("-E"),
+        )?;
 
-        listing::mutate(&self.core, "display-popup", popup.arg(command.into())).await
+        listing::mutate(&server.core, "display-popup", popup.arg(command.into())).await
     }
 
     /// Show a menu over a client.
@@ -58,21 +72,18 @@ impl Server {
         title: &str,
         items: impl IntoIterator<Item = MenuItem>,
     ) -> Result<(), Error> {
-        let mut menu = Command::new("display-menu")
-            .arg("-T")
-            .arg(OsString::from(title));
-        if let Some(client) = client {
-            self.core
-                .require_same_server(client.server_identity(), "display-menu")?;
-            menu = menu
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
+        let (server, mut menu) = self.target_client(
+            "display-menu",
+            client,
+            Command::new("display-menu")
+                .arg("-T")
+                .arg(OsString::from(title)),
+        )?;
         for item in items {
             menu = menu.arg(item.label).arg(item.key).arg(item.command);
         }
 
-        listing::mutate(&self.core, "display-menu", menu).await
+        listing::mutate(&server.core, "display-menu", menu).await
     }
 
     /// Open a command prompt on a client.
@@ -102,19 +113,13 @@ impl Server {
         prompt: Option<&str>,
         command: impl Into<OsString>,
     ) -> Result<(), Error> {
-        let mut request = Command::new("command-prompt");
-        if let Some(client) = client {
-            self.core
-                .require_same_server(client.server_identity(), "command-prompt")?;
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
+        let (server, mut request) =
+            self.target_client("command-prompt", client, Command::new("command-prompt"))?;
         if let Some(prompt) = prompt {
             request = request.arg("-p").arg(OsString::from(prompt));
         }
 
-        listing::mutate(&self.core, "command-prompt", request.arg(command.into())).await
+        listing::mutate(&server.core, "command-prompt", request.arg(command.into())).await
     }
 
     /// Open one of tmux's interactive choosers on a client.
@@ -136,16 +141,9 @@ impl Server {
     /// not one: this does not need one.
     pub async fn choose(&self, chooser: Chooser, client: Option<&Client>) -> Result<(), Error> {
         let name = chooser.command();
-        let mut request = Command::new(name);
-        if let Some(client) = client {
-            self.core
-                .require_same_server(client.server_identity(), name)?;
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
+        let (server, request) = self.target_client(name, client, Command::new(name))?;
 
-        listing::mutate(&self.core, name, request).await
+        listing::mutate(&server.core, name, request).await
     }
 
     /// Open tmux's window finder for a search string.
@@ -161,17 +159,11 @@ impl Server {
     /// server, or an error when tmux refuses the command. A missing client is
     /// not one: this does not need one.
     pub async fn find_window(&self, client: Option<&Client>, search: &str) -> Result<(), Error> {
-        let mut request = Command::new("find-window");
-        if let Some(client) = client {
-            self.core
-                .require_same_server(client.server_identity(), "find-window")?;
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
+        let (server, request) =
+            self.target_client("find-window", client, Command::new("find-window"))?;
 
         listing::mutate(
-            &self.core,
+            &server.core,
             "find-window",
             request.arg(OsString::from(search)),
         )
@@ -191,16 +183,10 @@ impl Server {
     /// server, or an error when tmux refuses, including below 3.8 when no
     /// suitable client exists.
     pub async fn display_panes(&self, client: Option<&Client>) -> Result<(), Error> {
-        let mut request = Command::new("display-panes");
-        if let Some(client) = client {
-            self.core
-                .require_same_server(client.server_identity(), "display-panes")?;
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
+        let (server, request) =
+            self.target_client("display-panes", client, Command::new("display-panes"))?;
 
-        listing::mutate(&self.core, "display-panes", request).await
+        listing::mutate(&server.core, "display-panes", request).await
     }
 }
 

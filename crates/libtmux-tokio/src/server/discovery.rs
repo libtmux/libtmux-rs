@@ -69,10 +69,10 @@ impl Server {
         let server = self.for_discovery().await?;
         let projections = listing::panes(&server.core, listing::Scope::Server, None).await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .map(|projection| Pane::new(Arc::clone(&server.core), projection))
-            .collect())
+            .collect()
     }
 
     /// List every client attached to the server, preserving any failure.
@@ -85,10 +85,10 @@ impl Server {
         let server = self.for_discovery().await?;
         let infos = listing::clients(&server.core, None).await?;
 
-        Ok(infos
+        infos
             .into_iter()
             .map(|info| Client::new(Arc::clone(&server.core), info))
-            .collect())
+            .collect()
     }
 
     /// Find the session with this exact name.
@@ -135,10 +135,11 @@ impl Server {
         // than every row for this to scan.
         let infos = listing::sessions(&server.core, Some(&id.predicate("session_id"))).await?;
 
-        Ok(infos
+        infos
             .into_iter()
             .next()
-            .map(|info| Session::new(Arc::clone(&server.core), info)))
+            .map(|info| Session::new(Arc::clone(&server.core), info))
+            .transpose()
     }
 
     /// Find the window with this id, preferring an active link then the lowest index.
@@ -189,10 +190,11 @@ impl Server {
         )
         .await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .next()
-            .map(|projection| Pane::new(Arc::clone(&server.core), projection)))
+            .map(|projection| Pane::new(Arc::clone(&server.core), projection))
+            .transpose()
     }
 
     /// Find the client attached to this terminal.
@@ -330,10 +332,10 @@ impl Server {
         let server = self.for_discovery().await?;
         let infos = listing::sessions(&server.core, None).await?;
 
-        Ok(infos
+        infos
             .into_iter()
             .map(|info| Session::new(Arc::clone(&server.core), info))
-            .collect())
+            .collect()
     }
 }
 

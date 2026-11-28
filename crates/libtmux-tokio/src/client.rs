@@ -44,7 +44,7 @@ use crate::{Command, Error, ObjectKind};
 /// ```
 #[derive(Clone)]
 pub struct Client {
-    core: Arc<Core>,
+    pub(crate) core: Arc<Core>,
     info: ClientInfo,
 }
 
@@ -56,8 +56,10 @@ impl Client {
     }
 
     /// Build a handle from a hydrated snapshot.
-    pub(crate) const fn new(core: Arc<Core>, info: ClientInfo) -> Self {
-        Self { core, info }
+    pub(crate) fn new(core: Arc<Core>, info: ClientInfo) -> Result<Self, Error> {
+        core.expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        Ok(Self { core, info })
     }
 
     /// Return the client name, which is its terminal path.
@@ -323,9 +325,10 @@ impl Client {
     pub async fn attached_session(&self) -> Result<Option<crate::Session>, Error> {
         let name = OsString::from_vec(self.name().as_bytes().to_vec());
 
-        Ok(listing::client_session(&self.core, &name)
+        listing::client_session(&self.core, &name)
             .await?
-            .map(|info| crate::Session::new(Arc::clone(&self.core), info)))
+            .map(|info| crate::Session::new(Arc::clone(&self.core), info))
+            .transpose()
     }
 
     /// The current window of the session this client is attached to.
@@ -370,9 +373,10 @@ impl Client {
     pub async fn attached_pane(&self) -> Result<Option<crate::Pane>, Error> {
         let name = OsString::from_vec(self.name().as_bytes().to_vec());
 
-        Ok(listing::client_pane(&self.core, &name)
+        listing::client_pane(&self.core, &name)
             .await?
-            .map(|projection| crate::Pane::new(Arc::clone(&self.core), projection)))
+            .map(|projection| crate::Pane::new(Arc::clone(&self.core), projection))
+            .transpose()
     }
 
     /// Detach this client from its server.
@@ -474,7 +478,7 @@ impl Client {
     /// server, or an error when the session does not exist or tmux refuses.
     pub async fn switch_to(&self, session: &crate::Session) -> Result<(), Error> {
         self.core
-            .require_same_server(session.server_identity(), "switch-client")?;
+            .require_same_instance(&session.core, "switch-client")?;
         listing::mutate(
             &self.core,
             "switch-client",
@@ -488,10 +492,12 @@ impl Client {
     }
 }
 
-/// Clients compare by server endpoint and client name.
+/// Clients compare by endpoint, daemon generation and client name.
 impl PartialEq for Client {
     fn eq(&self, other: &Self) -> bool {
-        self.server_identity() == other.server_identity() && self.name() == other.name()
+        self.server_identity() == other.server_identity()
+            && self.core.expected_generation() == other.core.expected_generation()
+            && self.name() == other.name()
     }
 }
 
@@ -500,6 +506,7 @@ impl Eq for Client {}
 impl Hash for Client {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.server_identity().hash(state);
+        self.core.expected_generation().hash(state);
         self.name().hash(state);
     }
 }
@@ -511,6 +518,13 @@ impl Hash for Client {
 impl fmt::Debug for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("Client").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Client {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
     }
 }
 
@@ -590,12 +604,5 @@ impl FilterSchema for Client {
 impl fmt::Display for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.name().to_string_lossy())
-    }
-}
-
-#[cfg(feature = "query")]
-impl libtmux_core::snapshot::SnapshotFields for Client {
-    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
-        self.stored(name)
     }
 }
