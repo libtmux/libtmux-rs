@@ -20,8 +20,24 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Fixed
+
+- MCP clients receive the `tmux-mcp` package name and version at
+  initialization. Previous builds reported the protocol library’s version.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 ### Changed
 
+- **Behaviour change.** Every tool reports `readOnlyHint: false`,
+  `destructiveHint: true`, `idempotentHint: false`, and `openWorldHint: true`.
+  Configured tmux aliases and hooks can add effects even to inspect calls.
+  Direct capability fields still describe each tool's requested operation.
+  (#155)
+- **Breaking.** `select_window` and `move_window` require the complete `link`
+  returned by `list_windows`, including daemon generation, session, index and
+  window. A withdrawn or reindexed placement returns `link_gone` with
+  `retryable: false`; a destroyed window returns `object_gone`. Successful
+  moves return the fresh destination link.
 - Requires `rmcp` 3.9 or later. Releases before 3.9.0 read Streamable HTTP
   response bodies with no size limit
   ([fix](https://github.com/modelcontextprotocol/rust-sdk/commit/3e0156c1eaf1573a1b878e2a8998d2fa2d0b1439)).

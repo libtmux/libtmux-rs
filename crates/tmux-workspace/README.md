@@ -263,9 +263,9 @@ events are in the [command reference](docs/cli.md#machine-output).
 
 ## Let an agent watch it
 
-[`tmux-mcp`](https://crates.io/crates/tmux-mcp) gives an MCP client typed,
-read-only access to the sessions a workspace builds. Load on a named server
-and point the server at the same one:
+The `inspect` toolset of [`tmux-mcp`](https://crates.io/crates/tmux-mcp) lets
+an MCP client list sessions and capture panes from a workspace. Load on a
+named server and point the MCP server at the same one:
 
 ```console
 $ tmux-workspace load -d -L agents dev
@@ -281,20 +281,28 @@ running after the client disconnects. The
 
 ## Using it from Rust
 
-The same package is a library, through [libtmux](https://docs.rs/libtmux). It
-reads a document the way the command does, tmuxp's way, and the command
-reference lists [where the two differ](docs/cli.md#where-the-command-and-the-library-differ).
+The library uses `libtmux-tokio` and reads a document the way the command
+does, tmuxp's way. The command reference lists
+[where the two differ](docs/cli.md#where-the-command-and-the-library-differ).
+
+The native driver crates are unpublished. Start a binary project beside a
+`libtmux-rs` checkout:
 
 ```console
-$ cargo add tmux-workspace --no-default-features
+$ cargo new workspace-plan
+$ cd workspace-plan
 ```
 
-`--no-default-features` leaves the command and its dependencies out. The
-server handle below comes from `libtmux`, so add that too:
+Set its `Cargo.toml` dependencies to:
 
-```console
-$ cargo add libtmux
+```toml
+[dependencies]
+tmux-workspace = { path = "../libtmux-rs/crates/tmux-workspace", default-features = false }
+libtmux-tokio = { path = "../libtmux-rs/crates/libtmux-tokio" }
 ```
+
+`default-features = false` leaves the command and its dependencies out. The
+preview below needs neither a Tokio runtime nor `test-support`.
 
 ### [`Workspace::from_yaml`]: read a workspace
 
@@ -320,7 +328,7 @@ windows:
     )?;
 
     // Building a handle starts nothing; `plan` is where the commands appear.
-    let server = libtmux::Server::new()?;
+    let server = libtmux_tokio::Server::new()?;
     let plan = WorkspaceBuilder::new(&server).plan(&workspace);
 
     let commands: Vec<String> = plan
@@ -335,6 +343,9 @@ windows:
 }
 ```
 
+Save the program as `src/main.rs` and run `cargo run --quiet`. It checks the
+preview and starts no daemon.
+
 The [API reference][api-reference] has the same items on libtmux.org, and
 [docs.rs][docs-rs] has the rest.
 
@@ -345,10 +356,10 @@ The [API reference][api-reference] has the same items on libtmux.org, and
 This crate. [`tmux-workspace`][cli-manual] is the command, and
 [`Workspace`] and [`WorkspaceBuilder`] are the library.
 
-### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux): the client under it
+### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux): shared types and client choices
 
-The async tmux client the builder drives. [Its README][libtmux-guide] covers
-filtering, waiting, and control mode.
+The facade exports shared types and optional blocking and Tokio clients.
+[Its README][libtmux-guide] covers choosing a client.
 
 ### [`tmux-mcp`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp): a server for agents
 

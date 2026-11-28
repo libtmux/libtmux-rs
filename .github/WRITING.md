@@ -14,9 +14,10 @@ pull requests live in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - Headings are sentence case: `## Platform support`, not `## Platform Support`.
 - `tmux` is lowercase everywhere, including at the start of a sentence —
   rewrite the sentence instead.
-- Crate names are as published and in backticks: `libtmux`, `libtmux-macros`,
-  `tmux-mcp`, `tmux-workspace`. The repository is `libtmux-rs`; the crate is
-  `libtmux`. They are not interchangeable.
+- Crate names are as published and in backticks: `libtmux-core`,
+  `libtmux-blocking`, `libtmux-tokio`, `libtmux`, `libtmux-macros`, `tmux-mcp`
+  and `tmux-workspace`. The repository is `libtmux-rs`; `libtmux` names the
+  facade crate. They are not interchangeable.
 - Write `prerelease`, not `pre-release`. Write `changelog`, not `change log`.
 - Rust is capitalised; `rustdoc`, `rustfmt`, `clippy`, and `cargo` are not,
   except at the start of a sentence.
@@ -46,11 +47,11 @@ Both the root `README.md` and each crate's `README.md` follow this shape:
 - **Short paragraphs, no inventories.** Keep paragraphs to three lines or
   fewer, turn lists of facts into bullets, and omit feature inventories,
   toolchain patch versions, CI matrix logs, and gate boilerplate.
-- **Executable examples.** Rust examples on the five wired README pages (listed
+- **Executable examples.** Rust examples on the wired README pages (listed
   in [`CONTRIBUTING.md`](CONTRIBUTING.md)) are compiled by `cargo test --doc`,
   and longer programs live in `examples/` where `just examples` runs them.
-  Examples start with their imports and own a private server through
-  `TestServer`, never shell `tmux`, `tmux kill-server`, or `rm`.
+  Examples start with their imports. Those that start tmux own a private server
+  through `TestServer`, never shell `tmux`, `tmux kill-server`, or `rm`.
 - **Headline features.** Typed queries, the planner and `Planner::explain`,
   chaining, and control mode each get a section with a linked heading and an
   example. Describe none the crate lacks.
@@ -114,8 +115,8 @@ shows. Hide the setup with `#` so the example stays short and still compiles:
 
 ```rust
 /// ```no_run
-/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-/// use libtmux::AccessMode;
+/// # async fn example(server: &libtmux_tokio::Server) -> Result<(), libtmux_tokio::Error> {
+/// use libtmux_tokio::AccessMode;
 ///
 /// server.grant_access("observer", AccessMode::ReadOnly).await?;
 /// # Ok(())
@@ -163,8 +164,10 @@ keeping the same brevity and upkeep bar.
 ## Changelog
 
 Each published crate keeps its own `CHANGELOG.md` beside its `Cargo.toml`
-(`crates/libtmux/CHANGELOG.md`, `crates/libtmux-macros/CHANGELOG.md`,
-`crates/tmux-mcp/CHANGELOG.md`, `crates/tmux-workspace/CHANGELOG.md`), and an
+(`crates/libtmux-core/CHANGELOG.md`, `crates/libtmux-blocking/CHANGELOG.md`,
+`crates/libtmux-tokio/CHANGELOG.md`, `crates/libtmux/CHANGELOG.md`,
+`crates/libtmux-macros/CHANGELOG.md`, `crates/tmux-mcp/CHANGELOG.md` and
+`crates/tmux-workspace/CHANGELOG.md`), and an
 entry lives in the single file of the crate it changes. The root
 `CHANGELOG.md` holds cross-crate changes, documentation, CI, tests, release
 tooling, and each release's opening version summary.

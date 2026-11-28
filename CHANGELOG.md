@@ -8,6 +8,9 @@ Changelog](https://keepachangelog.com/en/1.1.0/), and the crates follow
 crate is in that crate's changelog:
 
 - [`libtmux`](crates/libtmux/CHANGELOG.md)
+- [`libtmux-core`](crates/libtmux-core/CHANGELOG.md)
+- [`libtmux-blocking`](crates/libtmux-blocking/CHANGELOG.md)
+- [`libtmux-tokio`](crates/libtmux-tokio/CHANGELOG.md)
 - [`libtmux-macros`](crates/libtmux-macros/CHANGELOG.md)
 - [`tmux-workspace`](crates/tmux-workspace/CHANGELOG.md)
 - [`tmux-mcp`](crates/tmux-mcp/CHANGELOG.md)
@@ -23,6 +26,44 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- `libtmux_blocking::Server::capture` includes a complete program that reads
+  an existing pane and writes its exact bytes without Tokio. The blocking
+  README links the example and shows its socket and pane arguments.
+- The root README puts ordinary Tokio use before fixture examples and names
+  the blocking client's current typed operations. The Tokio README uses
+  sibling checkout dependencies for its unpublished API and distinguishes
+  the published `libtmux` 0.1.2 API.
+- `check-api-examples` validates the split facade's standalone run recipe
+  against the facade README, changing only the Cargo invocation. Legacy
+  and Tokio profiles retain their exact default command.
+- `format_injection` checks literal start directories against the child
+  process's byte report. tmux 3.3a may omit its current path while the child
+  starts; unescaped directory formats still fail the assertions.
+- The copied mixed-reader proof uses the source-owned private socket recipe
+  in HTML and Markdown. Its archive join checks the caller-owned fixture,
+  exact recipe digest and both public client feature graphs, rejecting
+  `test-support` in the copied or staged reader.
+- The docs preview copies complete multiline subshell recipes. Its Rust
+  gate checks the production code-block renderer before repeating the site
+  build and running copied programs.
+- The docs preview resolves primary home objects and native ID checks for
+  both Rust source layouts. Public API extraction follows parsed module
+  re-exports, so hidden helper names cannot acquire another declaration's
+  identity. The LLM export and fixture guidance use the selected API.
+- The docs preview resolves showcase API links to the defining Rust crate
+  while retaining the released `0.1.2` identifiers. Its curated links omit
+  the retired `Window::select` owner. CI and the installed-reader proof use
+  the same docs revision for those links and the native recorder.
+- The root, facade and blocking crate READMEs start with a native blocking
+  program that creates, observes and kills its own session on an explicit
+  private socket. `installed_clients.py` now compiles and runs the displayed
+  facade README program from its archive with default features, records its
+  digest and checks stdout and cleanup. The no-default facade docs retain a
+  runnable shared-type example.
+- `installed_clients.py` records a stdio witness for a saved MCP window link
+  after withdrawal. The archive-installed tools must refuse it while the
+  surviving link and session focus stay unchanged; only `select_window` is
+  enabled alongside `inspect`.
 - `cargo deny check` now accepts RUSTSEC-2026-0543, which marks `chrono`
   unmaintained, so `just check` passes again. Only `tmux-mcp` reaches `chrono`,
   through `rmcp`, and no `rmcp` release drops it yet. `deny.toml` names that one

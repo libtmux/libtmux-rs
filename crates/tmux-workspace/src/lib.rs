@@ -9,11 +9,11 @@ pub use freeze::freeze;
 
 use std::path::Path;
 
-use libtmux::plan::{
+use libtmux_core::plan::{
     KillWindow, NewSession, NewWindow, PaneSlot, Pause, Plan, Planner, SelectLayout, SelectPane,
     SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow, WindowSlot,
 };
-use libtmux::{Server, Session, SessionId};
+use libtmux_tokio::{Server, Session, SessionId};
 
 /// A failure while building a workspace.
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +25,7 @@ pub enum BuildError {
 
     /// tmux refused an operation, or could not be reached.
     #[error(transparent)]
-    Tmux(#[from] libtmux::Error),
+    Tmux(#[from] libtmux_tokio::Error),
 
     /// tmux created a session without the window it always creates.
     ///
@@ -47,14 +47,17 @@ pub enum BuildError {
         detail: String,
     },
 
-    /// A session with the requested name already exists.
+    /// The first session creation has no verified receipt.
     ///
-    /// Building into an existing session would interleave windows with
-    /// whatever is already there, so it is refused rather than guessed at.
-    #[error("a session named {name} already exists")]
-    SessionExists {
-        /// The name that was already taken.
+    /// No existing session is adopted and no later build step runs. Inspect the
+    /// server before repeating the build: the requested creation may have run.
+    #[error("workspace session {name} creation was not acknowledged: {source}")]
+    CreationUnconfirmed {
+        /// The application-owned session name requested by the workspace.
         name: String,
+        /// The original creation failure, including its effect evidence.
+        #[source]
+        source: Box<libtmux_tokio::Error>,
     },
 }
 
@@ -93,7 +96,7 @@ impl<'server> WorkspaceBuilder<'server> {
     /// ",
     /// )?;
     ///
-    /// let server = libtmux::Server::builder()
+    /// let server = libtmux_tokio::Server::builder()
     ///     .socket_path("/tmp/libtmux-rs-test/plan-example.sock")
     ///     .build()?;
     /// let plan = WorkspaceBuilder::new(&server).plan(&workspace);
@@ -238,8 +241,10 @@ impl<'server> WorkspaceBuilder<'server> {
     ///
     /// # Errors
     ///
-    /// Returns an error when a session of the same name exists, or when tmux
-    /// refuses any step.
+    /// Returns an error when tmux refuses a step or its reply is unconfirmed.
+    /// [`BuildError::CreationUnconfirmed`] preserves an unknown initial
+    /// creation effect. No session is adopted by name after a missing receipt.
+    /// Layout validation failures preserve their cause before creation starts.
     pub async fn build(&self, workspace: &Workspace) -> Result<Session, BuildError> {
         self.server
             .validate_layouts(workspace.windows.iter().filter_map(|window| {
@@ -253,20 +258,28 @@ impl<'server> WorkspaceBuilder<'server> {
         let plan = self.plan(workspace);
         // Marked, because a workspace is mostly a creation followed by the
         // typing that decorates it, which is the shape the fold is for.
-        let result = plan.run(self.server, Planner::Marked).await?;
+        let result = self
+            .server
+            .run_plan(&plan, Planner::Marked)
+            .await
+            .map_err(|source| {
+                if source.operation_effect() == Some(libtmux_core::Effect::Unknown)
+                    && source.creation_receipt().is_none()
+                    && !matches!(&source, libtmux_tokio::Error::PlanInterrupted { .. })
+                {
+                    BuildError::CreationUnconfirmed {
+                        name: workspace.session_name.clone(),
+                        source: Box::new(source),
+                    }
+                } else {
+                    BuildError::Tmux(source)
+                }
+            })?;
         if !result.is_complete() {
-            // Asked after the fact rather than checked before: a name can be
-            // taken between a check and a create, so tmux refusing is the only
-            // answer that cannot be stale.
             let refusal = result
                 .steps()
                 .iter()
-                .find_map(libtmux::plan::StepOutcome::refusal);
-            if matches!(refusal.as_ref(), Some(libtmux::Error::SessionExists { .. })) {
-                return Err(BuildError::SessionExists {
-                    name: workspace.session_name.clone(),
-                });
-            }
+                .find_map(libtmux_tokio::plan::StepOutcome::refusal);
             return match refusal {
                 Some(error) if result.created(0).is_some() => {
                     Err(error.after_effect("workspace-build").into())
@@ -460,16 +473,6 @@ fn referenced(text: &str) -> impl Iterator<Item = &str> {
             .then_some(name)
     })
 }
-
-/// Compiles the `libtmux-macros` README's examples, and nothing else.
-///
-/// It cannot be compiled from `libtmux-macros`, whose only dependency on
-/// `libtmux` is deliberately renamed so the UI tests prove the derive resolves
-/// the crate. Here `libtmux` is an ordinary dependency under its own name,
-/// which is the case a reader of that README is in.
-#[cfg(doctest)]
-#[doc = include_str!("../libtmux-macros-README.md")]
-pub struct MacrosReadme;
 
 /// The `tmux-workspace` command's reference, rendered with the library's
 /// documentation so it is readable on docs.rs and a link to it is checked

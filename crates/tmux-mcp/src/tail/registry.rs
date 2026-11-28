@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use libtmux::{Error, Pane, TmuxText};
+use libtmux_tokio::{Error, Pane, TmuxText};
 use tokio::sync::{mpsc, oneshot};
 
 use super::hold;
@@ -99,19 +99,32 @@ impl Tail {
                                     visible,
                                     offset: hold(&ring).end(),
                                 }),
+                                Err(error @ Error::ControlGap { .. }) => {
+                                    hold(&ring).gap();
+                                    Err(error)
+                                }
                                 Err(error) => Err(error),
                             };
                             let _ = request.result.send(result);
                         }
                         chunk = output.next_chunk() => {
-                            let Some(chunk) = chunk else {
-                                break;
-                            };
-                            hold(&ring).push(&chunk);
+                            match chunk {
+                                Some(Ok(chunk)) => hold(&ring).push(&chunk),
+                                Some(Err(Error::ControlGap { .. })) => hold(&ring).gap(),
+                                Some(Err(Error::PaneOutputEnded { cause: libtmux_tokio::control::PaneOutputEnd::PaneGone })) => {
+                                    hold(&ring).closed = true;
+                                    break;
+                                }
+                                Some(Err(_)) | None => {
+                                    let mut ring = hold(&ring);
+                                    ring.gap();
+                                    ring.lost = true;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-                hold(&ring).closed = true;
             })
         };
 

@@ -1,7 +1,7 @@
 # Contributing
 
-This repository is a Cargo workspace of four published crates and one private
-developer tool. The gates below are what a change has to pass. It was
+This repository is a Cargo workspace of seven publishable crates and two private
+packages. The gates below are what a change has to pass. It was
 extracted from the Python libtmux repository; its `mypy` convention does not
 apply here, and its `uv`, `pytest` and `ruff` conventions apply only to the
 support scripts under `scripts/`.
@@ -41,15 +41,19 @@ justfile only groups Cargo commands.
 $ cargo build --workspace --all-features
 ```
 
-Five workspace packages; the four library/server crates are published:
+Seven crates ship. The last two packages in the table are for development.
 
 | Crate | What it is |
 | --- | --- |
-| `crates/libtmux` | The async tmux client and object model |
+| `crates/libtmux-core` | Pure operations, identities, plans, queries and reply decoding |
+| `crates/libtmux-blocking` | The native blocking tmux client |
+| `crates/libtmux-tokio` | The Tokio tmux client and object model |
+| `crates/libtmux` | The shared domain with optional blocking and Tokio clients |
 | `crates/libtmux-macros` | `#[derive(Filterable)]`, for downstream structs |
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
 | `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
+| `tools/readme-tests` | Executes the Rust examples in the repository README |
 
 `tools/mcp-swap` is for a maintainer who wants an agent CLI to run the
 checkout's `tmux-mcp`. Preview what it would change, then switch:
@@ -84,7 +88,7 @@ $ just test
 ```
 
 Tests run against real tmux. There are no mocks; a test that would need one is
-usually asking for a design change. `libtmux::test::TestServer`, behind the
+usually asking for a design change. `libtmux_tokio::test::TestServer`, behind the
 `test-support` feature, gives each test an isolated socket and deterministic
 cleanup. Tests are functions, not methods on a struct.
 
@@ -116,7 +120,7 @@ run pinned that way passed against whichever tmux `PATH` held. A pass about
 the wrong binary reports nothing and looks exactly like a pass about the right
 one. `just compat` builds each pinned release and runs the whole suite against
 it, so a test that depends on behaviour a release does not have needs a
-`libtmux::since::*` gate rather than an assumption about the machine.
+`libtmux_core::since::*` gate rather than an assumption about the machine.
 
 Doctests are a separate target and are part of the gate:
 
@@ -124,25 +128,26 @@ Doctests are a separate target and are part of the gate:
 $ just doctest
 ```
 
-Five pages are compiled along with them, so a Rust example on any of these
-pages is a test rather than prose:
+These pages are compiled along with them, so their Rust examples are tests:
 
 - `crates/libtmux/README.md`, by `#![doc = include_str!(…)]` at the top of
   `crates/libtmux/src/lib.rs`: that README is the crate documentation.
-- `README.md`, by a `#[cfg(doctest)] #[doc = include_str!(…)]` item further
-  down the same file, so the front page is tested without appearing in the
-  rendered documentation.
+- `crates/libtmux-core/README.md`, by the same include in
+  `crates/libtmux-core/src/lib.rs`.
+- `crates/libtmux-blocking/README.md`, by the same include in
+  `crates/libtmux-blocking/src/lib.rs`.
+- `crates/libtmux-tokio/README.md`, by the same include in
+  `crates/libtmux-tokio/src/lib.rs`.
+- The root `README.md` runs as doctests in the private `readme-tests` package.
 - `crates/tmux-workspace/docs/library.md`, by the same top-of-crate include
   in `crates/tmux-workspace/src/lib.rs`: that page is the library's
   documentation.
 - `crates/tmux-workspace/README.md`, by `Readme` in the same file. It is the
   command's page on crates.io, so it is compiled without being rendered.
-- `crates/libtmux-macros/README.md`, by `MacrosReadme` in
-  `crates/tmux-workspace/src/lib.rs`, reached through a symlink. A proc-macro
-  crate cannot doctest a README that derives through it, and the example needs
-  `libtmux` under its own name, which is only true from a third crate.
-  `crates/libtmux/tests/macros_readme.rs` compiles the same example again as
-  an ordinary test.
+- The facade compiles `crates/libtmux-macros/README.md` with its `derive`
+  feature. Its package includes the README through a symlink. The Tokio
+  integration test `crates/libtmux-tokio/tests/macros_readme.rs` exercises
+  the derive through the Tokio crate name.
 
 `crates/tmux-mcp/README.md` has no Rust to compile. Its commands and its JSON
 client configurations are checked instead by `crates/tmux-mcp/tests/docs.rs`,
@@ -285,7 +290,7 @@ a doctest gets `[env]` and no sweep.
 - A test binary started by hand has not been through Cargo, so none of this
   applies to it. The canary refuses to run there.
 
-`crates/libtmux/tests/sandbox_canary.rs` asserts that the runner applied: the
+`crates/libtmux-tokio/tests/sandbox_canary.rs` asserts that the runner applied: the
 four variables are unset, and `TMUX_TMPDIR` is a directory of this user's that
 is not the committed fallback. It resolves the default socket under the sandbox
 and fails if a server is listening on it; a leftover socket file is not one,
@@ -294,11 +299,11 @@ or `-S`, and requires the server to listen on that default socket; a second run
 points the client elsewhere and requires the same assertion to fail. It then
 runs itself again in the environment of a tmux pane, where it must fail. A
 failure names variables and never their values.
-`crates/libtmux/tests/sandbox_runner.rs` runs the runner around small commands
+`crates/libtmux-tokio/tests/sandbox_runner.rs` runs the runner around small commands
 and has a test for each of its behaviours, among them the leaked server above.
 
 A doctest is a process of its own, so it gets the sandbox only through the
-environment it inherits. `crates/libtmux/tests/sandbox_doctest.md` is a doctest
+environment it inherits. `crates/libtmux-tokio/tests/sandbox_doctest.md` is a doctest
 that asserts what it inherited, accepting either the runner's directory or the
 fallback, and starts a bare tmux client to see where its server lands.
 `just doctest-sandbox` runs it as `cargo test --doc` does and requires that it
@@ -462,11 +467,12 @@ the example compiles to nothing and passes vacuously. Gate the doc attribute
 instead — `#![cfg_attr(feature = "x", doc = "…")]`. When adding a doctest for
 gated API, break it once and confirm it fails.
 
-**The public surface is recorded.** `crates/libtmux/docs/public-api.txt` lists
-every public item with its signature and each non-blanket trait
-implementation. `just api` regenerates it; `just api-check` fails when the tree
-disagrees. Adding or changing public API means committing the regenerated
-file, and that diff is the review artefact. A semver gate applies from `0.1.0`
+**The public surface is recorded.** Each of `libtmux-core`, `libtmux-blocking`,
+`libtmux-tokio` and `libtmux` owns a `docs/public-api.txt` inventory of public
+items, signatures, non-blanket trait implementations and external re-exports.
+`just api` regenerates all four; `just api-check` fails when the tree disagrees.
+Adding or changing public API means committing the regenerated files, and
+those diffs are the review artefact. A semver gate applies from `0.1.0`
 on. Before it, every version was a prerelease, and `cargo-semver-checks` treats
 a prerelease-to-prerelease step as a major change and skips every lint,
 reporting `0 checks: 0 pass, 254 skip` and then `no semver update required`,
@@ -478,12 +484,12 @@ changelog.
 
 **Every crate-root type has a runnable example.**
 `just example-coverage-check` fails on a type added without one. It reads
-rustdoc's JSON for `libtmux` and takes every `struct`, `enum`, `trait`, and
-`type_alias` reachable as `libtmux::X`, following the root's re-exports; a type
-counts as covered when its own documentation carries a fenced block. Methods do
-not count, and a trivial accessor inherits the example on its type. The escape
-hatch is the one the failure names: add an example, or make the type private if
-it is not part of the surface.
+rustdoc's JSON for all four runtime crates and takes every `struct`, `enum`,
+`trait` and `type_alias` reachable at a crate's root; shared types are checked
+in their defining crate. A type counts as covered when its own documentation
+carries a fenced block. Methods do not count, and a trivial accessor inherits
+the example on its type. The escape hatch is the one the failure names: add an
+example, or make the type private if it is not part of the surface.
 
 Write it against a real `TestServer` where behavior is the point: an example
 that runs is the only kind that catches a wrong belief about tmux, which is
@@ -508,10 +514,10 @@ subsections under its entry, as `design.md`'s longer ones do, is held to them
 the same way.
 
 **The format catalog is measured against tmux's own source.**
-`crates/libtmux/docs/format-coverage.txt` records every format name tmux
+`crates/libtmux-tokio/docs/format-coverage.txt` records every format name tmux
 publishes and what this crate does about it: `catalogued`, `missing: <scope>`,
 or `excluded: <reason>`. The catalog itself is the table in
-`crates/libtmux/src/formats.rs`.
+`crates/libtmux-core/src/formats/catalog.rs`.
 
 `just format-coverage-check` compares the ledger against that catalog, not
 against tmux, which is why it needs no tmux source and can sit in the gate. It
@@ -670,15 +676,15 @@ Releases are numbered `0.1.N` (`0.1.0`, `0.1.1`, and so on), with no
 `-alpha` or other prerelease tag unless the maintainer asks for one. To cut a
 release:
 
-1. Bump `[workspace.package] version` and the `libtmux` and exact
-   `libtmux-macros` requirements in `[workspace.dependencies]` together — they
-   use the same number. A published crate whose dependency points at the previous
-   version will not resolve. `tmux-mcp` carries its own version and is bumped
-   separately.
+1. Bump `[workspace.package] version` and the exact `libtmux-core`,
+   `libtmux-blocking`, `libtmux-tokio`, `libtmux` and `libtmux-macros`
+   requirements in `[workspace.dependencies]` together — they use the same
+   number. A published crate whose dependency points at the previous version
+   will not resolve. `tmux-mcp` carries its own version and is bumped separately.
 2. Bump the version every README tells a reader to depend on. The packaged
    crate ships its README, so a stale one is shipped install instructions;
    `just package` fails on it.
-3. `cargo update --workspace`, which moves the four members in `Cargo.lock`
+3. `cargo update --workspace`, which moves the workspace members in `Cargo.lock`
    and nothing else. `just check` passes `--locked` and fails without it.
 4. Move the `Unreleased` entries of the root changelog and of each crate's
    changelog under a dated heading, and open a fresh `## Unreleased` above it;
@@ -688,10 +694,11 @@ release:
    and `just package` when a crate does not ship it.
 5. `just check`.
 6. Push one tag per crate, in dependency order, waiting for each to land:
-   `libtmux-macros@vX.Y.Z`, then `libtmux@vX.Y.Z`, then
-   `tmux-workspace@vX.Y.Z` and `tmux-mcp@vA.B.C`. `tmux-workspace` inherits
-   the workspace version, so skipping it leaves it pinned to a `libtmux` that
-   is no longer current.
+   `libtmux-macros@vX.Y.Z`, then `libtmux-core@vX.Y.Z`, then
+   `libtmux-blocking@vX.Y.Z` and `libtmux-tokio@vX.Y.Z`, then
+   `libtmux@vX.Y.Z`, `tmux-workspace@vX.Y.Z` and `tmux-mcp@vA.B.C`.
+   `tmux-workspace` inherits the workspace version, so skipping it leaves it
+   pinned to dependencies that are no longer current.
 
 The workflow checks that the version in the tag is the version in the
 manifest, then runs the whole gate on that exact commit, packages the crate,
@@ -726,7 +733,8 @@ Settings:
 | Environment | `release` |
 
 A crate has to have been published at least once by hand before it can be
-configured, which all four have been.
+configured. New crates need that first publication and trusted-publisher setup
+before their release tags can publish through this workflow.
 
 ## Compatibility
 

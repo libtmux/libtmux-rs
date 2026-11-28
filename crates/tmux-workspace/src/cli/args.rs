@@ -824,11 +824,11 @@ mod tests {
             ("README.md", include_str!("../../README.md").to_owned()),
             ("docs/cli.md", include_str!("../../docs/cli.md").to_owned()),
         ];
-        // The repository's front page and the `libtmux` crate's README ship in
+        // The repository's front page and the Tokio crate's README ship in
         // no crate of this package, so they are read only where the
         // repository is: inside it, they have to be there.
         if manifest.join("../../Cargo.toml").is_file() {
-            for name in ["../../README.md", "../libtmux/README.md"] {
+            for name in ["../../README.md", "../libtmux-tokio/README.md"] {
                 let markdown = std::fs::read_to_string(manifest.join(name)).unwrap();
                 documents.push((name, markdown));
             }

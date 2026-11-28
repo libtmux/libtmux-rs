@@ -16,6 +16,26 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Fixed
+
+- Rust library setup now declares the unpublished `libtmux-tokio` checkout
+  imported by the examples. Fixture examples explicitly enable its
+  `test-support` feature; the preview uses the ordinary client dependency.
+- The MCP inspect description names listing and capture operations without
+  promising that configured tmux behaviour has no effects. (#155)
+- A suspended workspace now resumes when the shell brings it back to the
+  foreground. A second stop signal could previously strand the resumed job.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
+### Changed
+
+- **Breaking.** `BuildError::CreationUnconfirmed { name, source }` replaces
+  `BuildError::SessionExists`. Without a verified creation receipt, a build
+  preserves the original unknown effect and requested session name, adopts
+  no existing session and runs no later steps. Inspect the server before
+  repeating the build.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 ## 0.1.2 - 2026-11-01
 
 No entries for `tmux-workspace`.
@@ -122,6 +142,10 @@ No entries for `tmux-workspace`.
   been kept as an unsupported key. (#33)
 
 ### Fixed
+
+- When a foreground `before_script` job stops, `tmux-workspace load` consumes
+  the stop once. A shell can bring the job back to the foreground and interrupt
+  it without the CLI suspending itself a second time.
 
 - `tmux-workspace freeze` without a session name, run from a pane on one tmux
   server and aimed at another with `-L` or `-S`, captured whichever session

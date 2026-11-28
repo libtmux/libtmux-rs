@@ -1,0 +1,31 @@
+[package]
+name = "libtmux-blocking"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Native blocking tmux client for an explicit socket"
+repository.workspace = true
+license.workspace = true
+include = ["/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE-*", "/src/**", "/docs/**", "/tests/**"]
+categories = ["api-bindings", "os::unix-apis"]
+keywords = ["tmux", "terminal", "multiplexer", "blocking"]
+
+[features]
+default = []
+control-mode = ["dep:tempfile"]
+
+[dependencies]
+getrandom = "0.3"
+libtmux-core.workspace = true
+rustix = { version = "1.1.4", features = ["event", "fs", "process"] }
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

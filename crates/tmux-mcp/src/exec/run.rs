@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use libtmux::{CaptureOptions, Error, Pane, Server, ServerGeneration};
+use libtmux_tokio::{CaptureOptions, Error, Pane, Server, ServerGeneration};
 
 use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
@@ -34,7 +34,7 @@ tokio::task_local! {
 
 /// A pane stream and the sentinels for one command.
 pub(crate) struct Run {
-    output: libtmux::control::PaneOutput,
+    output: libtmux_tokio::control::PaneOutput,
     scanner: Scanner,
     pane: Pane,
 }
@@ -867,7 +867,18 @@ impl Run {
         generation: ServerGeneration,
         mut publish: impl FnMut(RunProgress<'_>),
     ) -> RunCollection {
+        let mut ended = RunOutcome::StreamLost;
         while let Some(chunk) = self.output.next_chunk().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(Error::PaneOutputEnded {
+                    cause: libtmux_tokio::control::PaneOutputEnd::PaneGone,
+                }) => {
+                    ended = RunOutcome::PaneClosed;
+                    break;
+                }
+                Err(_) => break,
+            };
             let finished = self.scanner.push(&chunk);
             publish(self.scanner.progress());
 
@@ -878,9 +889,7 @@ impl Run {
             }
         }
 
-        let view = self
-            .scanner
-            .unfinished(RunOutcome::PaneClosed, self.pane.id().to_string());
+        let view = self.scanner.unfinished(ended, self.pane.id().to_string());
         let proof = RunProof {
             pane: self.pane,
             server,

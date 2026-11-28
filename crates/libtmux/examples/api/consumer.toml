@@ -1,5 +1,5 @@
 [package]
-name = "libtmux-api-example"
+name = "libtmux-mixed-example"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -8,6 +8,5 @@ publish = false
 exclude = ["libtmux-source"]
 
 [dependencies]
-libtmux = { path = "libtmux-source/crates/libtmux" }
-tempfile = "3.20"
-tokio = { version = "1.40", features = ["macros", "rt", "time"] }
+libtmux = { path = "libtmux-source/crates/libtmux", default-features = false, features = ["blocking", "tokio"] }
+tokio = { version = "1.40", features = ["rt", "time"] }

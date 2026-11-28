@@ -10,6 +10,7 @@ now run in the client. Update existing client calls with this mapping. The
 | `--safety`, `LIBTMUX_SAFETY`, `TMUX_MCP_SAFETY` | Select unordered `LIBTMUX_TOOLSETS`, then exact inclusions or exclusions. |
 | `--confirm`, `--no-confirm`, `TMUX_MCP_CONFIRM` | Remove them. The server has no confirmation policy; clients decide approval from each tool's MCP annotations. |
 | `list_session_windows`, `list_window_panes` | Use [`list_windows`][list_windows] or [`list_panes`][list_panes], then filter the returned stable `session_id` or `window_id`. |
+| `select_window` or `move_window` with `window: "@3"` | Copy the intended row's complete `link` from [`list_windows`][list_windows] into `link`. It includes session, index, window and daemon generation. Refresh after `link_gone`; another session may still hold the window. |
 | `describe` | Use [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_window_info`][get_window_info], or [`get_pane_info`][get_pane_info]. |
 | `list_servers` or per-call socket selection | Run one MCP process per socket and use [`get_server_info`][get_server_info] for its pinned server. |
 | `expand_format` | Use [`get_tmux_variables`][get_tmux_variables] for validated variable names; arbitrary tmux-format evaluation has no public replacement. |

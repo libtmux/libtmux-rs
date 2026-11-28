@@ -867,23 +867,34 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 name = "libtmux"
 version = "0.1.2"
 dependencies = [
+ "libtmux-blocking",
+ "libtmux-core",
+ "libtmux-tokio",
+ "tokio",
+]
+
+[[package]]
+name = "libtmux-blocking"
+version = "0.1.2"
+dependencies = [
+ "getrandom 0.3.4",
+ "libtmux-core",
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
+name = "libtmux-core"
+version = "0.1.2"
+dependencies = [
  "caseless",
- "criterion",
- "futures-core",
- "jsonschema",
  "libtmux-macros",
  "regex",
- "rustix",
  "schemars",
  "serde",
  "serde_json",
  "static_assertions",
- "tempfile",
  "thiserror",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -896,6 +907,28 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "trybuild",
+]
+
+[[package]]
+name = "libtmux-tokio"
+version = "0.1.2"
+dependencies = [
+ "criterion",
+ "futures-core",
+ "getrandom 0.3.4",
+ "jsonschema",
+ "libtmux-core",
+ "rustix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1204,6 +1237,14 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "readme-tests"
+version = "0.0.0"
+dependencies = [
+ "libtmux",
+ "tokio",
 ]
 
 [[package]]
@@ -1650,7 +1691,7 @@ version = "0.1.2"
 dependencies = [
  "getrandom 0.4.3",
  "jsonschema",
- "libtmux",
+ "libtmux-tokio",
  "regex",
  "rmcp",
  "schemars",
@@ -1668,7 +1709,8 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
- "libtmux",
+ "libtmux-core",
+ "libtmux-tokio",
  "nix",
  "regex",
  "rustix",

@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::Output;
 use std::time::Duration;
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use serde_json::{Value, json};
 
 mod support;
@@ -68,11 +68,11 @@ async fn load(directory: &Path, guard: &TestServer, files: &[&str], pane: Option
         .unwrap()
 }
 
-async fn keeper_pane(keeper: &libtmux::Session) -> String {
+async fn keeper_pane(keeper: &libtmux_tokio::Session) -> String {
     keeper.panes().await.unwrap()[0].id().to_string()
 }
 
-async fn assert_keeper(guard: &TestServer, keeper: &libtmux::Session, pane: &str) {
+async fn assert_keeper(guard: &TestServer, keeper: &libtmux_tokio::Session, pane: &str) {
     let sessions = guard.server().sessions().await.unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id(), keeper.id());
@@ -123,7 +123,7 @@ async fn neutral_extensions_load_natively_without_python() {
                 .await
                 .unwrap()
                 .unwrap(),
-            libtmux::OptionValue::from("yes")
+            libtmux_tokio::OptionValue::from("yes")
         );
         loaded.kill().await.unwrap();
         assert_keeper(&guard, &keeper, &pane).await;

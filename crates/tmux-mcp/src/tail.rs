@@ -14,7 +14,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use libtmux::{Error, Pane};
+use libtmux_tokio::{Error, Pane};
 
 use crate::identity::{InstanceId, InstanceIdentity};
 
@@ -221,7 +221,7 @@ impl Tails {
             let ring = hold(&tail.ring);
             let (from, stale) = resume_at(&ring, cursor, owner, epoch);
             let read = ring.snapshot_from(from);
-            let missed = read.missed || stale;
+            let missed = read.missed || stale || ring.lost;
             (read, missed, ring.closed, ring.end())
         };
 

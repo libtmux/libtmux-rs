@@ -2,17 +2,17 @@
   "capabilities": [
     {
       "apis": [
-        "control.ControlMode.attach",
-        "control.ControlMode.attach_with_limits",
-        "server.Server.over_control_mode",
-        "plan.Plan.run_over_control_mode"
+        "libtmux_tokio.control.ControlMode.attach",
+        "libtmux_tokio.control.ControlMode.attach_with_limits",
+        "libtmux_tokio.Server.over_control_mode",
+        "libtmux_tokio.control.ControlSender.run_plan"
       ],
       "commands": [
         {
           "command": "attach-session"
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "control-mode",
       "name": "Control mode",
@@ -21,7 +21,7 @@
     },
     {
       "apis": [
-        "control.ControlSender.mute_pane"
+        "libtmux_tokio.control.ControlSender.mute_pane"
       ],
       "commands": [
         {
@@ -31,7 +31,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "fallback",
       "id": "control-pane-off",
       "name": "Silence a pane in a control client",
@@ -40,7 +40,7 @@
     },
     {
       "apis": [
-        "server.Server.delete_buffer"
+        "libtmux_tokio.Server.delete_buffer"
       ],
       "commands": [
         {
@@ -50,7 +50,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "buffer-delete-named",
       "name": "Named buffer deletion",
@@ -59,7 +59,7 @@
     },
     {
       "apis": [
-        "server.Server.set_buffer"
+        "libtmux_tokio.Server.set_buffer"
       ],
       "commands": [
         {
@@ -70,7 +70,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "buffer-rename",
       "name": "Buffer rename",
@@ -79,14 +79,14 @@
     },
     {
       "apis": [
-        "window.Window.select_layout"
+        "libtmux_tokio.Window.select_layout"
       ],
       "commands": [
         {
           "command": "select-layout"
         }
       ],
-      "error": "error.Error.InvalidLayout",
+      "error": "libtmux_tokio.Error.InvalidLayout",
       "handling": "refuse",
       "id": "layout-without-checksum",
       "name": "Layouts without a checksum",
@@ -95,16 +95,16 @@
     },
     {
       "apis": [
-        "window.Window.select_layout",
-        "window.Layout.MainHorizontalMirrored",
-        "window.Layout.MainVerticalMirrored"
+        "libtmux_tokio.Window.select_layout",
+        "libtmux_tokio.Layout.MainHorizontalMirrored",
+        "libtmux_tokio.Layout.MainVerticalMirrored"
       ],
       "commands": [
         {
           "command": "select-layout"
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "layout-mirrored-main",
       "name": "Mirrored main layouts",
@@ -113,15 +113,15 @@
     },
     {
       "apis": [
-        "window.Window.select_layout",
-        "window.LayoutSpec.Saved"
+        "libtmux_tokio.Window.select_layout",
+        "libtmux_tokio.LayoutSpec.Saved"
       ],
       "commands": [
         {
           "command": "select-layout"
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "layout-json",
       "name": "JSON layout strings",
@@ -130,8 +130,8 @@
     },
     {
       "apis": [
-        "pane.CaptureOptions.trim_blank_cells",
-        "pane.Pane.capture_with"
+        "libtmux_tokio.CaptureOptions.trim_blank_cells",
+        "libtmux_tokio.Pane.capture_with"
       ],
       "commands": [
         {
@@ -141,7 +141,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "capture-trim-blank-cells",
       "name": "Capture without trailing blank cells",
@@ -150,7 +150,7 @@
     },
     {
       "apis": [
-        "pane.Pane.capture_lines"
+        "libtmux_tokio.Pane.capture_lines"
       ],
       "commands": [
         {
@@ -160,7 +160,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "capture-line-flags",
       "name": "Capture with line flags",
@@ -169,7 +169,7 @@
     },
     {
       "apis": [
-        "server.Server.typed_key_bindings"
+        "libtmux_tokio.Server.typed_key_bindings"
       ],
       "commands": [
         {
@@ -179,7 +179,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "list-keys-format",
       "name": "Typed key bindings",
@@ -188,7 +188,7 @@
     },
     {
       "apis": [
-        "options.OptionSchema.accepts"
+        "libtmux_core.options.OptionSchema.required_version"
       ],
       "commands": [
         {
@@ -198,7 +198,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "pane-border-style-per-pane",
       "name": "Per-pane border styles",
@@ -207,8 +207,8 @@
     },
     {
       "apis": [
-        "command.Command",
-        "plan.Plan.run"
+        "libtmux_core.Command",
+        "libtmux_tokio.Server.run_plan"
       ],
       "commands": [
         {
@@ -218,7 +218,7 @@
           ]
         }
       ],
-      "error": "error.Error.UnsupportedCapability",
+      "error": "libtmux_tokio.Error.UnsupportedCapability",
       "handling": "refuse",
       "id": "clipboard-query",
       "name": "Clipboard query",
@@ -234,7 +234,7 @@
   "workarounds": [
     {
       "apis": [
-        "server.Server.run_shell"
+        "libtmux_tokio.Server.run_shell"
       ],
       "commands": [
         {
@@ -252,7 +252,7 @@
     },
     {
       "apis": [
-        "pane.Pane.break_out"
+        "libtmux_tokio.Pane.break_out"
       ],
       "commands": [
         {
@@ -269,8 +269,8 @@
     },
     {
       "apis": [
-        "command.Command",
-        "plan.Plan.run"
+        "libtmux_core.Command",
+        "libtmux_tokio.Server.run_plan"
       ],
       "commands": [
         {
@@ -290,10 +290,10 @@
     },
     {
       "apis": [
-        "server.Server.new_session",
-        "session.Session.new_window",
-        "session.Session.rename",
-        "window.Window.rename"
+        "libtmux_tokio.Server.new_session",
+        "libtmux_tokio.Session.new_window",
+        "libtmux_tokio.Session.rename",
+        "libtmux_tokio.Window.rename"
       ],
       "commands": [
         {

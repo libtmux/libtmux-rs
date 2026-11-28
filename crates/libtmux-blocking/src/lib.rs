@@ -1,0 +1,502 @@
+//! Native blocking subprocess supervision for an explicit tmux socket.
+//!
+//! Requests share the validated operations, object IDs and reply decoders in
+//! `libtmux-core`. Ordinary subprocess requests preserve the tmux 3.3a floor
+//! without acquiring a control client or attaching to a session.
+
+#![doc = include_str!("../README.md")]
+
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::process::Output;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+use libtmux_core::supervision::Budget;
+use libtmux_core::{
+    CommandKind, CreatedSession, CreationNonce, Error, NewSession, OrdinaryPaneObservation,
+    OrdinaryPaneProbe, OrdinaryVersionProbe, PaneId, PaneKey, Reply, TmuxVersion, VersionError,
+};
+
+#[cfg(feature = "control-mode")]
+pub mod control;
+mod mutations;
+mod supervisor;
+
+/// A cancellation signal shared by the caller and its native subprocess.
+///
+/// Cancelling before spawn leaves the request unsubmitted. Cancelling after
+/// spawn stops the owned process group and preserves any complete creation
+/// receipt collected before the interruption.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_blocking::CancellationToken;
+///
+/// let cancellation = CancellationToken::default();
+/// let caller = cancellation.clone();
+/// caller.cancel();
+/// assert!(cancellation.is_cancelled());
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    /// Request cancellation for every holder of this token.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Whether cancellation has been requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// The absolute deadline, stream byte limits and cancellation of one request.
+///
+/// The deadline includes dispatch and collection. Cleanup has a separate,
+/// bounded reporting allowance; an unreaped child retains its admission slot.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::{Duration, Instant};
+/// use libtmux_blocking::RequestOptions;
+///
+/// let mut request = RequestOptions::default();
+/// assert_eq!(request.budget.bytes_per_stream, 1024 * 1024);
+/// request.budget.deadline = Instant::now() + Duration::from_secs(2);
+/// request.budget.bytes_per_stream = 64 * 1024;
+/// request.cancellation.cancel();
+/// assert!(request.cancellation.is_cancelled());
+/// ```
+#[derive(Clone)]
+pub struct RequestOptions {
+    /// The deadline and maximum number of bytes collected from each stream.
+    pub budget: Budget,
+    /// The signal that interrupts collection and starts process cleanup.
+    pub cancellation: CancellationToken,
+}
+
+impl std::fmt::Debug for RequestOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RequestOptions")
+            .field("deadline", &self.budget.deadline)
+            .field("bytes_per_stream", &self.budget.bytes_per_stream)
+            .field("cancellation", &self.cancellation)
+            .finish()
+    }
+}
+
+impl Default for RequestOptions {
+    fn default() -> Self {
+        Self {
+            budget: Budget::starting_at(Instant::now()),
+            cancellation: CancellationToken::default(),
+        }
+    }
+}
+
+/// A native blocking client bound to one absolute Unix socket path.
+///
+/// Clones share subprocess admission and [`Self::close_ordinary`]. No async
+/// runtime is constructed or required. Creation, observation and capture use
+/// ordinary subprocesses; these methods never acquire a control client implicitly.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_blocking::Server;
+///
+/// let server = Server::at("/tmp/libtmux-rs-dev/example/socket")?;
+/// # let _ = server;
+/// # Ok::<_, std::io::Error>(())
+/// ```
+#[derive(Clone, Debug)]
+pub struct Server {
+    socket: PathBuf,
+    executable: OsString,
+    children: supervisor::Children,
+}
+
+impl Server {
+    /// Bind the client to an absolute socket without connecting to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error for a relative socket path.
+    pub fn at(socket: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+        let socket = socket.as_ref();
+        if !socket.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "expected an absolute tmux socket path",
+            ));
+        }
+        Ok(Self {
+            socket: socket.to_owned(),
+            executable: "tmux".into(),
+            children: supervisor::Children::default(),
+        })
+    }
+
+    /// Choose the tmux client executable for subsequent requests.
+    #[must_use]
+    pub fn with_executable(mut self, executable: impl Into<OsString>) -> Self {
+        self.executable = executable.into();
+        self
+    }
+
+    /// Stop ordinary subprocess admission and wait up to one second for cleanup.
+    ///
+    /// All clones permanently stop admitting ordinary subprocesses atomically.
+    /// Admitted workers keep their existing deadlines and cancellation tokens;
+    /// this method does not cancel them. Repeated calls each wait up to one
+    /// second. Success confirms every admitted ordinary child has been reaped.
+    /// The first cleanup failure is retained in a bounded summary and returned
+    /// by every later call, even if its request already returned.
+    ///
+    /// Existing persistent control clients have independent lifetimes and still
+    /// require their own shutdown. New control attachments cannot complete
+    /// qualification after this call because qualification uses ordinary
+    /// subprocesses. Dropping a server does not wait; workers retain ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CleanupPending`] while an admitted worker still owns its
+    /// reservation, or [`Error::Shutdown`] after reaping if cleanup failed or a
+    /// worker panicked. Further ordinary requests return [`Error::Closed`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux_blocking::Server;
+    /// use libtmux_core::Error;
+    ///
+    /// let server = Server::at("/tmp/libtmux-rs-dev/closed/socket")?;
+    /// let clone = server.clone();
+    /// server.close_ordinary()?;
+    /// assert!(matches!(clone.generation(), Err(Error::Closed)));
+    /// clone.close_ordinary()?;
+    /// # Ok::<_, Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn close_ordinary(&self) -> Result<(), Error> {
+        self.children.close_ordinary()
+    }
+
+    /// Create a detached session and retain its generated object identities.
+    ///
+    /// # Errors
+    ///
+    /// A dispatched failure preserves its submission, creation and cleanup
+    /// evidence in [`Error`]. Entropy and startup failures precede submission.
+    pub fn new_session(&self, request: NewSession) -> Result<CreatedSession, Error> {
+        self.new_session_with(request, RequestOptions::default())
+    }
+
+    /// Create a detached session under an explicit deadline and cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same classified failures as [`Self::new_session`], including
+    /// cancellation before spawn and complete receipts collected before interruption.
+    pub fn new_session_with(
+        &self,
+        request: NewSession,
+        options: RequestOptions,
+    ) -> Result<CreatedSession, Error> {
+        let (version, allow_start) = self.creation_version(&options).map_err(before_submission)?;
+        self.create_qualified(request, options, &version, allow_start)
+    }
+
+    fn create_qualified(
+        &self,
+        request: NewSession,
+        options: RequestOptions,
+        version: &TmuxVersion,
+        allow_start: bool,
+    ) -> Result<CreatedSession, Error> {
+        let nonce = fresh_nonce(&options)?;
+        let mut arguments = request.ordinary_arguments(nonce);
+        if !allow_start {
+            arguments.insert(0, "-N".into());
+        }
+        let arguments = version.fence_ordinary_argv(arguments);
+        let (output, late) = self.output(arguments, options, Some(nonce))?;
+        Reply::new(
+            output.status.code(),
+            output.stdout,
+            output.stderr.len(),
+            late,
+        )
+        .ordinary_creation(request, &self.socket, nonce)
+    }
+
+    fn creation_version(&self, options: &RequestOptions) -> Result<(TmuxVersion, bool), Error> {
+        let probe = OrdinaryVersionProbe::new(fresh_nonce(options)?);
+        let (output, late) = self
+            .children
+            .dispatch_probe(self.command(probe.arguments()), options.clone())?;
+        if let Some(version) =
+            probe.decode(output.status.code(), &output.stdout, &output.stderr, late)?
+        {
+            return Ok((version, false));
+        }
+        let (output, late) = self.output(["-V"], options.clone(), None)?;
+        if late {
+            return Err(Error::Deadline);
+        }
+        if !output.status.success() {
+            return Err(VersionError::InvalidVersionOutput {
+                output_len: output.stdout.len(),
+            }
+            .into());
+        }
+        let version = TmuxVersion::parse_executable_output(&self.executable, &output.stdout)?;
+        version.ensure_supported()?;
+        Ok((version, true))
+    }
+
+    /// Read the current daemon's PID and whole-second start time.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the endpoint is absent or tmux cannot report its generation.
+    pub fn generation(&self) -> Result<libtmux_core::ServerGeneration, Error> {
+        self.generation_with(RequestOptions::default())
+    }
+
+    /// Read the daemon generation within the supplied deadline and byte budget.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same failures as [`Self::generation`], and cancellation.
+    pub fn generation_with(
+        &self,
+        options: RequestOptions,
+    ) -> Result<libtmux_core::ServerGeneration, Error> {
+        let probe = libtmux_core::OrdinaryGenerationProbe::new(fresh_nonce(&options)?);
+        let (version, _) = self
+            .creation_version(&options)
+            .map_err(|error| error.during_read(CommandKind::ServerGeneration))?;
+        let (output, late) = self
+            .output(
+                version.fence_ordinary_argv(probe.arguments()),
+                options,
+                None,
+            )
+            .map_err(|error| error.during_read(CommandKind::ServerGeneration))?;
+        probe.decode(output.status.code(), &output.stdout, &output.stderr, late)
+    }
+
+    /// Read owned observations of every session, window, pane or client.
+    ///
+    /// A snapshot keeps the field values returned by this listing. Linked
+    /// windows and their panes appear once, independent of session placement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the daemon, listing, or a complete row cannot be read.
+    pub fn snapshots<S: libtmux_core::Snapshot>(&self) -> Result<Vec<S>, Error> {
+        self.snapshots_with(RequestOptions::default())
+    }
+
+    /// Read snapshots within one deadline and cancellation budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same failures as [`Self::snapshots`].
+    pub fn snapshots_with<S: libtmux_core::Snapshot>(
+        &self,
+        options: RequestOptions,
+    ) -> Result<Vec<S>, Error> {
+        let (version, _) = self
+            .creation_version(&options)
+            .map_err(|error| error.during_read(S::COMMAND))?;
+        let request = libtmux_core::SnapshotList::<S>::new(&version, fresh_nonce(&options)?);
+        let (output, late) = self
+            .output(request.arguments(), options, None)
+            .map_err(|error| error.during_read(S::COMMAND))?;
+        request.decode(
+            output.status.code(),
+            &output.stdout,
+            output.stderr.len(),
+            late,
+        )
+    }
+
+    /// Observe an exact pane ID and bind it to its daemon generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an observation failure when the exact pane, supported daemon
+    /// version or complete metadata reply cannot be established.
+    pub fn observe_pane(&self, pane: PaneId) -> Result<PaneKey, Error> {
+        self.observe_pane_with(pane, RequestOptions::default())
+    }
+
+    /// Observe an exact pane under an explicit deadline and cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same classified failures as [`Self::observe_pane`].
+    pub fn observe_pane_with(
+        &self,
+        pane: PaneId,
+        options: RequestOptions,
+    ) -> Result<PaneKey, Error> {
+        self.probe_pane(pane, options)
+            .map(|observed| observed.key().clone())
+    }
+
+    /// Capture bytes only while the pane's socket and generation still match.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a key from another socket or a stale daemon, and discards
+    /// incomplete, failed or late observation bytes.
+    ///
+    /// # Examples
+    ///
+    /// Read an existing pane using its absolute socket path and ID. This
+    /// program writes the captured bytes only after both reads succeed.
+    ///
+    /// ```no_run
+    /// use std::io::{self, Write};
+    /// use libtmux_blocking::Server;
+    ///
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let mut args = std::env::args_os().skip(1);
+    ///     let socket = args.next().ok_or("pass an absolute socket path")?;
+    ///     let pane = args.next().ok_or("pass a pane ID such as %0")?;
+    ///     let pane = pane.to_str().ok_or("pane ID is not valid UTF-8")?.parse()?;
+    ///     let server = Server::at(socket)?;
+    ///     let key = server.observe_pane(pane)?;
+    ///     let bytes = server.capture(&key)?;
+    ///     server.close_ordinary()?;
+    ///     io::stdout().lock().write_all(&bytes)?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn capture(&self, pane: &PaneKey) -> Result<Vec<u8>, Error> {
+        self.capture_with(pane, RequestOptions::default())
+    }
+
+    /// Capture a generation-checked pane under explicit request limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same classified failures as [`Self::capture`].
+    pub fn capture_with(&self, pane: &PaneKey, options: RequestOptions) -> Result<Vec<u8>, Error> {
+        if pane.server_identity().socket_path() != self.socket {
+            return Err(Error::WrongEndpoint);
+        }
+        let observed = self.probe_pane(pane.id(), options.clone())?;
+        let (output, late) = self
+            .output(
+                observed.capture_arguments(&self.socket, pane)?,
+                options,
+                None,
+            )
+            .map_err(|error| error.during_read(CommandKind::CapturePane))?;
+        observed.decode_capture(output.status.code(), output.stdout, &output.stderr, late)
+    }
+
+    fn probe_pane(
+        &self,
+        pane: PaneId,
+        options: RequestOptions,
+    ) -> Result<OrdinaryPaneObservation, Error> {
+        let probe = OrdinaryPaneProbe::new(pane, fresh_nonce(&options)?);
+        let (output, late) = self
+            .output(probe.arguments(), options, None)
+            .map_err(|error| error.during_read(CommandKind::ListPanes))?;
+        probe.decode(
+            &self.socket,
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+            late,
+        )
+    }
+
+    fn output(
+        &self,
+        args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+        options: RequestOptions,
+        creation_nonce: Option<CreationNonce>,
+    ) -> Result<(Output, bool), Error> {
+        let command = self.command(args);
+        self.children.dispatch_ordinary(
+            command,
+            options,
+            creation_nonce.map(|nonce| (self.socket.clone(), nonce)),
+        )
+    }
+
+    fn command(&self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> std::process::Command {
+        let mut command = std::process::Command::new(&self.executable);
+        command
+            .arg("-S")
+            .arg(&self.socket)
+            .arg("-u")
+            .args(args)
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .env_remove("LIBTMUX_SOCKET")
+            .env_remove("LIBTMUX_SOCKET_PATH");
+        command
+    }
+}
+
+fn before_submission(source: Error) -> Error {
+    if source.effect() == libtmux_core::Effect::NotSubmitted {
+        source
+    } else {
+        Error::AdmissionFailed {
+            source: Box::new(source),
+        }
+    }
+}
+
+fn fresh_nonce(options: &RequestOptions) -> Result<CreationNonce, Error> {
+    supervisor::check_before_spawn(options)?;
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| Error::Spawn(std::io::Error::other(error.to_string())))?;
+    Ok(CreationNonce::from_bytes(bytes))
+}
+
+#[cfg(test)]
+#[path = "../tests/common/native.rs"]
+mod native_contracts;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_socket_cannot_select_an_ambient_server() {
+        let error = Server::at("relative/socket").expect_err("relative socket is refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn cancelled_creation_does_not_start_the_client() {
+        let server = Server::at("/tmp/libtmux-rs-test/unqualified/socket")
+            .expect("absolute socket")
+            .with_executable("/libtmux-blocking-missing-executable");
+        let options = RequestOptions::default();
+        options.cancellation.cancel();
+        let error = server
+            .new_session_with(NewSession::new("refused"), options)
+            .expect_err("request was cancelled before spawn");
+        assert!(matches!(error, Error::CancelledBeforeSpawn));
+        assert_eq!(error.effect(), libtmux_core::Effect::NotSubmitted);
+    }
+}

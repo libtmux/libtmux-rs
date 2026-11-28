@@ -8,5 +8,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    libtmux::__fuzz_environment_listing(data);
+    libtmux_tokio::__fuzz_environment_listing(data);
 });

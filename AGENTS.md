@@ -12,15 +12,19 @@ was asked for.
 
 ## What is here
 
-One Cargo workspace with four published crates and a private developer tool:
+One Cargo workspace with seven publishable crates and two private packages:
 
 | Crate | What it is |
 | --- | --- |
-| `crates/libtmux` | The async tmux client and object model |
+| `crates/libtmux-core` | Pure operations, identities, plans, queries and reply decoding |
+| `crates/libtmux-blocking` | The native blocking tmux client |
+| `crates/libtmux-tokio` | The Tokio tmux client and object model |
+| `crates/libtmux` | The shared domain with optional blocking and Tokio clients |
 | `crates/libtmux-macros` | `#[derive(Filterable)]`, for downstream structs |
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
 | `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
+| `tools/readme-tests` | Executes the Rust examples in the repository README |
 
 `tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
 the workspace's, because it moves at its own pace and its dependencies need a
@@ -63,9 +67,10 @@ twice, the file named above governs.
 ## References
 
 - [design.md](crates/libtmux/docs/design.md) — why the crate is shaped this
-  way: transport, the snapshot and format boundary, the query grammar, control
-  mode, and test architecture
-- [findings.md](crates/libtmux/docs/findings.md) — every tmux defect and
+  way: shared domain, native clients, creation receipts and daemon identity
+- [Tokio design.md](crates/libtmux-tokio/docs/design.md) — the snapshot and
+  format boundary, query grammar, control mode and test architecture
+- [findings.md](crates/libtmux-tokio/docs/findings.md) — every tmux defect and
   platform surprise worked around, and what each gate turned up
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) — the
   documentation baseline `.github/WRITING.md` builds on

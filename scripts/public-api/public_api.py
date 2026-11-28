@@ -27,10 +27,10 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import re
 import sys
 
-# Item kinds that are part of the surface. Modules only contribute paths;
-# trait implementation headers are recorded separately.
+# Trait implementation headers and external re-exports are recorded separately.
 KINDS = {
     "struct",
     "enum",
@@ -52,6 +52,19 @@ KINDS = {
 def lookup(mapping: dict, identifier):
     """Read a rustdoc map whose integer IDs are serialized as strings."""
     return mapping.get(str(identifier)) or mapping.get(identifier)
+
+
+def is_hidden(item: dict) -> bool:
+    """Recognize an item's own `doc(hidden)` in both rustdoc attribute shapes."""
+    for attr in item.get("attrs") or []:
+        text = attr if isinstance(attr, str) else attr.get("other", "")
+        tokens = re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z_]\w*|[^\s]', text)
+        if tokens[:4] == ["#", "[", "doc", "("] and any(
+            token == "hidden" and tokens[at - 1] in {"(", ","} and tokens[at + 1] in {",", ")"}
+            for at, token in enumerate(tokens[1:-1], 1)
+        ):
+            return True
+    return False
 
 
 def render_constant(value) -> str:
@@ -381,6 +394,18 @@ def type_mentions_reachable(value: dict, reachable: dict) -> bool:
     )
 
 
+def referenced_ids(value):
+    """The resolved type and trait paths in a rustdoc signature fragment."""
+    if isinstance(value, dict):
+        if "id" in value and isinstance(value.get("path"), str):
+            yield str(value["id"])
+        for child in value.values():
+            yield from referenced_ids(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from referenced_ids(child)
+
+
 def explicit_impls(index: dict, paths: dict, reachable: dict) -> set[str]:
     lines = set()
     for item in index.values():
@@ -396,6 +421,11 @@ def explicit_impls(index: dict, paths: dict, reachable: dict) -> set[str]:
         ):
             continue
         target = implementation.get("for") or {}
+        if any(
+            lookup(index, identifier) is not None and identifier not in reachable
+            for identifier in referenced_ids(target)
+        ):
+            continue
         if not (str(trait.get("id")) in reachable or type_mentions_reachable(target, reachable)):
             continue
         parameters, where = render_generics(
@@ -440,7 +470,11 @@ def public_paths(index: dict, root, crate: str) -> dict:
 
             for child_id in module.get("items") or []:
                 child = index.get(str(child_id)) or index.get(child_id)
-                if not child or child.get("visibility") not in ("public", "default"):
+                if (
+                    not child
+                    or child.get("visibility") not in ("public", "default")
+                    or is_hidden(child)
+                ):
                     continue
                 inner = child.get("inner") or {}
                 kind = next(iter(inner), None)
@@ -450,14 +484,18 @@ def public_paths(index: dict, root, crate: str) -> dict:
                     target = used.get("id")
                     if target is None:
                         continue
+                    aliased = lookup(index, target)
+                    if aliased and is_hidden(aliased):
+                        continue
                     # A glob puts the module's contents at this path rather
                     # than the module itself.
                     if used.get("is_glob"):
+                        if lookup(index, target) is None:
+                            best.setdefault(str(child_id), f"{prefix}::*")
                         following.append((target, prefix))
                         continue
                     here = f"{prefix}::{used.get('name')}"
                     best.setdefault(str(target), here)
-                    aliased = index.get(str(target)) or index.get(target)
                     if aliased and "module" in (aliased.get("inner") or {}):
                         following.append((target, here))
                     continue
@@ -486,20 +524,15 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
     implemented: set = set()
 
     def name_of(identifier) -> str | None:
-        reached = reachable.get(str(identifier))
-        if reached:
-            return reached
-        summary = paths.get(str(identifier)) or paths.get(identifier)
-        if summary and summary.get("path"):
-            return "::".join(summary["path"])
-        item = index.get(str(identifier)) or index.get(identifier)
-        return item.get("name") if item else None
+        return reachable.get(str(identifier))
 
     for item in index.values():
         inner = item.get("inner") or {}
 
         if "struct" in inner:
             here = name_of(item.get("id"))
+            if here is None:
+                continue
             kind = inner["struct"].get("kind")
             # A unit struct reports its kind as a bare string rather than a
             # map, so it has no fields to attribute.
@@ -514,6 +547,8 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
 
         if "enum" in inner:
             here = name_of(item.get("id"))
+            if here is None:
+                continue
             for child in inner["enum"].get("variants") or []:
                 owner[str(child)] = here
                 # A struct-like variant's fields are items in their own right
@@ -536,23 +571,78 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
 
         if "trait" in inner:
             here = name_of(item.get("id"))
+            if here is None:
+                continue
             for child in inner["trait"].get("items") or []:
                 owner[str(child)] = here
 
         if "impl" in inner:
             target = inner["impl"].get("for") or {}
             resolved = target.get("resolved_path") or {}
-            here = name_of(resolved.get("id")) or resolved.get("path")
+            here = name_of(resolved.get("id"))
             trait = inner["impl"].get("trait") or {}
             # The trait declares its members; its implementation header is
             # recorded separately. Only inherent items need an owner here.
             if trait:
                 implemented.update(str(child) for child in inner["impl"].get("items") or [])
                 continue
+            if here is None:
+                continue
             for child in inner["impl"].get("items") or []:
                 owner[str(child)] = here
 
     return owner, implemented
+
+
+def signature_paths(index: dict, paths: dict, reachable: dict) -> dict:
+    """Include local types exposed by reachable public declarations and members."""
+
+    result = dict(reachable)
+    while True:
+        before = len(result)
+        owner, implemented = parents(index, paths, result)
+        for identifier, item in index.items():
+            if item.get("visibility") not in ("public", "default") or is_hidden(item):
+                continue
+            if str(identifier) in implemented or not (
+                str(identifier) in result or str(identifier) in owner
+            ):
+                continue
+            for reference in referenced_ids(item.get("inner") or {}):
+                target = lookup(index, reference)
+                summary = lookup(paths, reference) or {}
+                if (
+                    target
+                    and not is_hidden(target)
+                    and target.get("visibility") in ("public", "default")
+                    and next(iter(target.get("inner") or {}), None) in KINDS
+                    and summary.get("path")
+                ):
+                    result.setdefault(reference, "::".join(summary["path"]))
+        if len(result) == before:
+            return result
+
+
+def external_reexports(index: dict, paths: dict, reachable: dict) -> set[str]:
+    """Record external aliases whose declarations rustdoc leaves out of its index."""
+    lines = set()
+    for identifier, name in reachable.items():
+        item = lookup(index, identifier)
+        used = (item or {}).get("inner", {}).get("use")
+        if used and used.get("is_glob"):
+            summary = lookup(paths, used.get("id")) or {}
+            if summary.get("path"):
+                source = "::".join(summary["path"])
+                lines.add(f"use {name} = {source}::*")
+            continue
+        if item is not None:
+            continue
+        summary = lookup(paths, identifier) or {}
+        kind = summary.get("kind")
+        if kind in KINDS | {"module"} and summary.get("path"):
+            source = "::".join(summary["path"])
+            lines.add(f"{kind} {name} = {source}")
+    return lines
 
 
 def surface(path: str) -> list[str]:
@@ -565,15 +655,20 @@ def surface(path: str) -> list[str]:
     root = doc["root"]
     summary = paths.get(str(root)) or paths.get(root) or {}
     crate = (summary.get("path") or ["crate"])[0]
-    reachable = public_paths(index, root, crate)
+    reachable = signature_paths(index, paths, public_paths(index, root, crate))
     owner, implemented = parents(index, paths, reachable)
     lines = set()
 
     for item in index.values():
-        if item.get("visibility") not in ("public", "default"):
+        if item.get("visibility") not in ("public", "default") or is_hidden(item):
             continue
         inner = item.get("inner") or {}
         kind = next(iter(inner), None)
+        if kind == "module":
+            name = reachable.get(str(item.get("id")))
+            if name is not None:
+                lines.add(f"module {name}")
+            continue
         if kind not in KINDS:
             continue
 
@@ -582,7 +677,6 @@ def surface(path: str) -> list[str]:
             continue
         reached = reachable.get(str(identifier))
         held_by = owner.get(str(identifier))
-        summary = paths.get(str(identifier)) or paths.get(identifier)
         # The owner is consulted before rustdoc's own path because rustdoc
         # carries a path for a method too, and it is the one under the private
         # module the type was defined in rather than the one it is reached by.
@@ -590,16 +684,13 @@ def surface(path: str) -> list[str]:
             name = reached
         elif held_by and item.get("name"):
             name = f"{held_by}::{item['name']}"
-        elif summary and summary.get("path"):
-            name = "::".join(summary["path"])
-        elif item.get("name"):
-            name = item["name"]
         else:
             continue
 
         lines.add(f"{kind} {name}{item_suffix(kind, inner[kind], paths, reachable)}")
 
     lines.update(explicit_impls(index, paths, reachable))
+    lines.update(external_reexports(index, paths, reachable))
     return sorted(lines)
 
 

@@ -26,8 +26,8 @@
 [License]: https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg
 [license]: https://github.com/libtmux/libtmux-rs/blob/master/LICENSE-MIT
 
-**Drive tmux from Rust: typed, async control over servers, sessions, windows
-and panes, and typed queries over what is running.**
+Drive tmux from Rust using a native blocking client or Tokio. Both clients
+share session, window and pane IDs, creation requests and receipts.
 
 </div>
 
@@ -54,33 +54,91 @@ Protocol.
 
 ## Quick start
 
-In a Cargo binary project, enable the fixture used by the examples:
+The native drivers are unpublished and available from this checkout.
+Published `libtmux` 0.1.2 has the earlier root async API and a Tokio-backed
+blocking bridge; its [released guide][released-guide] covers that API.
+
+With a binary project next to the `libtmux-rs` directory, add the default
+blocking client:
 
 ```console
-$ cargo add libtmux --features test-support
+$ cargo add libtmux --path ../libtmux-rs/crates/libtmux
 ```
 
-Add Tokio to run the async entrypoint:
+Save this as `src/main.rs`. [`blocking::Server::at`][blocking-server-at] selects
+the socket. The program creates a session, observes its pane key and kills
+the session:
+
+[blocking-server-at]: https://libtmux.org/en/rs/latest/reference/libtmux_blocking-server-at/
+
+<!-- blocking-example -->
+
+```rust,no_run
+use libtmux::{NewSession, blocking::Server};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let socket = std::env::args_os().nth(1).ok_or("pass an absolute socket path")?;
+    let server = Server::at(socket)?;
+    let created = server.new_session(NewSession::new("readme").command("sleep 30"))?;
+    let observed = server.observe_pane(created.pane().id());
+    server.kill_created_session(&created)?;
+    server.close_ordinary()?;
+    assert_eq!(&observed?, created.pane());
+    println!("created and cleaned one session");
+    Ok(())
+}
+```
+
+<!-- /blocking-example -->
+
+Pass an absolute socket path in a private directory you own. These commands
+choose a separate endpoint for this program:
+
+```console
+$ mkdir -p /tmp/libtmux-rs-dev
+```
+
+```console
+$ directory=$(mktemp -d /tmp/libtmux-rs-dev/readme.XXXXXX)
+```
+
+```console
+$ cargo run -- "$directory/socket"
+```
+
+It prints `created and cleaned one session`. The program kills the session it
+created even if observing its pane fails.
+
+### Use the Tokio client
+
+The [complete Tokio quick start](crates/libtmux-tokio/README.md#quick-start)
+lists session names from an absolute socket path you supply and shuts down
+its client. It borrows the daemon and preserves its sessions.
+
+Follow its checkout dependency setup and save the program as `src/main.rs`.
+Pass the socket of an existing server with `cargo run -- /absolute/path/to/socket`.
+The program needs no fixture feature.
+
+The [mixed-client example](crates/libtmux/examples/api_mixed.rs) creates a
+session outside the runtime, then passes the new pane's key to a Tokio capture.
+
+### Run the isolated examples
+
+The Tokio examples below create private test servers. For those examples,
+enable the fixture and the capabilities they use:
+
+```console
+$ cargo add libtmux --path ../libtmux-rs/crates/libtmux --features tokio,test-support,plan,query,control-mode
+```
 
 ```console
 $ cargo add tokio --features rt-multi-thread,macros
 ```
 
-<details>
-<summary>Cargo.toml</summary>
-
-```toml
-[dependencies]
-libtmux = { version = "0.1.2", features = ["test-support"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-```
-
-</details>
-
 Create a session and a window, type into the pane, and check what tmux holds:
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux::tokio::test::TestServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,7 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
 
-    let session = server.new_session("work").await?;
+    let receipt = server.new_session("work").await?;
+
+    let session = server.inspect_session(&receipt).await?;
     let window = session.new_window("editor").await?;
     let pane = window.active_pane().await?.expect("the new window has a pane");
 
@@ -103,29 +163,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-- **Throwaway tmux.** Every example on this page runs on a socket of its own,
-  not yours.
-- **Your own server.** Use `libtmux::Server::new()?` in place of the guard, and
+- **Throwaway tmux.** The quick start names its private socket explicitly.
+  The Tokio examples use an owned test server.
+- **Your own server.** Use `libtmux::tokio::Server::new()?` in place of the guard, and
   omit `guard.shutdown()`. It needs no `test-support` feature.
 - **Which server.** With neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET`
   set, `Server::new` names no socket and tmux chooses the server.
 
-Everything that reaches tmux is `async`. Reading a snapshot you already hold is
-not, so walking it costs no round trips.
+The Tokio client awaits operations that contact tmux. Both clients can read
+an existing creation receipt without another round trip.
 
 ## Is this for you?
 
+The blocking typed API provides `new_session`, `generation`, `snapshots`,
+`observe_pane`, `capture`, `kill_created_session` and `unlink_window`.
+Its `control-mode` feature adds an explicit checked raw command connection.
+
+Tokio adds live session, window and pane handles, typed queries, plan
+execution and fallible output streams. The examples below use that client.
+
 | You want to | Use |
 | --- | --- |
-| Script tmux from Rust, async | [`libtmux`](crates/libtmux) |
-| Ask "which pane/window/session matches X?" | [`libtmux`](crates/libtmux) query layer, below |
+| Use the blocking operations above without Tokio | [`libtmux-blocking`](crates/libtmux-blocking), or [`libtmux`](crates/libtmux) with its default features |
+| Drive live session, window and pane handles asynchronously | [`libtmux-tokio`](crates/libtmux-tokio), or the facade's `tokio` feature |
+| Ask "which pane/window/session matches X?" | The Tokio query layer, below |
 | Let an AI agent read and drive tmux | [`tmux-mcp`](crates/tmux-mcp) |
-| Filter *your own* structs with the same grammar | [`libtmux-macros`](crates/libtmux-macros) |
+| Filter your own structs with the same grammar | [`libtmux-macros`](crates/libtmux-macros) |
 | Load tmuxp workspaces from the command line, or build them from Rust | [`tmux-workspace`](crates/tmux-workspace) |
 
-Not for you if you need Windows without WSL, because tmux does not run there,
-or a synchronous-first API. A blocking caller drives the async API through
-[`blocking::Runtime`].
+Not for you if you need Windows without WSL, because tmux does not run there.
+
+[released-guide]: https://github.com/libtmux/libtmux-rs/blob/1027012583abdc8b07ea0fd071e0c6cacb051278/README.md
 
 ## Work in panes
 
@@ -138,13 +206,13 @@ you name, and [`Pane::resize`] and [`Window::resize`] set a size in cells:
 ```rust
 use std::time::Duration;
 
-use libtmux::test::TestServer;
-use libtmux::{PaneWait, SplitDirection, SplitOptions};
+use libtmux::tokio::test::TestServer;
+use libtmux::tokio::{PaneWait, SplitDirection, SplitOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
-    let session = guard.server().new_session("work").await?;
+    let session = guard.session("work").await?;
     let mut window = session
         .active_window()
         .await?
@@ -189,8 +257,8 @@ for a field is a compile error rather than an empty result:
 ```rust
 use std::time::Duration;
 
-use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::test::{TestServer, retry_until};
+use libtmux::tokio::query::{Filterable as _, QueryIteratorExt as _};
+use libtmux::tokio::test::{TestServer, retry_until};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -198,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = guard.server();
     server.new_session("work").await?;
 
-    let fields = libtmux::Pane::filter_fields();
+    let fields = libtmux::tokio::Pane::filter_fields();
 
     // `pane_active` is a flag, so `.eq(true)` compiles; `.gt(..)` would not.
     let active = fields
@@ -228,16 +296,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Ask what a session *contains*, and the relation is part of the expression:
 
 ```rust
-use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::test::TestServer;
-use libtmux::{SessionTree, WindowTree};
+use libtmux::tokio::query::{Filterable as _, QueryIteratorExt as _};
+use libtmux::tokio::test::TestServer;
+use libtmux::tokio::{SessionTree, WindowTree};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
 
-    let building = server.new_session("ci").await?;
+    let receipt = server.new_session("ci").await?;
+
+    let building = server.inspect_session(&receipt).await?;
     building.new_window("build").await?;
     server.new_session("idle").await?;
 
@@ -247,8 +317,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .windows
         .any(windows.window.window_name.eq("build"));
 
-    // `hierarchy` gathers the whole tree in three tmux commands, not one
-    // per object.
+    // One generation probe and three listings gather the whole tree,
+    // regardless of object count.
     let matched: Vec<_> = server
         .hierarchy()
         .await?
@@ -282,14 +352,16 @@ reach it.
   called on.
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux::tokio::test::TestServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
 
-    let session = server.new_session("work").await?;
+    let receipt = server.new_session("work").await?;
+
+    let session = server.inspect_session(&receipt).await?;
     let mut editor = session.new_window("editor").await?;
 
     // A second handle to the same window renames it.
@@ -316,46 +388,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Pick how commands reach tmux
 
-### [`Plan::run`]: the same work at different costs
-
-[Three switches] set what a run costs. This is the baseline workload under
-each, printed by `cargo run --example matrix --all-features -- --baseline`.
-
-- `wall` is one run on one developer machine; the other columns are exact.
-- `processes` is counted: the example runs tmux through a wrapper that logs
-  each start.
-- `routed` is [`Plan::run`] on a [`Server::over_control_mode`] handle.
-
-<!-- example-output: matrix --all-features -- --baseline -->
-
-```text
-mode                     feature            dispatches processes      wall  attribution  query output
-----------------------------------------------------------------------------------------------------------------------
-blocking/sequential      plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
-async/sequential         plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
-async/folded             plan                        3         4     10ms  merged       2 panes, 2 windows, 2 active
-async/marked-fold        plan                        3         4     10ms  merged       2 panes, 2 windows, 2 active
-
-every mode built the same thing: true
-dispatches ranged 3..6, processes ranged 4..7
-
-the same failure, dispatched two ways:
-  Sequential   1 dispatch(es) -> [Failed, Skipped]
-  Folding      1 dispatch(es) -> [Unknown, Unknown]
-  Sequential names the failing operation; Folding cannot, because tmux
-  reports one status for the group whichever member failed.
-```
-
-The result is the same. The cost differs, and so does what a failure tells you:
-
-- **[Folding]** a chain into one tmux invocation halves the dispatches. tmux
-  reports one status for the group, so a failure is not blamed on a member:
-  attribution becomes `unknown`.
-- **[Control mode]** keeps per-command attribution over one connection. Run the
-  example without `-- --baseline` to add its rows, on tmux 3.7 or newer.
-
-[The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
-has the behavior table, the how-to-turn-it-on table, and the named presets.
+A plan contains typed operations and references to objects that earlier steps
+will create. The Tokio client submits the plan. Each acknowledged session
+returns the same receipt as an immediate call.
 
 ### [`Planner::explain`]: chain commands, and see what each step costs
 
@@ -368,18 +403,11 @@ planner how it would group them before anything runs:
 - [`Planner::Marked`] also folds in the first commands sent to a new pane.
 
 ```rust
-# // `plan` is behind a Cargo feature, so the example is compiled only when it
-# // is on.
-# #[cfg(not(feature = "plan"))]
-# fn main() {}
-# #[cfg(feature = "plan")]
-use libtmux::plan::{
+use libtmux::tokio::plan::{
     NewSession, Plan, Planner, SendKeys, SplitWindow, StepReason,
 };
-# #[cfg(feature = "plan")]
-use libtmux::test::TestServer;
+use libtmux::tokio::test::TestServer;
 
-# #[cfg(feature = "plan")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
@@ -406,7 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [StepReason::CreatesId, StepReason::CreatesId, StepReason::Folded],
     );
 
-    let result = plan.run(server, Planner::Marked).await?;
+    let result = server.run_plan(&plan, Planner::Marked).await?;
     assert!(result.is_complete());
     assert_eq!(result.dispatches(), 2);
 
@@ -415,9 +443,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-[`Plan::run_over_control_mode`] sends the same plan down one control connection
-instead. More:
-[the `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux).
+A qualified control sender can execute the same plan with `sender.run_plan(&plan)`. More:
+[the `libtmux` guide](crates/libtmux-tokio/README.md#choosing-how-commands-reach-tmux).
 
 ## Watch tmux change
 
@@ -425,29 +452,22 @@ instead. More:
 
 Control mode keeps one tmux client attached. It needs the `control-mode`
 feature and tmux 3.7 or newer. [`ControlSender::subscribe`] has tmux watch a
-format and report each change, so nothing polls, and
-[`Server::over_control_mode`] sends every typed call down the same connection:
+numeric or ID projection. [`Server::over_control_mode`] lets a typed handle
+share the connection. The example waits for tmux to report the window count.
 
 ```rust
-# // `control` is behind `control-mode`, so the example is compiled only when
-# // that feature is on.
-# #[cfg(not(feature = "control-mode"))]
-# fn main() {}
-# #[cfg(feature = "control-mode")]
-use libtmux::control::{ControlMode, Event, Subscription};
-# #[cfg(feature = "control-mode")]
-use libtmux::test::TestServer;
+use libtmux::tokio::control::{ControlMode, Event, Subscription};
+use libtmux::tokio::test::TestServer;
 
-# #[cfg(feature = "control-mode")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
-# let version = guard.server().capabilities().await?.tmux_version().clone();
-# if !version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
+# let version = guard.server().daemon_version().await?;
+# if !version.has_behavior(&libtmux::tokio::since::CONTROL_ACQUISITION) {
 #     guard.shutdown().await?;
 #     return Ok(());
 # }
-    let session = guard.server().new_session("watching").await?;
+    let session = guard.session("watching").await?;
     let (commands, mut events) =
         ControlMode::attach(guard.server(), session.id())
             .await?
@@ -479,7 +499,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 It prints `windows = 1`. tmux reports a value at most once a second, and says
 what it became, not the steps between. More:
-[the `libtmux` guide](crates/libtmux/README.md#watch-tmux-change).
+[the `libtmux` guide](crates/libtmux-tokio/README.md#watch-tmux-change).
 
 ## Load workspaces from YAML
 
@@ -519,7 +539,10 @@ it into an MCP client.
 
 | Crate | Version | What it is |
 | --- | --- | --- |
-| [`libtmux`](crates/libtmux) | [![libtmux]][libtmux-crate] | The async tmux client and object model |
+| [`libtmux`](crates/libtmux) | [![libtmux]][libtmux-crate] | Shared types and native client namespaces |
+| [`libtmux-core`](crates/libtmux-core) | Source checkout | Offline types, commands and receipts |
+| [`libtmux-blocking`](crates/libtmux-blocking) | Source checkout | Native blocking client |
+| [`libtmux-tokio`](crates/libtmux-tokio) | Source checkout | Tokio client and control driver |
 | [`libtmux-macros`](crates/libtmux-macros) | [![libtmux-macros]][macros-crate] | `#[derive(Filterable)]`, for your own structs |
 | [`tmux-mcp`](crates/tmux-mcp) | [![tmux-mcp]][mcp-crate] | A Model Context Protocol server over tmux |
 | [`tmux-workspace`](crates/tmux-workspace) | [![tmux-workspace]][workspace-crate] | A tmuxp-style YAML builder |
@@ -531,8 +554,7 @@ it into an MCP client.
 
 ### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux)
 
-The async tmux client and object model: typed handles for servers, sessions,
-windows and panes, and the query layer over them.
+The facade exports the shared types and concrete blocking and Tokio clients.
 
 [![libtmux]][libtmux-crate] [API reference][libtmux-api] ·
 [docs.rs][libtmux-docsrs] · [Guide][libtmux-guide] ·
@@ -606,11 +628,9 @@ $ claude mcp add tmux \
 
 ## What it leaves out
 
-- **A synchronous API.** Blocking callers drive the async API through
-  [`blocking::Runtime`].
 - **Native Windows.** tmux does not run there, so use WSL.
 - **A mock tmux.** Tests run against a real tmux, because what tmux answers is
-  the thing under test. [`libtmux::test::TestServer`] gives each test an
+  the thing under test. [`libtmux::tokio::test::TestServer`] gives each test an
   isolated socket.
 - **Proc macros in `libtmux` itself.** Its own [`Filterable`] implementations
   are hand-written, and the derive exists for structs outside this workspace.
@@ -659,42 +679,39 @@ Licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT). Part of the
 [tmux-support]: https://libtmux.org/en/tmux/guides/tmux-support/
 [tmux-rc]: https://libtmux.org/en/tmux/guides/tmux-support/#release-candidates
 
-[Typed field handles]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
-[versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
+[Typed field handles]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable-filter_fields/
+[versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterexpr/
 [Three switches]: https://libtmux.org/en/rs/latest/concepts/transports/
-[Folding]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-folding/
-[`Window::refresh`]: https://libtmux.org/en/rs/latest/reference/window-window-refresh/
-[`Window::refreshed`]: https://libtmux.org/en/rs/latest/reference/window-window-refreshed/
-[`Session`]: https://libtmux.org/en/rs/latest/reference/session-session/
-[`Pane`]: https://libtmux.org/en/rs/latest/reference/pane-pane/
-[`Plan::run`]: https://libtmux.org/en/rs/latest/reference/plan-plan-run/
-[`Plan::run_over_control_mode`]: https://libtmux.org/en/rs/latest/reference/plan-plan-run_over_control_mode/
-[`Planner::explain`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-explain/
-[`Planner::Sequential`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-sequential/
-[`Planner::Folding`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-folding/
-[`Planner::Marked`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner-marked/
-[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/control-controlmode-attach/
-[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/control-controlsender-subscribe/
-[`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/server-server-over_control_mode/
-[Control mode]: https://libtmux.org/en/rs/latest/reference/control-controlmode/
-[`run_shell`]: https://libtmux.org/en/rs/latest/reference/server-server-run_shell/
-[`Filterable`]: https://libtmux.org/en/rs/latest/reference/query-filterable/
-[`libtmux::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
-[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
-[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_line/
-[`Window::split`]: https://libtmux.org/en/rs/latest/reference/window-window-split/
-[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/pane-pane-split/
-[`Pane::kill`]: https://libtmux.org/en/rs/latest/reference/pane-pane-kill/
-[`Pane::resize`]: https://libtmux.org/en/rs/latest/reference/pane-pane-resize/
-[`Window::resize`]: https://libtmux.org/en/rs/latest/reference/window-window-resize/
-[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture/
-[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture_with/
-[`Window::kill`]: https://libtmux.org/en/rs/latest/reference/window-window-kill/
-[`Session::kill`]: https://libtmux.org/en/rs/latest/reference/session-session-kill/
-[`Server::kill`]: https://libtmux.org/en/rs/latest/reference/server-server-kill/
-[`Session::set_option`]: https://libtmux.org/en/rs/latest/reference/session-session-set_option/
-[`Session::typed_option`]: https://libtmux.org/en/rs/latest/reference/session-session-typed_option/
-[`Session::set_hook`]: https://libtmux.org/en/rs/latest/reference/session-session-set_hook/
-[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-sessiontree/
-[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-windowtree/
-[`blocking::Runtime`]: https://libtmux.org/en/rs/latest/reference/blocking-runtime/
+[Folding]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-folding/
+[`Window::refresh`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-refresh/
+[`Window::refreshed`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-refreshed/
+[`Session`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session/
+[`Pane`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane/
+[`Planner::explain`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-explain/
+[`Planner::Sequential`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-sequential/
+[`Planner::Folding`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-folding/
+[`Planner::Marked`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-plan-planner-marked/
+[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlmode-attach/
+[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlsender-subscribe/
+[`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-over_control_mode/
+[Control mode]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-control-controlmode/
+[`run_shell`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-run_shell/
+[`Filterable`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable/
+[`libtmux::tokio::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-test-testserver/
+[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable-filter_fields/
+[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-send_line/
+[`Window::split`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-split/
+[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-split/
+[`Pane::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-kill/
+[`Pane::resize`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-resize/
+[`Window::resize`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-resize/
+[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-capture/
+[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-pane-capture_with/
+[`Window::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-window-kill/
+[`Session::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-kill/
+[`Server::kill`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-kill/
+[`Session::set_option`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-set_option/
+[`Session::typed_option`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-typed_option/
+[`Session::set_hook`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-session-set_hook/
+[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-sessiontree/
+[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-windowtree/

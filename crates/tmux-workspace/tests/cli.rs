@@ -30,7 +30,7 @@ async fn old_daemon_refuses_load_before_scripts_or_mutation() {
     let Some(binary) = gated("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
         return;
     };
-    let guard = libtmux::test::TestServer::builder()
+    let guard = libtmux_tokio::test::TestServer::builder()
         .tmux_executable(&binary)
         .start()
         .await
@@ -104,7 +104,7 @@ async fn obsolete_python_backend_refuses_before_extension_imports() {
     let Some(python) = gated("LIBTMUX_TEST_OBSOLETE_PYTHON") else {
         return;
     };
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("bridge-keeper").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
@@ -153,7 +153,7 @@ async fn qualified_python_bridge_builds_on_the_minimum_daemon() {
     ) else {
         return;
     };
-    let guard = libtmux::test::TestServer::builder()
+    let guard = libtmux_tokio::test::TestServer::builder()
         .tmux_executable(binary)
         .start()
         .await
@@ -190,14 +190,14 @@ async fn qualified_python_bridge_builds_on_the_minimum_daemon() {
             .await
             .unwrap()
             .get("BRIDGE_CALLED"),
-        Some(&libtmux::EnvironmentEntry::Set("yes".into()))
+        Some(&libtmux_tokio::EnvironmentEntry::Set("yes".into()))
     );
     guard.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn outside_tmux_attach_requires_terminal_before_scripts_or_session_mutation() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -262,7 +262,7 @@ async fn outside_tmux_attach_requires_terminal_before_scripts_or_session_mutatio
 /// client an owned terminal while the load itself has none.
 #[tokio::test]
 async fn inside_tmux_attach_switches_an_attached_client_without_a_terminal() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let client = AttachedClient::new(&guard, keeper.id().as_ref());
@@ -306,7 +306,7 @@ async fn inside_tmux_attach_switches_an_attached_client_without_a_terminal() {
 /// mutation, so none of them leaves a session behind.
 #[tokio::test]
 async fn unusable_attach_context_refuses_before_building_anything() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let socket = guard.socket_path().display().to_string();
@@ -377,7 +377,7 @@ async fn unusable_attach_context_refuses_before_building_anything() {
 /// reads `TMUX` the same way, so an attached load accepts it too.
 #[tokio::test]
 async fn attach_accepts_matching_explicit_and_inherited_comma_socket_paths() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let client = AttachedClient::new(&guard, keeper.id().as_ref());
@@ -422,7 +422,7 @@ async fn attach_accepts_matching_explicit_and_inherited_comma_socket_paths() {
 struct AttachedClient(std::process::Child);
 
 impl AttachedClient {
-    fn new(guard: &libtmux::test::TestServer, session: &str) -> Self {
+    fn new(guard: &libtmux_tokio::test::TestServer, session: &str) -> Self {
         let child = Command::new("python3")
             .arg(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -466,11 +466,11 @@ impl Drop for AttachedClient {
 }
 
 /// Waits for session attachment after tmux registers its client.
-async fn wait_for_client(server: &libtmux::Server, session: &str) {
+async fn wait_for_client(server: &libtmux_tokio::Server, session: &str) {
     for _ in 0..600 {
         let attached = server
             .cmd(
-                libtmux::Command::new("display-message")
+                libtmux_tokio::Command::new("display-message")
                     .arg("-p")
                     .arg("-t")
                     .arg(session)
@@ -495,7 +495,7 @@ async fn wait_for_client(server: &libtmux::Server, session: &str) {
 /// running or has never been started.
 #[tokio::test]
 async fn cross_server_attach_refuses_before_building_whether_or_not_the_target_runs() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -506,7 +506,7 @@ async fn cross_server_attach_refuses_before_building_whether_or_not_the_target_r
     )
     .unwrap();
 
-    let other = libtmux::test::TestServer::new().await.unwrap();
+    let other = libtmux_tokio::test::TestServer::new().await.unwrap();
     let output = at_pane(
         &[
             "load",
@@ -551,7 +551,7 @@ async fn cross_server_attach_refuses_before_building_whether_or_not_the_target_r
 /// load still builds and switches, exit 0, no terminal needed.
 #[tokio::test]
 async fn run_shell_style_load_has_no_terminal_and_no_tmux_pane() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.json"),
@@ -593,7 +593,7 @@ async fn run_shell_style_load_has_no_terminal_and_no_tmux_pane() {
 /// until a later rename, which the loader's exit can precede.
 #[tokio::test]
 async fn automatic_rename_is_enabled_only_once_the_panes_shell_has_drawn() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let log = directory.path().join("set-option.log");
     // Record the cursor of the window's pane each time a window option is set:
@@ -601,7 +601,7 @@ async fn automatic_rename_is_enabled_only_once_the_panes_shell_has_drawn() {
     guard
         .server()
         .cmd(
-            libtmux::Command::new("set-hook")
+            libtmux_tokio::Command::new("set-hook")
                 .arg("-g")
                 .arg("after-set-option")
                 .arg(format!(
@@ -614,7 +614,7 @@ async fn automatic_rename_is_enabled_only_once_the_panes_shell_has_drawn() {
     // A shell that takes a moment to start, so the pane is still forking when
     // an early option lands, however fast this machine is.
     let slow = directory.path().join("slow-shell");
-    libtmux::test::install_executable(&slow, "#!/bin/sh\nsleep 0.4\nexec /bin/sh\n").unwrap();
+    libtmux_tokio::test::install_executable(&slow, "#!/bin/sh\nsleep 0.4\nexec /bin/sh\n").unwrap();
     std::fs::write(
         directory.path().join("ws.json"),
         serde_json::json!({"session_name":"renamed","global_options":{"default-shell":slow},"windows":[
@@ -651,7 +651,7 @@ async fn automatic_rename_is_enabled_only_once_the_panes_shell_has_drawn() {
 
 #[tokio::test]
 async fn load_sizes_a_created_session_from_tmuxp_environment_variables() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("ws.json"),
@@ -699,11 +699,11 @@ async fn load_passes_no_explicit_size_when_detection_is_disabled() {
     // TMUXP_DEFAULT_COLUMNS/ROWS or the 80x24 fallback: no -x/-y reaches
     // new-session at all, so tmux sizes it from the server's own
     // default-size instead.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard
         .server()
         .cmd(
-            libtmux::Command::new("set-option")
+            libtmux_tokio::Command::new("set-option")
                 .arg("-g")
                 .arg("default-size")
                 .arg("222x55"),
@@ -775,7 +775,7 @@ async fn load_rejects_an_out_of_range_dimension_before_any_target_lookup() {
 
 #[tokio::test]
 async fn layout_preflight_checks_all_inputs_before_scripts_or_append() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("layout-cli-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -833,7 +833,7 @@ async fn layout_preflight_checks_all_inputs_before_scripts_or_append() {
 async fn real_tmux_compat_layout_preflight_corpus_preserves_keeper() {
     let corpus: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/layout-preflight.json")).unwrap();
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("layout-corpus-keeper").await.unwrap();
     let windows = keeper
         .windows()
@@ -850,7 +850,7 @@ async fn real_tmux_compat_layout_preflight_corpus_preserves_keeper() {
         .map(|pane| pane.id().clone())
         .collect::<Vec<_>>();
     let version = guard.server().capabilities().await.unwrap().tmux_version();
-    let key = if version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS) {
+    let key = if version.has_behavior(&libtmux_tokio::since::MIRRORED_LAYOUTS) {
         "3.7c"
     } else {
         "3.2a"
@@ -925,7 +925,7 @@ fn at(arguments: &[&str], directory: &Path) -> Output {
 fn at_pane(
     arguments: &[&str],
     directory: &Path,
-    current: Option<(&libtmux::test::TestServer, &str)>,
+    current: Option<(&libtmux_tokio::test::TestServer, &str)>,
 ) -> Output {
     let mut command = command_at(arguments, directory);
     if let Some((guard, pane)) = current {
@@ -952,7 +952,7 @@ fn command_at(arguments: &[&str], directory: &Path) -> Command {
     command
 }
 
-async fn current_pane(session: &libtmux::Session) -> String {
+async fn current_pane(session: &libtmux_tokio::Session) -> String {
     session
         .active_window()
         .await
@@ -967,11 +967,11 @@ async fn current_pane(session: &libtmux::Session) -> String {
 }
 
 /// Waits until a pane's shell has drawn a prompt and can receive input.
-async fn prompt_ready(server: &libtmux::Server, pane: &str) {
+async fn prompt_ready(server: &libtmux_tokio::Server, pane: &str) {
     for _ in 0..600 {
         let reading = server
             .cmd(
-                libtmux::Command::new("display-message")
+                libtmux_tokio::Command::new("display-message")
                     .arg("-p")
                     .arg("-t")
                     .arg(pane)
@@ -994,21 +994,22 @@ async fn prompt_ready(server: &libtmux::Server, pane: &str) {
 /// command, waits for the question, answers by keystroke, and waits for the
 /// shell prompt to return, never by piping stdin.
 struct PromptDriver<'a> {
-    guard: &'a libtmux::test::TestServer,
-    keeper: &'a libtmux::Session,
+    guard: &'a libtmux_tokio::test::TestServer,
+    keeper: &'a libtmux_tokio::Session,
     binary: &'a str,
     socket: &'a str,
     directory: &'a Path,
 }
 
 impl PromptDriver<'_> {
-    async fn ask(&self, load_args: &str, prompt_needle: &str, answer: char) -> libtmux::Pane {
+    async fn ask(&self, load_args: &str, prompt_needle: &str, answer: char) -> libtmux_tokio::Pane {
         let client = AttachedClient::new(self.guard, self.keeper.id().as_ref());
         wait_for_client(self.guard.server(), self.keeper.id().as_ref()).await;
         let window = self
             .keeper
             .new_window(
-                libtmux::NewWindowOptions::unnamed().start_directory(self.directory.to_path_buf()),
+                libtmux_tokio::NewWindowOptions::unnamed()
+                    .start_directory(self.directory.to_path_buf()),
             )
             .await
             .unwrap();
@@ -1042,7 +1043,7 @@ const NEW_SESSION_PROMPT: &str = "load detached (n)";
 /// New session, inside tmux, answered "n": builds detached, never appends.
 #[tokio::test]
 async fn new_session_prompt_answered_detached_builds_without_appending() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("keeper").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
@@ -1082,7 +1083,7 @@ async fn new_session_prompt_answered_detached_builds_without_appending() {
 /// by the workspaces.
 #[tokio::test]
 async fn new_session_prompt_answered_append_appends_the_current_session() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("keeper").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
@@ -1131,7 +1132,7 @@ async fn new_session_prompt_answered_append_appends_the_current_session() {
 /// never happened.
 #[tokio::test]
 async fn exists_prompt_answered_no_changes_nothing() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("keeper").await.unwrap();
     let existing = guard.session("already-there").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -1176,7 +1177,7 @@ async fn exists_prompt_answered_no_changes_nothing() {
 /// its session as it was.
 #[tokio::test]
 async fn only_the_last_input_is_asked_about() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("keeper").await.unwrap();
     let existing = guard.session("already-there").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -1229,8 +1230,8 @@ async fn only_the_last_input_is_asked_about() {
 async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mutation() {
     use std::os::unix::fs::symlink;
 
-    let original = libtmux::test::TestServer::new().await.unwrap();
-    let replacement = libtmux::test::TestServer::new().await.unwrap();
+    let original = libtmux_tokio::test::TestServer::new().await.unwrap();
+    let replacement = libtmux_tokio::test::TestServer::new().await.unwrap();
     let first = original.session("original").await.unwrap();
     let second = replacement.session("replacement").await.unwrap();
     let pane = current_pane(&first).await;
@@ -1241,7 +1242,8 @@ async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mu
     symlink(original.socket_path(), &alias).unwrap();
     let marker = directory.path().join("python-called");
     let python = directory.path().join("python-sentinel");
-    libtmux::test::install_executable(&python, "#!/bin/sh\n: > python-called\nexit 97\n").unwrap();
+    libtmux_tokio::test::install_executable(&python, "#!/bin/sh\n: > python-called\nexit 97\n")
+        .unwrap();
     let mut failures = Vec::new();
     for retarget in [false, true] {
         if retarget {
@@ -1253,13 +1255,13 @@ async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mu
         } else {
             replacement.socket_path()
         };
-        let live = libtmux::Server::builder()
+        let live = libtmux_tokio::Server::builder()
             .socket_path(selected)
             .tmux_executable(original.server().tmux_executable())
             .build()
             .unwrap()
             .cmd(
-                libtmux::Command::new("display-message")
+                libtmux_tokio::Command::new("display-message")
                     .arg("-p")
                     .arg("#{pid}"),
             )
@@ -1320,7 +1322,7 @@ async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mu
 
 #[tokio::test]
 async fn append_accepts_matching_explicit_and_inherited_comma_socket_paths() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard.session("borrowed").await.unwrap();
     let pane = current_pane(&session).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -1358,7 +1360,7 @@ async fn append_accepts_matching_explicit_and_inherited_comma_socket_paths() {
         guard
             .server()
             .cmd(
-                libtmux::Command::new("display-message")
+                libtmux_tokio::Command::new("display-message")
                     .arg("-p")
                     .arg("-t")
                     .arg(&pane)
@@ -1376,7 +1378,7 @@ async fn append_accepts_matching_explicit_and_inherited_comma_socket_paths() {
 async fn empty_tmux_context_allows_freezing_an_isolated_default_endpoint() {
     use std::os::unix::fs::PermissionsExt;
 
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard.session("borrowed").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let sockets = directory
@@ -1418,7 +1420,7 @@ fn freeze_without_a_flag(directory: &Path, variables: &[(&str, &std::ffi::OsStr)
 
 #[tokio::test]
 async fn the_socket_path_variable_chooses_the_server_when_no_flag_is_given() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard.session("borrowed").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let output = freeze_without_a_flag(
@@ -1435,7 +1437,7 @@ async fn the_socket_path_variable_chooses_the_server_when_no_flag_is_given() {
 
 #[tokio::test]
 async fn the_socket_name_variable_chooses_the_server_when_no_flag_is_given() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard.session("borrowed").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     link_socket(directory.path(), "named", guard.socket_path());
@@ -1447,7 +1449,7 @@ async fn the_socket_name_variable_chooses_the_server_when_no_flag_is_given() {
 
 #[tokio::test]
 async fn a_socket_flag_leaves_both_socket_variables_unread() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard.session("borrowed").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let output = command_at(
@@ -1475,7 +1477,7 @@ async fn a_socket_flag_leaves_both_socket_variables_unread() {
 
 #[tokio::test]
 async fn a_tmux_variable_that_describes_no_server_is_refused_unless_a_flag_names_one() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard.session("borrowed").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let refused = freeze_without_a_flag(directory.path(), &[("TMUX", "not-a-context".as_ref())]);
@@ -1503,7 +1505,7 @@ async fn a_tmux_variable_that_describes_no_server_is_refused_unless_a_flag_names
 
 #[tokio::test]
 async fn a_socket_variable_names_the_server_so_a_malformed_tmux_is_not_read() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard.session("borrowed").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     link_socket(directory.path(), "named", guard.socket_path());
@@ -1541,9 +1543,9 @@ async fn a_socket_variable_names_the_server_so_a_malformed_tmux_is_not_read() {
 
 #[tokio::test]
 async fn a_socket_variable_wins_over_the_server_tmux_names() {
-    let inside = libtmux::test::TestServer::new().await.unwrap();
+    let inside = libtmux_tokio::test::TestServer::new().await.unwrap();
     inside.session("elsewhere").await.unwrap();
-    let chosen = libtmux::test::TestServer::new().await.unwrap();
+    let chosen = libtmux_tokio::test::TestServer::new().await.unwrap();
     chosen.session("borrowed").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let context = format!(
@@ -1566,7 +1568,7 @@ async fn a_socket_variable_wins_over_the_server_tmux_names() {
 
 #[tokio::test]
 async fn with_no_flag_and_no_variable_the_tmux_server_is_the_one_the_pane_is_in() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard.session("borrowed").await.unwrap();
     let pane = current_pane(&session).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -1600,8 +1602,8 @@ fn help_says_where_the_socket_comes_from_without_a_flag() {
 
 #[tokio::test]
 async fn freeze_defaults_to_this_panes_session_only_on_its_own_server() {
-    let here = libtmux::test::TestServer::new().await.unwrap();
-    let elsewhere = libtmux::test::TestServer::new().await.unwrap();
+    let here = libtmux_tokio::test::TestServer::new().await.unwrap();
+    let elsewhere = libtmux_tokio::test::TestServer::new().await.unwrap();
     let mine = here.session("mine").await.unwrap();
     let pane = current_pane(&mine).await;
     // The same pane ID names a pane of another session over there.
@@ -1609,7 +1611,7 @@ async fn freeze_defaults_to_this_panes_session_only_on_its_own_server() {
     elsewhere.session("second").await.unwrap();
     assert_eq!(current_pane(&decoy).await, pane, "the IDs have to collide");
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
-    let freeze = |guard: &libtmux::test::TestServer| {
+    let freeze = |guard: &libtmux_tokio::test::TestServer| {
         let socket = guard.socket_path().to_str().unwrap().to_owned();
         at_pane(
             &["freeze", "-S", &socket, "--json"],
@@ -1632,7 +1634,7 @@ async fn freeze_defaults_to_this_panes_session_only_on_its_own_server() {
 
 #[tokio::test]
 async fn freeze_never_derives_a_destination_from_a_session_name() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     // tmux rewrites `.` and `:` in a session name on some releases and keeps
     // `/` on every one, so the separator under test is the one that survives.
     guard.session("sub/escaped").await.unwrap();
@@ -1676,7 +1678,7 @@ async fn freeze_never_derives_a_destination_from_a_session_name() {
 async fn freeze_save_to_never_prompts_even_without_a_terminal_or_yes() {
     // command_at's Output::output() gives the child a piped, non-tty stdin,
     // so this alone already proves --save-to needs no --yes to succeed.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard.session("scripted").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let output = at(
@@ -1700,8 +1702,8 @@ async fn freeze_save_to_never_prompts_even_without_a_terminal_or_yes() {
 async fn append_rechecks_after_python_runtime_and_before_script() {
     use std::os::unix::fs::PermissionsExt;
     for runtime in [false, true] {
-        let original = libtmux::test::TestServer::new().await.unwrap();
-        let replacement = libtmux::test::TestServer::new().await.unwrap();
+        let original = libtmux_tokio::test::TestServer::new().await.unwrap();
+        let replacement = libtmux_tokio::test::TestServer::new().await.unwrap();
         let first = original.session("original").await.unwrap();
         let second = replacement.session("replacement").await.unwrap();
         assert_eq!(first.id(), second.id());
@@ -1888,18 +1890,18 @@ fn legacy_color_mode_is_rejected_before_reading_inputs() {
 
 #[tokio::test]
 async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("existing"))
+        .new_session(libtmux_tokio::NewSession::new("existing"))
         .await
         .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let trace = directory.path().join("trace");
     let wrapper = directory.path().join("tmux");
     let python = directory.path().join("python");
-    libtmux::test::install_executable(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
-    libtmux::test::install_executable(
+    libtmux_tokio::test::install_executable(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
+    libtmux_tokio::test::install_executable(
         &python,
         "#!/bin/sh\nprintf 'python\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexit 97\n",
     )
@@ -1918,7 +1920,7 @@ async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
     }
     let topology = || {
         guard.server().cmd(
-            libtmux::Command::new("list-panes")
+            libtmux_tokio::Command::new("list-panes")
                 .arg("-a")
                 .arg("-F")
                 .arg("#{session_id}:#{window_id}:#{pane_id}"),
@@ -2308,7 +2310,7 @@ fn imported_source(kind: &str) -> serde_json::Value {
     }
 }
 
-async fn imported_state(guard: &libtmux::test::TestServer, kind: &str) -> serde_json::Value {
+async fn imported_state(guard: &libtmux_tokio::test::TestServer, kind: &str) -> serde_json::Value {
     let session = guard.server().session("imported").await.unwrap().unwrap();
     let windows = session.windows().await.unwrap();
     let counts = [
@@ -2342,7 +2344,7 @@ async fn imported_state(guard: &libtmux::test::TestServer, kind: &str) -> serde_
         })
         .await
         .unwrap()
-        .map(libtmux::TmuxText::from)
+        .map(libtmux_tokio::TmuxText::from)
         .unwrap()
         .to_string_lossy()
         .into_owned();
@@ -2381,7 +2383,7 @@ fn assert_imported_commands(kind: &str, root: &Path, runtime: &Path) {
 #[tokio::test]
 async fn imported_workspaces_load_with_ordered_commands_and_relocated_roots() {
     for kind in ["tmuxinator", "teamocil"] {
-        let guard = libtmux::test::TestServer::new().await.unwrap();
+        let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
         let keeper = guard.session("import-keeper").await.unwrap();
         let keeper_id = keeper.id().to_string();
         let keeper_pane = current_pane(&keeper).await;
@@ -2467,7 +2469,7 @@ async fn imported_workspaces_load_with_ordered_commands_and_relocated_roots() {
 #[tokio::test]
 async fn native_endpoint_fields_refuse_all_inputs_before_mutation() {
     for key in ["config", "socket_name"] {
-        let guard = libtmux::test::TestServer::new().await.unwrap();
+        let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
         let keeper = guard.session("endpoint-keeper").await.unwrap();
         let keeper_id = keeper.id().to_string();
         let pane = current_pane(&keeper).await;
@@ -2539,7 +2541,7 @@ fn discovery_and_search_use_workspace_fields_and_case_modes() {
 
 #[tokio::test]
 async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let config_directory = directory.path().join("config directory");
     let caller = directory.path().join("caller directory");
@@ -2550,7 +2552,7 @@ async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
     let caller = caller.canonicalize().unwrap();
     let runtime = runtime.canonicalize().unwrap();
     let script = config_directory.join("bootstrap script");
-    libtmux::test::install_executable(
+    libtmux_tokio::test::install_executable(
         &script,
         "#!/bin/sh\nrecord=$1\nshift\nprintf '%s\\0' \"$PWD\" \"$#\" \"$@\" > \"$record\"\n",
     )
@@ -2621,7 +2623,7 @@ async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
 
 #[tokio::test]
 async fn native_load_freeze_reuse_and_append_preserve_owned_session_state() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir().unwrap();
     let marker = directory.path().join("created");
     let source = serde_json::json!({"session_name":"cli-native","start_directory":directory.path(),"environment":{"SESSION_VALUE":"session"},"windows":[
@@ -2713,7 +2715,7 @@ async fn native_load_freeze_reuse_and_append_preserve_owned_session_state() {
 
 #[tokio::test]
 async fn load_renames_only_the_last_input_and_retessellates_many_panes() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir().unwrap();
     for name in ["first", "second"] {
         std::fs::write(directory.path().join(format!("{name}.json")), serde_json::json!({"session_name":name,"windows":[{"window_name":"many","layout":"tiled","panes":vec!["blank";10]}]}).to_string()).unwrap();
@@ -2763,7 +2765,7 @@ async fn load_renames_only_the_last_input_and_retessellates_many_panes() {
 
 #[tokio::test]
 async fn load_logging_separates_metadata_from_captures_and_mandatory_errors() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     for (mode, level, status) in [
         ("human", "info", 0),
@@ -2839,7 +2841,7 @@ async fn load_logging_separates_metadata_from_captures_and_mandatory_errors() {
 
 #[tokio::test]
 async fn load_logging_caps_utf8_per_stream_and_resets_for_the_next_child() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let limit = 1024 * 1024;
     for (stream, letter) in [("stdout", "a"), ("stderr", "b")] {
@@ -2953,7 +2955,7 @@ fn assert_logged_children(records: &[serde_json::Value], limit: usize) {
 
 #[tokio::test]
 async fn load_logging_failure_preserves_primary_status_and_diagnostic_order() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let cases = [
         ("human", 0, "merged", "info"),
@@ -3129,7 +3131,7 @@ async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
     use std::os::{fd::OwnedFd, unix::net::UnixStream};
 
     for status in [0, 9] {
-        let guard = libtmux::test::TestServer::new().await.unwrap();
+        let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
         let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
         for name in ["first", "second"] {
             let mut config =
@@ -3216,7 +3218,7 @@ async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
 
 #[tokio::test]
 async fn failing_before_script_removes_the_owned_session_and_reads_as_one_sentence() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("bf.yaml"),
@@ -3249,7 +3251,7 @@ async fn before_script_that_cannot_start_removes_the_owned_session_too() {
     // nonzero exit, not a different failure. A path under a fresh tempdir
     // that nothing ever created stays missing without depending on any
     // fixed system binary (no /bin/false: macOS carries none).
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let missing = directory.path().join("missing-script");
     std::fs::write(
@@ -3299,10 +3301,9 @@ async fn appended_before_script_failure_leaves_the_borrowed_session_and_stays_pa
     // A failed input's session is never rolled back when it is
     // borrowed (append), so this is "partial" (effects left behind), not
     // "error", unlike the owned case above.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux::NewSessionOptions::new("owner"))
+        .session(libtmux_tokio::NewSession::new("owner"))
         .await
         .unwrap();
     let pane = current_pane(&session).await;
@@ -3346,7 +3347,7 @@ async fn appended_before_script_failure_leaves_the_borrowed_session_and_stays_pa
 async fn closed_workspace_completed_event_retains_the_completed_input() {
     use tokio::io::AsyncReadExt;
 
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let capture = "x".repeat(256 * 1024);
     std::fs::write(directory.path().join("capture"), &capture).unwrap();
@@ -3411,10 +3412,9 @@ async fn closed_workspace_completed_event_retains_the_completed_input() {
 
 #[tokio::test]
 async fn failed_append_reports_borrowed_session_and_created_ids() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux::NewSessionOptions::new("borrowed"))
+        .session(libtmux_tokio::NewSession::new("borrowed"))
         .await
         .unwrap();
     let pane = session
@@ -3462,7 +3462,7 @@ async fn failed_append_reports_borrowed_session_and_created_ids() {
 /// session states tmux's own exit status as a number, not `Option`'s `Debug`.
 #[tokio::test]
 async fn append_index_collision_states_the_exit_status_plainly() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard.session("borrowed").await.unwrap();
     let pane = current_pane(&session).await;
     let existing_index = session.active_window().await.unwrap().unwrap().index();
@@ -3501,7 +3501,7 @@ async fn append_index_collision_states_the_exit_status_plainly() {
 /// rather than appending into the current pane's, inside tmux and outside.
 #[tokio::test]
 async fn detached_flag_beats_append_inside_and_outside_tmux() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -3537,7 +3537,7 @@ async fn detached_flag_beats_append_inside_and_outside_tmux() {
 /// windows, with a single space, not `Loaded` with a doubled one.
 #[tokio::test]
 async fn append_summary_says_appended_with_a_single_space() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -3567,10 +3567,9 @@ async fn append_summary_says_appended_with_a_single_space() {
 
 #[tokio::test]
 async fn append_leaves_the_client_on_its_window_unless_one_appended_window_focuses() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux::NewSessionOptions::new("owner"))
+        .session(libtmux_tokio::NewSession::new("owner"))
         .await
         .unwrap();
     let original = session.active_window().await.unwrap().unwrap();
@@ -3702,7 +3701,7 @@ async fn machine_error_codes_match_the_ten_condition_table() {
         assert_eq!(diagnostic["code"], code, "{output:?}");
     }
 
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
 
     std::fs::write(
         directory.path().join("badoption.yaml"),
@@ -3796,7 +3795,7 @@ async fn freezing_a_socket_with_no_server_names_the_missing_session() {
 async fn unreadable_pane_state_is_reported_as_itself_rather_than_a_timeout() {
     use std::os::unix::fs::PermissionsExt;
 
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let wrapper = directory.path().join("tmux-no-cursor");
     std::fs::write(
@@ -3849,7 +3848,7 @@ async fn unreadable_pane_state_is_reported_as_itself_rather_than_a_timeout() {
 /// the document anyway: a workspace shared between tools stays loadable here.
 #[tokio::test]
 async fn a_builder_setting_this_tool_lacks_is_named_and_still_loads() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("other.json"),
@@ -3891,7 +3890,7 @@ async fn a_builder_setting_this_tool_lacks_is_named_and_still_loads() {
 #[tokio::test]
 async fn bootstrap_output_streams_escaped_records_before_the_child_finishes() {
     use tokio::io::{AsyncBufReadExt, BufReader};
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
         directory.path().join("bootstrap.sh"),
@@ -3995,10 +3994,10 @@ fn missing_python_bridge_has_a_precise_runtime_error() {
 #[ignore = "requires TMUX_WORKSPACE_PYTHON with tmuxp 1.74.0"]
 async fn python_shell_uses_the_checked_console_entrypoint() {
     let python = std::env::var_os("TMUX_WORKSPACE_PYTHON").expect("bridge interpreter");
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("bridge"))
+        .new_session(libtmux_tokio::NewSession::new("bridge"))
         .await
         .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_tmux-workspace"))
@@ -4030,7 +4029,7 @@ async fn python_shell_uses_the_checked_console_entrypoint() {
 #[tokio::test]
 #[ignore = "requires TMUX_WORKSPACE_PYTHON with tmuxp 1.74.0"]
 async fn python_extension_bridge_builds_and_preserves_borrowed_session_on_failure() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("extension.py"), "from tmuxp.workspace.builder.classic import ClassicWorkspaceBuilder\nfrom tmuxp.plugin import TmuxpPlugin\nclass Plugin(TmuxpPlugin):\n    def before_workspace_builder(self, session):\n        session.set_environment('PLUGIN_CALLED', 'yes')\nclass Builder(ClassicWorkspaceBuilder):\n    def build(self, *args, **kwargs):\n        super().build(*args, **kwargs)\n        self.session.set_environment('BRIDGE_CALLED', 'yes')\n").unwrap();
     let config = serde_json::json!({"session_name":"extension","workspace_builder":"extension:Builder","plugins":["extension.Plugin"],"workspace_builder_paths":[directory.path()],"windows":[{"window_name":"native","panes":["blank"]}]});
@@ -4045,11 +4044,11 @@ async fn python_extension_bridge_builds_and_preserves_borrowed_session_on_failur
     let environment = session.environment_all().await.unwrap();
     assert_eq!(
         environment.get("BRIDGE_CALLED"),
-        Some(&libtmux::EnvironmentEntry::Set("yes".into()))
+        Some(&libtmux_tokio::EnvironmentEntry::Set("yes".into()))
     );
     assert_eq!(
         environment.get("PLUGIN_CALLED"),
-        Some(&libtmux::EnvironmentEntry::Set("yes".into()))
+        Some(&libtmux_tokio::EnvironmentEntry::Set("yes".into()))
     );
     let pane = current_pane(&session).await;
     let mut broken = config;
@@ -4261,7 +4260,7 @@ fn successful_editor_can_leave_a_background_service_with_closed_streams() {
 async fn load_places_panes_after_the_first_in_config_order() {
     // tmux inserts a detached split immediately after its source pane, so
     // splitting the same target repeatedly reverses everything after it.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.yaml"),
@@ -4290,14 +4289,15 @@ async fn load_places_panes_after_the_first_in_config_order() {
         .zip(["MARK-A", "MARK-B", "MARK-C", "MARK-D"])
         .enumerate()
     {
-        let seen = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
-            pane.capture().await.is_ok_and(|lines| {
-                lines
-                    .iter()
-                    .any(|line| line.to_string_lossy().contains(marker))
+        let seen =
+            libtmux_tokio::test::retry_until(std::time::Duration::from_secs(15), async || {
+                pane.capture().await.is_ok_and(|lines| {
+                    lines
+                        .iter()
+                        .any(|line| line.to_string_lossy().contains(marker))
+                })
             })
-        })
-        .await;
+            .await;
         assert!(seen.is_ok(), "pane at index {index} should show {marker}");
     }
 
@@ -4348,7 +4348,7 @@ fn a_dry_run_describes_the_build_and_touches_nothing() {
 
 #[tokio::test]
 async fn a_loader_variable_reaches_the_pane_as_data_not_code() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.json"),
@@ -4372,7 +4372,7 @@ async fn a_loader_variable_reaches_the_pane_as_data_not_code() {
     .unwrap();
     assert!(output.status.success(), "{output:?}");
     let [done, documented] = ["done", "documented"].map(|name| directory.path().join(name));
-    let ran = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
+    let ran = libtmux_tokio::test::retry_until(std::time::Duration::from_secs(15), async || {
         done.exists() && documented.exists()
     })
     .await;
@@ -4396,7 +4396,7 @@ async fn a_loader_variable_reaches_the_pane_as_data_not_code() {
 async fn ndjson_load_emits_completion_events_with_tmux_ids() {
     // A streaming consumer needs to know when a pane or window finishes,
     // and pane-created needs ids to correlate without a second lookup.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.json"),
@@ -4476,7 +4476,7 @@ async fn ndjson_brackets_before_script_with_started_and_completed_events() {
     // A consumer needs to know when a script began, ended, with
     // what status, and which input it belongs to, matching go's three
     // events instead of an unbracketed, input-less script-output.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.json"),
@@ -4534,7 +4534,7 @@ async fn ndjson_brackets_before_script_with_started_and_completed_events() {
 async fn panes_without_a_start_directory_use_the_invocation_directory() {
     // With no start_directory anywhere, panes should start in the
     // invocation directory, matching tmuxp.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let base = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let document_directory = base.path().join("workspaces");
     let invocation_directory = base.path().join("caller");
@@ -4598,7 +4598,7 @@ fn teamocil_import_derives_session_name_from_the_filename() {
 async fn global_options_use_tmuxs_global_session_scope() {
     // global_options must apply through the session's global table
     // (`set-option -g`); the server table refuses most option names.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.yaml"),
@@ -4628,7 +4628,7 @@ async fn global_options_use_tmuxs_global_session_scope() {
         .typed_global_option("history-limit")
         .await
         .unwrap();
-    assert_eq!(value, Some(libtmux::OptionValue::Number(4242)));
+    assert_eq!(value, Some(libtmux_tokio::OptionValue::Number(4242)));
     guard.shutdown().await.unwrap();
 }
 
@@ -4636,7 +4636,7 @@ async fn global_options_use_tmuxs_global_session_scope() {
 async fn freeze_never_carries_the_sessions_environment() {
     // freeze must not carry the session's inherited process environment
     // (SSH_AUTH_SOCK, SSH_AGENT_PID, ...) into the document.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard.session("frozen-env").await.unwrap();
     session
         .set_environment("SSH_AUTH_SOCK", "/tmp/agent.should-not-leak")
@@ -4668,7 +4668,7 @@ fn load_accepts_yes_even_though_it_never_prompts() {
 async fn load_accepts_both_options_and_options_after_spellings() {
     // freeze emits window options under options_after, so load must keep
     // accepting both spellings.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.yaml"),
@@ -4692,7 +4692,9 @@ async fn load_accepts_both_options_and_options_after_spellings() {
         let value = window.typed_option("main-pane-width").await.unwrap();
         assert_eq!(
             value,
-            Some(libtmux::OptionValue::Text(expected.to_string().into())),
+            Some(libtmux_tokio::OptionValue::Text(
+                expected.to_string().into()
+            )),
             "window {:?}",
             window.name().to_string_lossy()
         );
@@ -4706,7 +4708,7 @@ async fn freeze_does_not_carry_the_capturing_terminals_size() {
     // (rs's own `load` sets it explicitly, matching tmuxp), not anything
     // the workspace asked for. Writing it into the frozen document would
     // pin every future reload to that size on any server.
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("workspace.yaml"),
@@ -4742,7 +4744,7 @@ async fn freeze_does_not_carry_the_capturing_terminals_size() {
 /// calling it done.
 #[tokio::test]
 async fn a_mid_build_failure_removes_the_session_and_the_rerun_fails_the_same_way() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("fail.yaml"),
@@ -4793,10 +4795,9 @@ async fn a_mid_build_failure_removes_the_session_and_the_rerun_fails_the_same_wa
 /// found.
 #[tokio::test]
 async fn reusing_a_session_without_the_document_s_windows_is_a_mismatch() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let session = guard
-        .server()
-        .new_session(libtmux::NewSessionOptions::new("half"))
+        .session(libtmux_tokio::NewSession::new("half"))
         .await
         .unwrap();
     let mut window = session.active_window().await.unwrap().unwrap();
@@ -4851,7 +4852,7 @@ async fn refusals_report_only_shared_machine_codes() {
         "usage",
         "interrupted",
     ];
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let socket = guard.socket_path().to_str().unwrap().to_owned();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     for (name, body) in [
@@ -4920,7 +4921,7 @@ async fn refusals_report_only_shared_machine_codes() {
 /// instead of stopping the load.
 #[tokio::test]
 async fn a_window_option_under_session_options_lands_on_the_windows() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("pbi.yaml"),
@@ -4955,7 +4956,7 @@ async fn a_window_option_under_session_options_lands_on_the_windows() {
 /// loud rather than silently becoming $HOME.
 #[tokio::test]
 async fn a_null_start_directory_is_absent_and_an_absent_one_is_reported() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let elsewhere = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let invocation = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
@@ -5019,7 +5020,7 @@ async fn a_null_start_directory_is_absent_and_an_absent_one_is_reported() {
 async fn a_pane_command_waits_for_any_shell_not_only_zsh() {
     use std::os::unix::fs::PermissionsExt;
 
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let shell = directory.path().join("never-prompts");
     std::fs::write(&shell, "#!/bin/sh\nexec sleep 30\n").unwrap();
@@ -5068,7 +5069,7 @@ async fn a_pane_command_waits_for_any_shell_not_only_zsh() {
 /// every supported release.
 #[tokio::test]
 async fn freeze_refuses_a_session_name_load_would_not_accept() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let destination = directory.path().join("frozen.yaml");
     let output = at(
@@ -5105,10 +5106,9 @@ async fn freeze_refuses_a_session_name_load_would_not_accept() {
 /// live session this test needs cannot exist.
 #[tokio::test]
 async fn freeze_refuses_an_existing_dotted_session_the_same_way() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let Ok(session) = guard
-        .server()
-        .new_session(libtmux::NewSessionOptions::new("my.proj"))
+        .session(libtmux_tokio::NewSession::new("my.proj"))
         .await
     else {
         guard.shutdown().await.unwrap();
@@ -5145,7 +5145,7 @@ async fn freeze_refuses_an_existing_dotted_session_the_same_way() {
 /// does claim focus still wins.
 #[tokio::test]
 async fn a_window_with_no_declared_focus_ends_on_its_last_pane() {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
         directory.path().join("focus.yaml"),
@@ -5186,7 +5186,7 @@ async fn a_window_with_no_declared_focus_ends_on_its_last_pane() {
 async fn the_attach_handoff_carries_the_endpoint_flags() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("handoff-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
     let client = AttachedClient::new(&guard, keeper.id().as_ref());
@@ -5244,11 +5244,11 @@ async fn the_attach_handoff_carries_the_endpoint_flags() {
 }
 
 async fn guarded_handoff(replacement: Option<std::ffi::OsString>) -> (Output, bool, bool) {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let _keeper = guard.session("handoff-keeper").await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let wrapper = directory.path().join("tmux");
-    libtmux::test::install_executable(
+    libtmux_tokio::test::install_executable(
         &wrapper,
         r#"#!/bin/sh
 case "$*" in *switch-client*|*attach-session*)
@@ -5334,7 +5334,7 @@ async fn the_attach_handoff_refuses_daemon_replacement() {
     assert!(!attached, "the old daemon received an attach effect");
     assert!(!output.status.success(), "{output:?}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("libtmux-core-version-changed"),
+        String::from_utf8_lossy(&output.stderr).contains("syntax error"),
         "{output:?}"
     );
     assert!(!started, "handoff did not source a new daemon's config");

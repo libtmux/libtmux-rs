@@ -184,7 +184,7 @@ filters tmux objects with the same expressions.
 
 [derive-docs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
 [query-docs]: https://docs.rs/libtmux/latest/libtmux/query/
-[query-reference]: https://libtmux.org/en/rs/latest/reference/query-filterable/
+[query-reference]: https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable/
 [libtmux-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md#filtering
 
 ## License
@@ -193,5 +193,5 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
 or [MIT license](LICENSE-MIT) at your option.
 
 [`#[derive(Filterable)]`]:
-https://libtmux.org/en/rs/latest/reference/query-filterable/
+https://libtmux.org/en/rs/latest/reference/libtmux_core-query-filterable/
 [typed query grammar]: https://libtmux.org/en/rs/latest/concepts/queries/

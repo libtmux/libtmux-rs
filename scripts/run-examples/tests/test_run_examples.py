@@ -67,10 +67,18 @@ def test_only_a_pane_example_is_handed_the_fixture_server(tmp_path: Path) -> Non
     assert "LIBTMUX_SANDBOX_TMUX" not in run_examples.run_environment(plain, fixture)
 
 
-def test_a_cargo_example_command_names_its_crate_features_and_arguments() -> None:
+def test_a_cargo_example_command_names_its_crate_features_and_arguments(tmp_path: Path) -> None:
     (row,) = run_examples.parse_table("libtmux | find | query | sh | | in window | pane\n")
-    command = run_examples.cargo_run(row)
+    command = run_examples.cargo_run(row, run_examples.Fixture(tmp_path))
     assert command[:3] == ["cargo", "run", "--quiet"]
     assert command[command.index("--manifest-path") + 1] == "crates/libtmux/Cargo.toml"
     assert command[command.index("--features") + 1] == "query"
     assert command[-2:] == ["--", "sh"]
+
+
+def test_mixed_reader_receives_the_socket_as_a_single_argument(tmp_path: Path) -> None:
+    rows = run_examples.parse_table(run_examples.TABLE)
+    mixed = next(row for row in rows if row.key == "libtmux|api_mixed")
+    fixture = run_examples.Fixture(tmp_path / "private directory")
+    assert mixed.features.split(",") == ["blocking", "tokio"]
+    assert run_examples.cargo_run(mixed, fixture)[-2:] == ["--", str(fixture.socket)]

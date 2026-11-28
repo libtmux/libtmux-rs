@@ -65,9 +65,56 @@ const TEARDOWN: &[&str] = &[
 ];
 
 fn tools(toolsets: &str) -> Result<TmuxTools, Box<dyn Error>> {
-    Ok(TmuxTools::builder(libtmux::Server::new()?)
+    Ok(TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(Selection::parse(Some(toolsets), None, None)?)
         .build())
+}
+
+#[test]
+fn placement_tools_require_the_complete_listed_link() -> TestResult {
+    let offered = tools("manage")?.offered();
+    let link = json!({
+        "session_id": "$1", "index": 2, "window_id": "@3",
+        "generation": {"pid": 123, "started": 456},
+    });
+    for (name, mut arguments) in [
+        ("select_window", json!({"link": link})),
+        (
+            "move_window",
+            json!({"link": link, "destination_session": "$4", "destination_index": 7}),
+        ),
+    ] {
+        let tool = offered
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("placement tool");
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        let validator = jsonschema::draft202012::new(&schema)?;
+        assert!(
+            validator.is_valid(&arguments),
+            "{name} rejected a complete link"
+        );
+        let old = arguments.as_object_mut().expect("arguments").remove("link");
+        arguments["window"] = json!("@3");
+        assert!(
+            !validator.is_valid(&arguments),
+            "{name} accepted an intrinsic id"
+        );
+        arguments
+            .as_object_mut()
+            .expect("arguments")
+            .remove("window");
+        arguments["link"] = old.expect("saved link");
+        arguments["link"]
+            .as_object_mut()
+            .expect("link")
+            .remove("generation");
+        assert!(
+            !validator.is_valid(&arguments),
+            "{name} accepted an unqualified link"
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -139,27 +186,17 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
     Ok(())
 }
 
-/// The hand-kept lists above, not the capability rows the hints derive from,
-/// say which tools must never look read-only or harmless to a client, and
-/// that every inspect tool looks read-only. The observer client that
-/// `wait_for_text` or `capture_since` attaches only reads.
+/// Whole-call hints cover configured tmux behavior for every toolset,
+/// including inspect tools whose direct operation only observes.
 #[test]
-fn listed_mutating_tools_carry_mutating_hints() -> TestResult {
+fn every_toolset_carries_configurable_tmux_whole_call_hints() -> TestResult {
     for tool in tools("inspect,manage,execute,teardown")?.offered() {
         let name = tool.name.as_ref();
         let hints = tool.annotations.as_ref().expect("annotations");
-        if INSPECT.contains(&name) {
-            assert_eq!(hints.read_only_hint, Some(true), "{name} readOnlyHint");
-        }
-        if [MANAGE, EXECUTE, TEARDOWN]
-            .iter()
-            .any(|names| names.contains(&name))
-        {
-            assert_eq!(hints.read_only_hint, Some(false), "{name} readOnlyHint");
-        }
-        if TEARDOWN.contains(&name) {
-            assert_eq!(hints.destructive_hint, Some(true), "{name} destructiveHint");
-        }
+        assert_eq!(hints.read_only_hint, Some(false), "{name} readOnlyHint");
+        assert_eq!(hints.destructive_hint, Some(true), "{name} destructiveHint");
+        assert_eq!(hints.idempotent_hint, Some(false), "{name} idempotentHint");
+        assert_eq!(hints.open_world_hint, Some(true), "{name} openWorldHint");
     }
     Ok(())
 }
@@ -221,7 +258,7 @@ fn every_input_property_carries_a_description() -> TestResult {
 #[test]
 fn default_tool_list_stays_under_its_byte_ceiling() -> TestResult {
     const CEILING: usize = 120_000;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(Selection::parse_for_socket(None, None, None, true)?)
         .build();
     let bytes = serde_json::to_string(&tools.offered())?.len();
@@ -371,8 +408,8 @@ fn choice_vocabularies_reject_unknown_values() -> TestResult {
         ),
         (
             "select_window",
-            json!({"window": "@1", "direction": "last"}),
-            json!({"window": "@1", "direction": "first"}),
+            json!({"link": {"session_id": "$1", "index": 2, "window_id": "@3", "generation": {"pid": 123, "started": 456}}, "direction": "last"}),
+            json!({"link": {"session_id": "$1", "index": 2, "window_id": "@3", "generation": {"pid": 123, "started": 456}}, "direction": "first"}),
         ),
     ] {
         let tool = tools
@@ -478,7 +515,7 @@ fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
     let mut expected: BTreeSet<_> = eligible.iter().copied().collect();
     expected.remove("capture_pane");
     let selected = Selection::parse(Some("inspect"), None, Some("capture_pane"))?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools
@@ -506,7 +543,7 @@ fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
 
     let exclusions = eligible.join(",");
     let selected = Selection::parse(Some("inspect"), None, Some(&exclusions))?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools
@@ -599,7 +636,7 @@ fn aggregate_only_selection_keeps_native_pruned_operation_schemas() -> TestResul
         Some("call_read_tools_batch"),
         Some("capture_pane"),
     )?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let offered = tools.offered();
@@ -659,7 +696,7 @@ fn empty_aggregate_authority_has_a_valid_impossible_schema() -> TestResult {
         Some("call_read_tools_batch"),
         Some(&eligible.join(",")),
     )?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools.offered().into_iter().next().expect("batch route");
@@ -726,7 +763,7 @@ fn aggregate_effects_and_outputs_follow_pruned_authority() -> TestResult {
         Some("call_read_tools_batch"),
         Some("capture_since"),
     )?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools.offered().into_iter().next().expect("batch route");
@@ -759,7 +796,7 @@ fn aggregate_effects_and_outputs_follow_pruned_authority() -> TestResult {
         .collect::<Vec<_>>()
         .join(",");
     let selected = Selection::parse(Some(""), Some("call_read_tools_batch"), Some(&excluded))?;
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new()?)
         .selection(selected)
         .build();
     let batch = tools.offered().into_iter().next().expect("batch route");

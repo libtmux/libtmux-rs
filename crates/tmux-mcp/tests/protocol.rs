@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use rmcp::model::{CallToolRequestParams, ReadResourceRequestParams, ResourceContents};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
@@ -50,7 +50,7 @@ fn selection(toolsets: &str) -> Selection {
 
 #[tokio::test]
 async fn client_sees_the_exact_cross_port_inventory() {
-    let server = libtmux::Server::builder()
+    let server = libtmux_tokio::Server::builder()
         .socket_name("libtmux-mcp")
         .build()
         .expect("server config");
@@ -58,6 +58,10 @@ async fn client_sees_the_exact_cross_port_inventory() {
         .selection(selection("inspect,manage,execute,teardown"))
         .build();
     let wire = Wire::connect(tools).await;
+    let peer = wire.client.peer_info().expect("server initialized");
+    let identity = peer.server_info.as_ref().expect("server identifies itself");
+    assert_eq!(identity.name, env!("CARGO_PKG_NAME"));
+    assert_eq!(identity.version, env!("CARGO_PKG_VERSION"));
     let actual: BTreeSet<_> = wire
         .client
         .list_all_tools()
@@ -123,7 +127,7 @@ async fn client_sees_the_exact_cross_port_inventory() {
 
 #[tokio::test]
 async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect,manage,execute,teardown"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -148,10 +152,30 @@ async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
             tool.name,
         );
         let annotations = tool.annotations.expect("whole-call annotations");
-        assert!(annotations.read_only_hint.is_some(), "{}", tool.name);
-        assert!(annotations.destructive_hint.is_some(), "{}", tool.name);
-        assert!(annotations.idempotent_hint.is_some(), "{}", tool.name);
-        assert!(annotations.open_world_hint.is_some(), "{}", tool.name);
+        assert_eq!(
+            annotations.read_only_hint,
+            Some(false),
+            "{} readOnlyHint",
+            tool.name
+        );
+        assert_eq!(
+            annotations.destructive_hint,
+            Some(true),
+            "{} destructiveHint",
+            tool.name
+        );
+        assert_eq!(
+            annotations.idempotent_hint,
+            Some(false),
+            "{} idempotentHint",
+            tool.name
+        );
+        assert_eq!(
+            annotations.open_world_hint,
+            Some(true),
+            "{} openWorldHint",
+            tool.name
+        );
         assert!(
             tool.meta
                 .as_ref()
@@ -165,8 +189,65 @@ async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
 }
 
 #[tokio::test]
+async fn an_observe_tool_discloses_whole_call_hints_when_a_configured_hook_changes_tmux() {
+    let guard = TestServer::new().await.expect("fixture starts");
+    guard
+        .session("observe-hook")
+        .await
+        .expect("fixture session");
+    let configured = guard
+        .server()
+        .cmd(
+            libtmux_tokio::Command::new("set-hook")
+                .arg("-g")
+                .arg("after-list-sessions")
+                .arg("set-option -g @mcp-observe-hook fired"),
+        )
+        .await
+        .expect("hook client completes");
+    assert!(configured.success(), "hook installs");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let listed = wire.client.list_all_tools().await.expect("tools list");
+    let tool = listed
+        .iter()
+        .find(|tool| tool.name == "list_sessions")
+        .expect("list tool");
+    let result = wire.call("list_sessions", json!({})).await;
+    let observed = guard
+        .server()
+        .cmd(
+            libtmux_tokio::Command::new("show-options")
+                .arg("-gqv")
+                .arg("@mcp-observe-hook"),
+        )
+        .await
+        .expect("read hook witness");
+    wire.shutdown().await;
+    guard.shutdown().await.expect("fixture shuts down");
+
+    assert_ne!(result.is_error, Some(true), "the observe tool completes");
+    assert_eq!(
+        observed.stdout(),
+        b"fired\n",
+        "the configured hook changed tmux"
+    );
+    let row = &tool.meta.as_ref().expect("metadata").0["com.git-pull.libtmux-mcp/capability"];
+    assert_eq!(row["processReach"], "none");
+    assert_eq!(row["tmuxEffects"], json!(["observe"]));
+    assert_eq!(row["outputClasses"], json!(["tmux-metadata"]));
+    let annotations = tool.annotations.as_ref().expect("whole-call annotations");
+    assert_eq!(annotations.read_only_hint, Some(false));
+    assert_eq!(annotations.destructive_hint, Some(true));
+    assert_eq!(annotations.idempotent_hint, Some(false));
+    assert_eq!(annotations.open_world_hint, Some(true));
+}
+
+#[tokio::test]
 async fn read_batch_rejects_more_than_sixteen_operations() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -194,7 +275,7 @@ async fn read_batch_rejects_more_than_sixteen_operations() {
 
 #[tokio::test]
 async fn send_keys_batch_rejects_more_than_sixty_four_operations() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("execute"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -311,7 +392,7 @@ async fn read_batch_preserves_a_nested_protocol_error() {
 
 #[tokio::test]
 async fn withheld_tools_are_neither_listed_nor_callable() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -338,7 +419,7 @@ async fn withheld_tools_are_neither_listed_nor_callable() {
 
 #[tokio::test]
 async fn capabilities_resource_reports_the_effective_surface() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(
             Selection::parse(Some("inspect"), None, Some("capture_pane")).expect("selection"),
         )
@@ -407,6 +488,17 @@ async fn capabilities_resource_reports_the_effective_surface() {
         let mut hints = serde_json::to_value(tool.annotations.as_ref().expect("hints")).unwrap();
         hints.as_object_mut().unwrap().remove("title");
         assert_eq!(row["annotations"], hints, "{} annotations", tool.name);
+        assert_eq!(
+            row["annotations"],
+            json!({
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": true,
+            }),
+            "{} whole-call annotations",
+            tool.name,
+        );
         // The description and schemas are the tool's; the client already has
         // them from `tools/list`, and the report does not send them twice.
         for repeated in ["description", "inputSchema", "outputSchema"] {
@@ -479,7 +571,7 @@ async fn aggregate_only_selection_dispatches_hidden_native_routes() {
 
 #[tokio::test]
 async fn capability_report_uses_the_common_socket_and_boundary_shape() {
-    let server = libtmux::Server::builder()
+    let server = libtmux_tokio::Server::builder()
         .socket_name("libtmux-mcp")
         .build()
         .expect("server config");
@@ -523,6 +615,18 @@ async fn capability_report_uses_the_common_socket_and_boundary_shape() {
     );
     assert_eq!(report["connection"]["serverState"], "created");
     assert_eq!(report["connection"]["configurationProvenance"], "minimal");
+    for row in report["tools"].as_array().expect("tool rows") {
+        assert_eq!(
+            row["annotations"],
+            json!({
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": true,
+            }),
+            "initially minimal configuration does not constrain later tmux behaviour",
+        );
+    }
     assert!(report["connection"]["resolvedSocketPath"].is_string());
     assert!(
         report["connection"]["attachCommand"]
@@ -593,7 +697,7 @@ async fn a_tmux_refusal_is_an_is_error_result_not_a_protocol_error() {
 /// the model to read.
 #[tokio::test]
 async fn an_unknown_tool_is_still_a_protocol_error() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .selection(selection("inspect"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -613,7 +717,7 @@ async fn an_unknown_tool_is_still_a_protocol_error() {
 #[test]
 fn the_instructions_match_their_reviewed_snapshot() {
     use rmcp::ServerHandler as _;
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let tools = TmuxTools::builder(libtmux_tokio::Server::new().expect("server config"))
         .caller(None)
         .build();
     let instructions = tools.get_info().instructions.expect("instructions");

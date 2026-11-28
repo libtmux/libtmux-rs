@@ -14,8 +14,13 @@ the operation.
 
 The version probe shares the command's timeout, and a queue guard refuses a
 daemon replacement with a different version. The daemon's version is cached.
-Every dispatch checks it in tmux's queue, and a mismatch invalidates the cache
-for a fresh probe on the next operation.
+Every dispatch checks it in tmux's queue. A failed result consistent with a
+stale guard invalidates the cache for a fresh probe on the next operation.
+
+An ordinary failed result remains available to the caller. Diagnostic text may
+come from the requested commands or hooks, so it cannot prove that a mutation
+did not run. No automatic retry follows a guard failure; inspect effects before
+repeating a mutation.
 
 A refusal prevents the requested operation from being dispatched. Version
 probes and queue guards may still reach the daemon:
@@ -28,8 +33,6 @@ probes and queue guards may still reach the daemon:
   version report is [`Error::InvalidVersionOutput`].
 - A deadline that passes during the check is [`Error::Timeout`] with
   `before_dispatch` set.
-- A daemon replaced between the check and the request fails with
-  [`Error::ServerReplaced`], and nothing ran.
 
 To fix any of them, upgrade tmux and restart the server, or pin the previous
 release of libtmux.
@@ -41,8 +44,8 @@ run with tmux's own semantics.
 
 [`Server::capabilities`] reports the configured executable and caches that
 result, including versions below the floor. Standalone [`Server::cmd`] calls
-with `-V` or `-h` also retain native executable diagnostics. Client flags have
-no representation over an open control connection.
+with `-V` or `-h` invoke the configured executable directly, including on
+a handle that shares an attached control connection.
 
 Async operations need an entered Tokio runtime. The default executable is
 `tmux`, resolved through the `PATH` captured when the [`Server`] is built. Use
@@ -75,9 +78,28 @@ Direct literal argv commands and flat batches are checked before dispatch.
 chain. Alias bodies are not read, and shell programs keep native semantics.
 
 On the pinned Linux builds, 3.3a, 3.4 and 3.5 clients cannot register a control
-connection to an exact 3.7 daemon; 3.7d can. Those older clients exit without
+connection to an exact 3.7 daemon. Native 3.6 and 3.7d clients can. The older clients exit without
 changing the daemon, including on a plain native attachment. Use a compatible
 client for control; this does not raise the 3.3a subprocess baseline.
+
+## Pane capture and polling waits
+
+A viewport capture returns the grid bytes and their native trailing newline.
+`Pane::capture_with` splits the selected range into lines. A text wait matches
+those lines. A message printed by an `after-capture-pane` hook cannot satisfy
+the wait. The hook can still change tmux state.
+
+For a fixed row range, the ordinary client checks the pane identity and
+extent in the same queue as the capture. If a resize or a change to scrollback
+invalidates the observed extent, the read fails. The caller can inspect the
+same pane again. Pending escape sequences use tmux's octal encoding so a NUL
+byte survives the client pipe. Joined rows have no
+fixed count. A qualified one-shot control client can distinguish the capture
+reply from later hook replies. On an unqualified client and daemon pairing,
+the ordinary client checks the global and session hook settings in the capture
+queue. A configured capture hook yields `Error::JoinedCaptureHook` from
+`libtmux-core`. Using a matching tmux executable allows joined capture with
+that hook. A failed observation returns no pane bytes.
 
 ## Commands nested in another command
 
@@ -115,6 +137,18 @@ deadline, 30 seconds by default and configurable through
 [`ServerBuilder::default_timeout`]. The deadline starts before the command
 waits for dispatch capacity.
 
+Parked channel clients use a separate `DispatchLimits::max_parked` budget,
+16 by default, shared across clones and handles derived over control mode.
+It covers clients through reaping and signals retained for later waits.
+At capacity, `Error::ParkedLimitExceeded` refuses a new client immediately;
+same-channel joins, signal and unlock can still proceed. Consuming a kept
+signal returns its place. Fresh discovery of a different daemon retires
+the prior generation's state and clients without delivering old signals.
+
+Literal raw `wait-for` commands and flat chains use this budget while
+retaining the ordinary request deadline. Alias bodies and nested scripts
+keep native semantics, the ordinary deadline and ordinary capacity.
+
 Dropping the command future, reaching its timeout, or shutting the server down
 signals the group and waits for the direct child while the runtime is alive.
 The signal reaches the tmux client, and leaves the tmux server alone. A command
@@ -128,9 +162,11 @@ Dropping both handles terminates and reaps the connection.
 
 [`Server::shutdown()`] is shared by all clones. It cancels active subprocess
 work and persistent control connections, rejects later commands and attaches,
-and is safe to call concurrently or repeatedly. Await it, or await your
-commands, before tearing the runtime down. Runtime destruction signals
-best-effort and cannot promise that child reaping finished.
+and is safe to call concurrently or repeatedly. If reaping takes longer
+than one second it returns `Error::ShutdownPending`. Keep Tokio running and
+call `server.shutdown().await` again to confirm cleanup. Closing an event or
+pane output stream uses the same allowance. Its connection task continues
+reaping after the caller returns.
 
 ## Errors
 
@@ -177,23 +213,22 @@ through pidfds, so PID reuse cannot redirect a signal.
 `LIBTMUX_TEST_TMUX` points the guard at a specific build when one release
 matters.
 
-[`Error`]: https://libtmux.org/en/rs/latest/reference/error-error/
-[`Error::kind`]: https://libtmux.org/en/rs/latest/reference/error-error-kind/
-[`Error::is_object_gone`]: https://libtmux.org/en/rs/latest/reference/error-error-is_object_gone/
-[`Error::is_transient`]: https://libtmux.org/en/rs/latest/reference/error-error-is_transient/
-[`Error::AfterEffect`]: https://libtmux.org/en/rs/latest/reference/error-error-aftereffect/
-[`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/error-errorkind-partialeffect/
-[`Error::UnsupportedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/error-error-unsupportedtmuxversion/
-[`Error::UnrecognizedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/error-error-unrecognizedtmuxversion/
-[`Error::VersionProbeFailed`]: https://libtmux.org/en/rs/latest/reference/error-error-versionprobefailed/
-[`Error::InvalidVersionOutput`]: https://libtmux.org/en/rs/latest/reference/error-error-invalidversionoutput/
-[`Error::Timeout`]: https://libtmux.org/en/rs/latest/reference/error-error-timeout/
-[`Error::ServerReplaced`]: https://libtmux.org/en/rs/latest/reference/error-error-serverreplaced/
-[`Server`]: https://libtmux.org/en/rs/latest/reference/server-server/
-[`Server::capabilities`]: https://libtmux.org/en/rs/latest/reference/server-server-capabilities/
-[`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/server-server-cmd/
-[`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/server-server-sessions/
-[`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/server-server-shutdown/
-[`ServerBuilder::tmux_executable`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-tmux_executable/
-[`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-default_timeout/
-[`TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
+[`Error`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error/
+[`Error::kind`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-kind/
+[`Error::is_object_gone`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-is_object_gone/
+[`Error::is_transient`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-is_transient/
+[`Error::AfterEffect`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-aftereffect/
+[`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-errorkind-partialeffect/
+[`Error::UnsupportedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-unsupportedtmuxversion/
+[`Error::UnrecognizedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-unrecognizedtmuxversion/
+[`Error::VersionProbeFailed`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-versionprobefailed/
+[`Error::InvalidVersionOutput`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-invalidversionoutput/
+[`Error::Timeout`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-timeout/
+[`Server`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server/
+[`Server::capabilities`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-capabilities/
+[`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-cmd/
+[`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-sessions/
+[`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-shutdown/
+[`ServerBuilder::tmux_executable`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-tmux_executable/
+[`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-serverbuilder-default_timeout/
+[`TestServer`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-test-testserver/

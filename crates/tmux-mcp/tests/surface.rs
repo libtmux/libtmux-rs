@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
@@ -62,25 +62,39 @@ struct Target {
     session: String,
     window: String,
     pane: String,
+    link: Value,
 }
 
 impl Target {
-    async fn new(server: &libtmux::Server, tool: &str) -> Self {
+    async fn new(server: &libtmux_tokio::Server, tool: &str) -> Self {
         let session_name = format!("surface-{tool}");
-        let session = server
+        let receipt = server
             .new_session(session_name.as_str())
             .await
             .expect("fixture session");
+        let session = server
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
         session
             .new_window("second")
             .await
             .expect("fixture second window");
         let panes = session.panes().await.expect("fixture panes");
         let pane = panes.first().expect("a new session has a pane");
+        let window = session
+            .windows()
+            .await
+            .expect("fixture windows")
+            .into_iter()
+            .find(|window| window.id() == pane.window_id())
+            .expect("fixture pane's window");
+        let link = support::listed_window_link(&support::bare_tools(server), &window).await;
         Self {
             session: session_name,
             window: pane.window_id().to_string(),
             pane: pane.id().to_string(),
+            link,
         }
     }
 }
@@ -88,6 +102,9 @@ impl Target {
 /// Produce a value for one required property from its schema, preferring a live
 /// identifier whenever the property names a tmux object.
 fn value_for(property: &str, schema: &Value, target: &Target) -> Value {
+    if property == "link" {
+        return target.link.clone();
+    }
     // Match on the suffix so a second target (`swap_pane`'s `with_pane`) is
     // still recognised as needing a live identifier.
     if property.ends_with("pane") {
@@ -203,7 +220,8 @@ fn is_version_refusal(result: &CallToolResult) -> bool {
 async fn every_advertised_tool_answers_the_schema_it_publishes() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let control = support::supports_control(guard.server()).await;
-    let staging = support::supports(guard.server(), &libtmux::since::NAMED_BUFFER_IDENTITY).await;
+    let staging =
+        support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await;
     let selection =
         Selection::parse(Some("inspect,manage,execute,teardown"), None, None).expect("selection");
     let offered = TmuxTools::builder(guard.server().clone())

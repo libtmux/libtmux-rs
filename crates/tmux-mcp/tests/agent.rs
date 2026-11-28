@@ -11,9 +11,9 @@ use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
-use libtmux::test::TestServer;
-use libtmux::{
-    Command, Error, NewSessionOptions, NewWindowOptions, Server, ServerGoneKind, SplitDirection,
+use libtmux_tokio::test::TestServer;
+use libtmux_tokio::{
+    Command, Error, NewSession, NewWindowOptions, Server, ServerGoneKind, SplitDirection,
     SplitOptions,
 };
 use serde_json::Value;
@@ -92,7 +92,7 @@ impl GuardedDispatch {
 
 impl DispatchBarrier {
     async fn wait(&self) {
-        libtmux::test::retry_until(Duration::from_secs(2), async || self.held.exists())
+        libtmux_tokio::test::retry_until(Duration::from_secs(2), async || self.held.exists())
             .await
             .expect("the selected dispatch reaches its barrier");
     }
@@ -147,7 +147,7 @@ impl LoggedTmux {
             shell_quote(log.as_os_str()),
             shell_quote(actual.as_os_str()),
         );
-        libtmux::test::install_executable(&executable, &script)
+        libtmux_tokio::test::install_executable(&executable, &script)
             .expect("logging fixture executable");
         Self {
             directory,
@@ -237,10 +237,14 @@ impl RawServerFiles {
             .build()
             .expect("raw server config");
         self.running = true;
-        let session = server
-            .new_session(NewSessionOptions::new(name).command("/bin/sh"))
+        let receipt = server
+            .new_session(NewSession::new(name).command("/bin/sh"))
             .await
             .expect("raw-path server starts");
+        let session = server
+            .inspect_session(&receipt)
+            .await
+            .expect("inspect created session");
         let pane = session
             .panes()
             .await
@@ -385,7 +389,7 @@ async fn pane_fate(server: &Server, pane: &str) -> PaneFate {
     }
 }
 
-async fn pane_handle(server: &Server, pane: &str) -> libtmux::Pane {
+async fn pane_handle(server: &Server, pane: &str) -> libtmux_tokio::Pane {
     server
         .panes()
         .await
@@ -465,7 +469,7 @@ async fn attach_terminal_client(server: &Server, pane: &str) -> TerminalClient {
         .stderr(Stdio::null())
         .spawn()
         .expect("terminal client starts");
-    libtmux::test::retry_until(Duration::from_secs(10), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(10), async || {
         server
             .clients()
             .await
@@ -482,11 +486,11 @@ async fn detach_terminal_clients(server: &Server) {
             client.detach().await.expect("terminal client detaches");
         }
     }
-    libtmux::test::retry_until(Duration::from_secs(10), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(10), async || {
         server
             .clients()
             .await
-            .is_ok_and(|clients| clients.iter().all(libtmux::Client::is_control_mode))
+            .is_ok_and(|clients| clients.iter().all(libtmux_tokio::Client::is_control_mode))
     })
     .await
     .expect("terminal client leaves the listing");
@@ -654,7 +658,7 @@ async fn await_channel(server: &Server, channel: &str) {
             .wait_for_channel(channel, Duration::from_secs(2))
             .await
             .expect("channel wait answers"),
-        libtmux::ChannelWait::Signalled,
+        libtmux_tokio::ChannelWait::Signalled,
         "channel was not signalled: {channel}"
     );
 }
@@ -672,7 +676,7 @@ async fn assert_channel_quiet(server: &Server, channel: &str) {
             .wait_for_channel(channel, Duration::from_millis(250))
             .await
             .expect("channel wait answers"),
-        libtmux::ChannelWait::TimedOut,
+        libtmux_tokio::ChannelWait::TimedOut,
         "refused input signalled {channel}"
     );
 }
@@ -733,9 +737,9 @@ async fn send_and_wait(
             .wait_for_channel(channel, Duration::from_secs(2))
             .await
             .expect("fixture signal is observed"),
-        libtmux::ChannelWait::Signalled
+        libtmux_tokio::ChannelWait::Signalled
     );
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
         pane_handle(server, pane).await.current_command() == Some(&foreground)
     })
     .await
@@ -811,8 +815,7 @@ async fn send_keys_uses_the_effective_per_pane_cohort() {
         .expect("one peer opts out");
 
     let linked = guard
-        .server()
-        .new_session("effective-cohort-link")
+        .session("effective-cohort-link")
         .await
         .expect("linked session starts");
     window
@@ -884,10 +887,10 @@ async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
         .expect("fixture retains a dead pane");
     let mut peer_handle = peer_handle;
     peer_handle
-        .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
+        .respawn(Some("exit 0"), libtmux_tokio::Respawn::Replacing)
         .await
         .expect("fixture command exits");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
         pane_handle(guard.server(), &peer).await.is_dead()
     })
     .await
@@ -1008,7 +1011,7 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
     detach_terminal_clients(guard.server()).await;
     drop(terminal);
     if support::supports_control(guard.server()).await {
-        let control = libtmux::control::ControlMode::attach(
+        let control = libtmux_tokio::control::ControlMode::attach(
             guard.server(),
             pane_handle(guard.server(), &source).await.session_id(),
         )
@@ -1272,8 +1275,7 @@ async fn pane_input_fails_closed_on_incomplete_or_inconsistent_caller_context() 
         .await
         .expect("foreign tmux starts");
     let foreign_pane = foreign_guard
-        .server()
-        .new_session("foreign-caller")
+        .session("foreign-caller")
         .await
         .expect("foreign session starts")
         .panes()
@@ -1301,7 +1303,8 @@ async fn pane_input_fails_closed_on_incomplete_or_inconsistent_caller_context() 
 #[tokio::test]
 async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
     let (guard, _, source, peer) = synchronized_fixture("paste-preflight").await;
-    let Some(guard) = support::feature_fixture(guard, &libtmux::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
@@ -1337,10 +1340,10 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
         .await
         .expect("fixture retains a dead pane");
     source_handle
-        .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
+        .respawn(Some("exit 0"), libtmux_tokio::Respawn::Replacing)
         .await
         .expect("fixture command exits");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
         pane_handle(guard.server(), &source).await.is_dead()
     })
     .await
@@ -1353,7 +1356,8 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
 #[tokio::test]
 async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
     let (guard, tools, pane) = typing_fixture("paste-recheck").await;
-    let Some(guard) = support::feature_fixture(guard, &libtmux::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
@@ -1425,7 +1429,8 @@ async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
 #[tokio::test]
 async fn paste_text_appends_enter_in_the_same_target_only_buffer() {
     let (guard, tools, source, peer) = synchronized_fixture("paste-enter").await;
-    let Some(guard) = support::feature_fixture(guard, &libtmux::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
@@ -1451,7 +1456,7 @@ async fn paste_text_appends_enter_in_the_same_target_only_buffer() {
             .wait_for_channel(channel, Duration::from_secs(2))
             .await
             .expect("pasted command signal is observed"),
-        libtmux::ChannelWait::Signalled
+        libtmux_tokio::ChannelWait::Signalled
     );
     assert!(
         pane_screen(&tools, &source)
@@ -1471,8 +1476,7 @@ async fn paste_text_appends_enter_in_the_same_target_only_buffer() {
 async fn send_keys_batch_preflights_each_executed_row() {
     let (guard, tools, source, peer) = synchronized_fixture("batch-preflight").await;
     let target = guard
-        .server()
-        .new_session("batch-target")
+        .session("batch-target")
         .await
         .expect("independent target session starts")
         .active_window()
@@ -1532,7 +1536,7 @@ async fn send_keys_batch_preflights_each_executed_row() {
                     .wait_for_channel(&channel, Duration::from_secs(2))
                     .await
                     .expect("continued row signals"),
-                libtmux::ChannelWait::Signalled
+                libtmux_tokio::ChannelWait::Signalled
             );
         } else {
             assert_channel_quiet(guard.server(), &channel).await;
@@ -1667,11 +1671,11 @@ async fn an_interrupt_ends_a_run_that_outlived_its_deadline() {
                 .await
                 .respawn(
                     Some(&format!("exec {shell} {flags}")),
-                    libtmux::Respawn::Replacing,
+                    libtmux_tokio::Respawn::Replacing,
                 )
                 .await
                 .expect("fixture pane changes shell");
-            libtmux::test::retry_until(Duration::from_secs(2), async || {
+            libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
                 pane_handle(guard.server(), &pane)
                     .await
                     .current_command()
@@ -1728,7 +1732,7 @@ async fn an_interrupt_ends_a_run_that_outlived_its_deadline() {
             baseline,
             "{shell_name}: the interrupted run never proved its completion"
         );
-        libtmux::test::retry_until(Duration::from_secs(5), async || {
+        libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
             tools
                 .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
                 .await
@@ -1790,7 +1794,7 @@ async fn respawning_releases_a_run_that_ignores_interrupts() {
     )
     .await;
     assert_ne!(respawned.is_error, Some(true), "{respawned:?}");
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         tools
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
@@ -1824,7 +1828,7 @@ async fn real_tmux_compat_a_pane_query_survives_its_server_exiting() {
         .cmd(Command::new("kill-server"))
         .await
         .expect("kill-server runs");
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         guard.server().panes().await.is_err()
     })
     .await
@@ -1935,13 +1939,13 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
         return;
     }
 
-    libtmux::test::retry_until(Duration::from_secs(3), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(3), async || {
         pane_handle(guard.server(), &pane).await.is_dead()
     })
     .await
     .expect("the retained pane reports its dead process");
 
-    libtmux::test::retry_until(Duration::from_secs(3), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(3), async || {
         tools
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
@@ -1965,10 +1969,10 @@ async fn run_requires_a_known_posix_shell_before_watcher_setup() {
     let (guard, tools, pane) = typing_fixture("run-known-shell").await;
     let mut target = pane_handle(guard.server(), &pane).await;
     target
-        .respawn(Some("exec cat"), libtmux::Respawn::Replacing)
+        .respawn(Some("exec cat"), libtmux_tokio::Respawn::Replacing)
         .await
         .expect("the pane enters an input-reading non-shell");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
         target.refresh().await.is_ok_and(|pane| {
             pane.current_command()
                 .is_some_and(|value| value.as_bytes().ends_with(b"cat"))
@@ -2060,7 +2064,7 @@ async fn assert_input_reservation_blocks_run(operation: GuardedDispatch) {
         .await
         .expect("logging tmux starts");
     if matches!(operation, GuardedDispatch::Paste)
-        && !support::supports(guard.server(), &libtmux::since::NAMED_BUFFER_IDENTITY).await
+        && !support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     {
         guard
             .shutdown()
@@ -2112,7 +2116,7 @@ async fn assert_input_reservation_blocks_run(operation: GuardedDispatch) {
         .wait_for_channel(&run_started, Duration::from_millis(500))
         .await
         .expect("run-start channel wait answers")
-        == libtmux::ChannelWait::Signalled;
+        == libtmux_tokio::ChannelWait::Signalled;
 
     barrier.release();
     signal_channel(guard.server(), &release_run).await;
@@ -2243,7 +2247,7 @@ async fn uncertain_dispatch_keeps_the_run_reserved_until_proven() {
     assert_active_run(&refusal, "paste after uncertain dispatch");
 
     signal_channel(guard.server(), release).await;
-    libtmux::test::retry_until(Duration::from_secs(3), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(3), async || {
         normal
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
@@ -2671,7 +2675,7 @@ async fn run_framing_preserves_parent_shell_state_and_status() {
         })))
         .await
         .expect("pane launch context is changed");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
         pane_screen(&tools, &pane).await.contains("MCP-DRIFT-READY")
     })
     .await
@@ -2783,11 +2787,11 @@ async fn run_frame_preserves_inherited_error_and_debug_traps() {
             .await
             .respawn(
                 Some(&format!("exec {shell} {flags}")),
-                libtmux::Respawn::Replacing,
+                libtmux_tokio::Respawn::Replacing,
             )
             .await
             .expect("fixture pane changes shell");
-        libtmux::test::retry_until(Duration::from_secs(2), async || {
+        libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
             pane_handle(guard.server(), &pane)
                 .await
                 .current_command()
@@ -3044,7 +3048,7 @@ async fn list_sessions_excludes_this_processs_own_observation_client() {
         }
     });
 
-    let raw_attached = libtmux::test::retry_until(Duration::from_secs(3), async || {
+    let raw_attached = libtmux_tokio::test::retry_until(Duration::from_secs(3), async || {
         guard
             .server()
             .session(name)
@@ -3088,16 +3092,17 @@ async fn list_sessions_excludes_this_processs_own_observation_client() {
         .spawn()
         .expect("a foreign control client starts");
 
-    let listed_with_foreign = libtmux::test::retry_until(Duration::from_secs(5), async || {
-        json(
-            tools
-                .list_sessions()
-                .await
-                .expect("sessions answers while a foreign client is attached"),
-        )["sessions"][0]["attached"]
-            == true
-    })
-    .await;
+    let listed_with_foreign =
+        libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
+            json(
+                tools
+                    .list_sessions()
+                    .await
+                    .expect("sessions answers while a foreign client is attached"),
+            )["sessions"][0]["attached"]
+                == true
+        })
+        .await;
     let _ = foreign.kill();
     let _ = foreign.wait();
     assert!(
@@ -3132,7 +3137,7 @@ async fn send_then_wait_does_not_match_the_commands_own_echo() {
         .await
         .expect("input is sent");
     let server = guard.server();
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         server
             .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
             .await
@@ -3254,7 +3259,7 @@ async fn a_match_after_the_wait_attaches_is_still_reported() {
         })))
         .await
         .expect("input is sent");
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         guard
             .server()
             .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
@@ -3380,7 +3385,7 @@ async fn search_snapshot_and_configuration_reads_are_structured() {
             .wait_for_text("searchable-marker", Duration::from_secs(5))
             .await
             .expect("polling capture"),
-        libtmux::PaneWait::Arrived
+        libtmux_tokio::PaneWait::Arrived
     );
     guard
         .server()
@@ -3449,10 +3454,14 @@ const PLANTED_SECRET: &str = "planted-secret-9c41";
 
 /// Plant a server secret, a session secret, an allowed value, and a removal.
 async fn plant_environment(server: &Server) {
-    let session = server
+    let receipt = server
         .new_session("withheld")
         .await
         .expect("session starts");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     server
         .set_environment("PLANTED_API_KEY", PLANTED_SECRET)
         .await
@@ -3612,7 +3621,7 @@ async fn selection_paste_and_channel_handlers_change_tmux() {
     );
     assert_eq!(selected["id"], second);
 
-    if support::supports(guard.server(), &libtmux::since::NAMED_BUFFER_IDENTITY).await {
+    if support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await {
         tools
             .paste_text(args(serde_json::json!({
                 "pane": first,
@@ -3620,7 +3629,7 @@ async fn selection_paste_and_channel_handlers_change_tmux() {
             })))
             .await
             .expect("text pastes");
-        libtmux::test::retry_until(Duration::from_secs(2), async || {
+        libtmux_tokio::test::retry_until(Duration::from_secs(2), async || {
             tools
                 .capture_pane(args(serde_json::json!({"pane": first})))
                 .await
@@ -3760,7 +3769,7 @@ async fn mcp_flag_shaped_input_operands_stay_literal() {
         })))
         .await
         .expect("flag-shaped MCP key names stay operands");
-    if support::supports(guard.server(), &libtmux::since::NAMED_BUFFER_IDENTITY).await {
+    if support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await {
         tools
             .paste_text(args(serde_json::json!({
                 "pane": pane,
@@ -3788,10 +3797,10 @@ async fn mcp_flag_shaped_input_operands_stay_literal() {
     assert_eq!(batch["succeeded"], 1, "{batch}");
     assert_eq!(batch["failed"], 0, "{batch}");
 
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         let screen = pane_screen(&tools, &pane).await;
         let mut expected = vec!["-mcp-text", "-mcp-key", "-mcp-batch"];
-        if support::supports(guard.server(), &libtmux::since::NAMED_BUFFER_IDENTITY).await {
+        if support::supports(guard.server(), &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await {
             expected.push("-mcp-paste");
         }
         expected.iter().all(|needle| screen.contains(needle))
@@ -3814,13 +3823,12 @@ async fn window_selection_uses_core_fixture_setup() {
     let second = session
         .new_window(NewWindowOptions::new("second"))
         .await
-        .expect("window starts")
-        .id()
-        .to_string();
+        .expect("window starts");
+    let link = support::listed_window_link(&tools, &second).await;
 
     let selected = json(
         tools
-            .select_window(args(serde_json::json!({"window": second})))
+            .select_window(args(serde_json::json!({"link": link})))
             .await
             .expect("window selects"),
     );
@@ -3829,10 +3837,75 @@ async fn window_selection_uses_core_fixture_setup() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|window| window["id"] == second && window["active"] == true)
+            .any(|window| window["id"] == second.id().as_ref() && window["active"] == true)
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_link_withdrawn_after_resolution_is_refused_by_each_command_queue() {
+    for (tool, direction, command) in [
+        ("select_window", None, "select-window"),
+        ("select_window", Some("next"), "select-window"),
+        ("select_window", Some("previous"), "select-window"),
+        ("select_window", Some("last"), "select-window"),
+        ("move_window", None, "move-window"),
+    ] {
+        let logged = LoggedTmux::new();
+        let guard = TestServer::builder()
+            .tmux_executable(&logged.executable)
+            .start()
+            .await
+            .expect("guarded link fixture starts");
+        let source = guard.session("source").await.expect("source session");
+        let target = guard.session("target").await.expect("target session");
+        let window = source.new_window("shared").await.expect("source window");
+        window.link_to(&target, Some(7)).await.expect("second link");
+        let linked = target.window_at(7).await.unwrap().unwrap();
+        let tools = bare_tools(guard.server());
+        let saved = support::listed_window_link(&tools, &linked).await;
+        let mut arguments = serde_json::json!({"link": saved});
+        if tool == "move_window" {
+            arguments["destination_session"] = source.id().as_ref().into();
+            arguments["destination_index"] = 9.into();
+        } else if let Some(direction) = direction {
+            arguments["direction"] = direction.into();
+        }
+        let mut barrier = logged.hold_next(command);
+        let pending = tokio::spawn(call_tool(tools.clone(), tool, arguments));
+        barrier.wait().await;
+        linked
+            .link()
+            .unlink()
+            .await
+            .expect("withdraw resolved placement");
+        let before = json(tools.list_windows().await.expect("state after withdrawal"));
+        barrier.release();
+        let result = pending.await.expect("placement call joins");
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "{tool} {direction:?}: {result:?}"
+        );
+        let wire = serde_json::to_value(result).unwrap();
+        let body: Value =
+            serde_json::from_str(wire["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            body["data"]["kind"], "link_gone",
+            "{tool} {direction:?}: {body}"
+        );
+        assert_eq!(body["data"]["retryable"], false);
+        assert_eq!(body["data"]["stale"], true);
+        assert_eq!(
+            json(tools.list_windows().await.expect("state after refusal")),
+            before
+        );
+        guard
+            .shutdown()
+            .await
+            .expect("guarded link fixture cleanup");
+    }
 }
 
 /// The server's instructions tell an agent to prefer ids, so every tool that
@@ -3849,13 +3922,12 @@ async fn every_session_input_accepts_the_listed_id() {
         )
         .build();
     server.new_session("by-id").await.expect("session starts");
-    let donor = server.new_session("donor").await.expect("donor starts");
+    let donor = guard.session("donor").await.expect("donor starts");
     let moving = donor
         .new_window(NewWindowOptions::new("moving"))
         .await
-        .expect("donor gains a second window")
-        .id()
-        .to_string();
+        .expect("donor gains a second window");
+    let moving_link = support::listed_window_link(&tools, &moving).await;
     let listed = call_tool(tools.clone(), "list_sessions", serde_json::json!({})).await;
     let id = listed.structured_content.expect("session listing")["sessions"]
         .as_array()
@@ -3890,7 +3962,7 @@ async fn every_session_input_accepts_the_listed_id() {
         ("create_window", serde_json::json!({"session": id})),
         (
             "move_window",
-            serde_json::json!({"window": moving, "destination_session": id, "destination_index": 7}),
+            serde_json::json!({"link": moving_link, "destination_session": id, "destination_index": 7}),
         ),
         (
             "rename_session",

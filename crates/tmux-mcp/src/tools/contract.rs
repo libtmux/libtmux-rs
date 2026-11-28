@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
-use libtmux::{PaneSize, SplitDirection, SplitOptions};
+use libtmux_tokio::{PaneSize, SplitDirection, SplitOptions};
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{CallToolRequestParams, ErrorData};
@@ -57,8 +57,8 @@ pub(crate) struct WindowSizeArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MoveWindowArgs {
-    /// The `@`-prefixed window id to move.
-    pub(crate) window: String,
+    /// The exact `link` returned by `list_windows` for the placement to move.
+    pub(crate) link: crate::WindowLinkRef,
     /// The session to move the window into, by `$`-prefixed id or name.
     pub(crate) destination_session: String,
     /// The window index there. tmux refuses one already in use.
@@ -521,7 +521,7 @@ impl TmuxTools {
             .into_keys()
             .collect();
         for session in sessions.iter().filter(|session| !session.is_empty()) {
-            let id: libtmux::SessionId = session
+            let id: libtmux_tokio::SessionId = session
                 .parse()
                 .map_err(|_| decode_error(format!("tmux expanded session_id as {session:?}")))?;
             let Some(session) = self
@@ -789,10 +789,11 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Move one window to a session and index.",
+        description = "Move the exact listed window link to a session and index. Copy its link \
+                       object from list_windows; a withdrawn or reindexed link is refused.",
         title = "Move Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxLookup],
+            "link" => [TmuxLookup],
             "destination_session" => [TmuxLookup],
             "destination_index" => [TmuxState]
         })
@@ -800,18 +801,18 @@ impl TmuxTools {
     pub async fn move_window(
         &self,
         Parameters(MoveWindowArgs {
-            window,
+            link,
             destination_session,
             destination_index,
         }): Parameters<MoveWindowArgs>,
     ) -> Result<Json<WindowView>, ToolError> {
+        let mut placement = self.find_window_link(&link).await?;
         let session = self.find_session(&destination_session).await?;
-        let mut window = self.find_window(&window).await?;
-        window
+        placement
             .move_to(&session, destination_index)
             .await
             .map_err(|error| tmux_error(&error))?;
-        Ok(Json(Self::one_window(&window)))
+        Ok(Json(Self::one_window(placement.window())))
     }
 
     #[tool(
@@ -947,9 +948,9 @@ impl TmuxTools {
         }): Parameters<CreateWindowArgs>,
     ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&session).await?;
-        let mut options = name.map(libtmux::TmuxArg::from).map_or_else(
-            libtmux::NewWindowOptions::unnamed,
-            libtmux::NewWindowOptions::new,
+        let mut options = name.map(libtmux_tokio::TmuxArg::from).map_or_else(
+            libtmux_tokio::NewWindowOptions::unnamed,
+            libtmux_tokio::NewWindowOptions::new,
         );
         if let Some(directory) = start_directory {
             options = options.start_directory(directory);
@@ -1031,9 +1032,9 @@ impl TmuxTools {
     ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
         let mode = if kill_first {
-            libtmux::Respawn::Replacing
+            libtmux_tokio::Respawn::Replacing
         } else {
-            libtmux::Respawn::OnlyIfDead
+            libtmux_tokio::Respawn::OnlyIfDead
         };
         pane.respawn(None::<String>, mode)
             .await

@@ -32,7 +32,7 @@ async fn bootstrap_exit_restores_terminal_and_retains_leader_through_drain() {
 }
 
 async fn terminal_case(action: &str, append: bool, tostop: bool) {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let helper = directory.path().join("terminal_lifecycle.py");
     std::fs::write(&helper, include_str!("fixtures/terminal_lifecycle.py")).unwrap();

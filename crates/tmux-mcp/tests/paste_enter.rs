@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
@@ -31,13 +31,13 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     };
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let Some(guard) = support::feature_fixture(guard, &libtmux::since::NAMED_BUFFER_IDENTITY).await
+    let Some(guard) =
+        support::feature_fixture(guard, &libtmux_tokio::since::NAMED_BUFFER_IDENTITY).await
     else {
         return;
     };
     let session = guard
-        .server()
-        .new_session(libtmux::NewSessionOptions::new("paste-enter").command(bash.as_str()))
+        .session(libtmux_tokio::NewSession::new("paste-enter").command(bash.as_str()))
         .await
         .expect("bash session");
     let panes = session.panes().await.expect("panes");
@@ -47,7 +47,7 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     // markers, so the same defect that is inert under bash runs fine there and
     // the assertion below passes either way. CI's default shell is sh.
     let mut running = String::new();
-    let ready = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let ready = libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         let Ok(fresh) = pane.refreshed().await else {
             return false;
         };
@@ -97,7 +97,7 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
 
     // The tool reporting success is exactly what the bracketed-paste defect
     // does, so the assertion has to be the line's own output.
-    let ran = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let ran = libtmux_tokio::test::retry_until(Duration::from_secs(5), async || {
         pane.capture().await.is_ok_and(|screen| {
             screen
                 .iter()

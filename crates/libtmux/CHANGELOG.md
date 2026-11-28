@@ -16,7 +16,39 @@ which a published crate cannot link by a relative path.
 
 ## Unreleased
 
+### Added
+
+- `libtmux::options` exposes the shared option catalogue for offline lookup
+  and validation. `libtmux::protocol` contains receipt markers and version
+  probes for transport implementers.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
+- The mixed-client example borrows an explicit socket and passes a blocking
+  creation receipt to Tokio. It cleans only the verified session and retains
+  operation and cleanup failures together. Its external fixture recipe
+  checks the borrowed session before retiring its own daemon.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 ### Changed
+
+- **Behaviour change.** Tokio channel waits and queued locks have a separate
+  finite budget, `DispatchLimits::max_parked`, shared across clones and
+  control-derived handles. It defaults to 16 and includes retained channel
+  signals. Saturation returns `Error::ParkedLimitExceeded` before spawning
+  a client; signal and unlock keep their ordinary capacity. Fresh discovery
+  of a replacement retires the old generation's clients and signals.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
+- **Breaking.** The Tokio client no longer exposes `Error::ServerReplaced`.
+  An ordinary queue-guard failure returns the native result without claiming
+  that nothing ran. `Error::is_transient` no longer treats diagnostics about
+  an absent server as proof that a mutation can be repeated safely.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
+- **Breaking.** `libtmux::blocking::Server` is the default client. Enable
+  `tokio` for `libtmux::tokio::Server`. The former root `Server` and
+  `blocking::Runtime` imports have been removed. A session creation returns a
+  receipt that can be inspected by either driver. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 - **Behaviour change.** `Server::save_buffer` creates a missing file with mode
   `0600`, where tmux created it with the mode its own umask left, `0644` under

@@ -24,8 +24,8 @@ import pathlib
 import re
 import sys
 
-CATALOG = pathlib.Path("crates/libtmux/src/formats.rs")
-LEDGER = pathlib.Path("crates/libtmux/docs/format-coverage.txt")
+CATALOG = pathlib.Path("crates/libtmux-core/src/formats/catalog.rs")
+LEDGER = pathlib.Path("crates/libtmux-tokio/docs/format-coverage.txt")
 
 # What a callback reads decides whether a listing can ever answer it.
 SCOPES = {

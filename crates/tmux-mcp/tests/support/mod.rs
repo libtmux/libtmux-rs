@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use libtmux::test::TestServer;
-use libtmux::{Command, ReleaseVersion, Server, TmuxVersion};
+use libtmux_tokio::test::TestServer;
+use libtmux_tokio::{Command, ReleaseVersion, Server, TmuxVersion};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::{ServiceExt as _, serve_server};
@@ -20,6 +20,22 @@ pub(crate) fn args<T: serde::de::DeserializeOwned>(value: Value) -> Parameters<T
 /// Render a typed answer as the structured content a client receives.
 pub(crate) fn json<T: serde::Serialize>(answer: Json<T>) -> Value {
     serde_json::to_value(answer.0).expect("a tool answer serialises")
+}
+
+/// Copy the exact placement from the public listing for a known fixture link.
+pub(crate) async fn listed_window_link(tools: &TmuxTools, window: &libtmux_tokio::Window) -> Value {
+    let listed = json(tools.list_windows().await.expect("window links list"));
+    listed["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .find(|row| {
+            row["id"] == window.id().as_ref()
+                && row["session_id"] == window.session_id().as_ref()
+                && row["index"] == window.index()
+        })
+        .expect("the exact fixture placement is listed")["link"]
+        .clone()
 }
 
 /// Read the id from an answer that made or destroyed one object.
@@ -119,7 +135,7 @@ pub(crate) async fn supports(server: &Server, needs: &ReleaseVersion) -> bool {
 pub(crate) async fn supports_control(server: &Server) -> bool {
     daemon_version(server)
         .await
-        .has_behavior(&libtmux::since::CONTROL_ACQUISITION)
+        .has_behavior(&libtmux_tokio::since::CONTROL_ACQUISITION)
 }
 
 pub(crate) async fn feature_fixture(

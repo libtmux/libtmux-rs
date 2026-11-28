@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use libtmux::test::TestServer;
-use libtmux::{Command, NewSessionOptions, Server};
+use libtmux_tokio::test::TestServer;
+use libtmux_tokio::{Command, NewSession, Server};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -19,14 +19,18 @@ async fn pane_in(server: &Server, name: &str, width: u32) -> String {
     // A second session keeps the daemon alive when the watched pane dies.
     if server.sessions().await.expect("sessions").is_empty() {
         server
-            .new_session(NewSessionOptions::new("keeper").command("sleep 600"))
+            .new_session(NewSession::new("keeper").command("sleep 600"))
             .await
             .expect("keeper session");
     }
-    let session = server
-        .new_session(NewSessionOptions::new(name).command(SHELL).size(width, 12))
+    let receipt = server
+        .new_session(NewSession::new(name).command(SHELL).size(width, 12))
         .await
         .expect("session");
+    let session = server
+        .inspect_session(&receipt)
+        .await
+        .expect("inspect created session");
     let pane = session.panes().await.expect("panes").remove(0);
     let id = pane.id().to_string();
     prompt_ready(server, &id).await;

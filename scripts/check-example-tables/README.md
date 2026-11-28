@@ -6,10 +6,10 @@ above a `text` fence names the example. The script runs it with `cargo run
 --example` and compares every column except the wall clock, whose shape it
 checks instead.
 
-`just example-tables` runs it on `README.md`, and so does `just check` in CI.
+`just example-tables` checks the Tokio README. CI includes it in `just check`.
 
 ```console
-$ uv run scripts/check-example-tables/check_example_tables.py README.md
+$ uv run scripts/check-example-tables/check_example_tables.py crates/libtmux-tokio/README.md
 ```
 
 Run its tests, which need no cargo:

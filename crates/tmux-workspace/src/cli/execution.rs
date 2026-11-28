@@ -5,9 +5,8 @@ use std::{
 };
 
 use clap::ArgMatches;
-use libtmux::{
-    Command, NewSessionOptions, NewWindowOptions, Server, Session, SplitDirection, SplitOptions,
-    escape_format,
+use libtmux_tokio::{
+    Command, NewSession, NewWindowOptions, Server, Session, SplitDirection, SplitOptions,
 };
 use serde_json::{Value, json};
 
@@ -47,6 +46,8 @@ struct Effects {
     input: usize,
     path: Option<String>,
     session: Option<Session>,
+    creation: Option<(Server, libtmux_tokio::CreatedSession)>,
+    unknown_creation: bool,
     owned: bool,
     changed: bool,
     mutation_started: Option<&'static str>,
@@ -70,7 +71,8 @@ impl LoadState {
         let mut partial = !self.results.is_empty();
         let mut results = self.results.clone();
         if let Some(effects) = &self.current {
-            let uncertain = error.code == "interrupted" && effects.mutation_started.is_some();
+            let uncertain = effects.unknown_creation
+                || (error.code == "interrupted" && effects.mutation_started.is_some());
             partial |= effects.changed || uncertain;
             failure["input_index"] = json!(effects.input);
             failure["partial_effects"] = json!(effects.changed);
@@ -93,7 +95,7 @@ impl LoadState {
                 results.push(json!({
                     "input": effects.path,
                     "input_index": effects.input,
-                    "session_id": effects.session.as_ref().map(|s| s.id().to_string()),
+                    "session_id": effects.session_id(),
                     "session_name": effects.session.as_ref().map(|s| s.name().to_string_lossy()),
                     "reused": effects.stage == REUSED,
                 }));
@@ -120,8 +122,26 @@ impl LoadState {
 }
 
 impl Effects {
+    fn session_id(&self) -> Option<String> {
+        self.creation
+            .as_ref()
+            .map(|(_, receipt)| receipt.session().to_string())
+            .or_else(|| {
+                self.session
+                    .as_ref()
+                    .map(|session| session.id().to_string())
+            })
+    }
+
+    fn record_creation(&mut self, server: &Server, receipt: &libtmux_tokio::CreatedSession) {
+        self.creation = Some((server.clone(), receipt.clone()));
+        self.owned = true;
+        self.changed = true;
+        self.stage = "session-created";
+    }
+
     fn value(&self) -> Value {
-        json!({"input_index":self.input,"session_id":self.session.as_ref().map(|s|s.id().to_string()),"session_name":self.session.as_ref().map(|s|s.name().to_string_lossy()),"owned_session":self.owned,"window_ids":self.windows,"pane_ids":self.panes,"stage":self.stage,"script_output":self.script_output})
+        json!({"input_index":self.input,"session_id":self.session_id(),"session_name":self.session.as_ref().map(|s|s.name().to_string_lossy()),"owned_session":self.owned,"window_ids":self.windows,"pane_ids":self.panes,"stage":self.stage,"script_output":self.script_output})
     }
 }
 
@@ -182,7 +202,7 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
         // A socket with no server behind it holds no session either, so it is
         // the answer a name that is not running gets, not a transport error.
         let found = match server.session(name).await {
-            Err(libtmux::Error::ServerGone { .. }) => None,
+            Err(libtmux_tokio::Error::ServerGone { .. }) => None,
             other => other?,
         };
         return found.ok_or_else(|| {
@@ -198,7 +218,7 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
         }
     }
     let mut sessions = match server.sessions().await {
-        Err(libtmux::Error::ServerGone { .. }) => Vec::new(),
+        Err(libtmux_tokio::Error::ServerGone { .. }) => Vec::new(),
         other => other?,
     };
     if sessions.is_empty() {
@@ -441,7 +461,7 @@ enum Disposition {
     /// Build, but leave the client where it is.
     Detached,
     /// Append into the answering prompt's own `AppendTarget`.
-    Append(AppendTarget),
+    Append(Box<AppendTarget>),
     /// The session already exists and the answer was no: change nothing.
     Decline,
 }
@@ -482,7 +502,7 @@ async fn prompt_disposition(
     )?;
     Ok(match answer {
         'n' => Disposition::Detached,
-        'a' => Disposition::Append(append_target(server).await?),
+        'a' => Disposition::Append(Box::new(append_target(server).await?)),
         _ => Disposition::Switch,
     })
 }
@@ -620,7 +640,7 @@ async fn load_one(
         None => (inherited, context.attach),
         Some(Disposition::Switch) => (inherited, true),
         Some(Disposition::Detached | Disposition::Decline) => (inherited, false),
-        Some(Disposition::Append(target)) => (Some(target), false),
+        Some(Disposition::Append(target)) => (Some(target.as_ref()), false),
     };
     if let Some(progress) = &mut report.progress {
         progress.start(workspace)?;
@@ -728,7 +748,10 @@ fn tmux_context(context: &str) -> Result<(&str, u32)> {
     })
 }
 
-async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libtmux::SessionId)> {
+async fn target_context(
+    server: &Server,
+    target: &str,
+) -> Result<(u32, u64, libtmux_tokio::SessionId)> {
     let result = server
         .cmd(
             Command::new("display-message")
@@ -744,7 +767,7 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
     let parsed = (|| {
         let pid = fields.next()?.parse::<u32>().ok()?;
         let started = fields.next()?.parse::<u64>().ok()?;
-        let session = fields.next()?.parse::<libtmux::SessionId>().ok()?;
+        let session = fields.next()?.parse::<libtmux_tokio::SessionId>().ok()?;
         (pid > 0 && started > 0 && fields.next().is_none()).then_some((pid, started, session))
     })();
     parsed.ok_or_else(|| append_context("target has no live daemon and session identity"))
@@ -757,7 +780,7 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
 /// other server, so it counts only once `TMUX` and `server` agree on the
 /// daemon and on the pane's session. Aimed elsewhere, there is no current
 /// session to default to, which is not an error.
-async fn invoking_session(server: &Server) -> Option<libtmux::SessionId> {
+async fn invoking_session(server: &Server) -> Option<libtmux_tokio::SessionId> {
     let pane = std::env::var("TMUX_PANE").ok()?;
     let context = std::env::var("TMUX").ok()?;
     let (socket, pid) = tmux_context(&context).ok()?;
@@ -774,7 +797,7 @@ async fn invoking_session(server: &Server) -> Option<libtmux::SessionId> {
 async fn append_target(server: &Server) -> Result<AppendTarget> {
     let pane = std::env::var("TMUX_PANE")
         .map_err(|_| CliError::usage("append requires TMUX_PANE identifying the current pane"))?
-        .parse::<libtmux::PaneId>()
+        .parse::<libtmux_tokio::PaneId>()
         .map_err(|error| append_context(error.to_string()))?;
     let context = std::env::var("TMUX")
         .map_err(|_| CliError::usage("append requires the inherited TMUX daemon identity"))?;
@@ -831,18 +854,23 @@ async fn build(
     } else {
         effects.stage = "session-creation";
         effects.mutation_started = Some(effects.stage);
-        let mut options = NewSessionOptions::new(escape_format(&workspace.name))
-            .start_directory(escape_format(&workspace.directory));
+        let mut options = NewSession::new(&workspace.name).start_directory(&workspace.directory);
         // No `-x`/`-y` at all with detection disabled: tmux then sizes the
         // session from the largest attached client, or `default-size`.
         if let Some((columns, rows)) = context.dimensions {
             options = options.size(columns, rows);
         }
-        let session = server.new_session(options).await?;
+        let receipt = server.new_session(options).await.inspect_err(|error| {
+            if let Some(created) = error.creation_receipt() {
+                effects.record_creation(server, created);
+            } else {
+                effects.unknown_creation =
+                    error.operation_effect() == Some(libtmux_core::Effect::Unknown);
+            }
+        })?;
+        effects.record_creation(server, &receipt);
+        let session = server.inspect_session(&receipt).await?;
         effects.session = Some(session.clone());
-        effects.owned = true;
-        effects.changed = true;
-        effects.stage = "session-created";
         report.event("session-created", json!({"input_index":input,"session_id":session.id().to_string(),"session_name":workspace.name}))?;
         session
     };
@@ -855,7 +883,7 @@ async fn build(
     let mut bootstrap = if append {
         None
     } else {
-        session.active_window().await?
+        session.active_window().await?.map(|window| window.link())
     };
     if let Some(window) = &mut bootstrap {
         let spare = workspace
@@ -880,10 +908,10 @@ async fn build(
         }
     }
     if let Some(window) = bootstrap {
-        window.kill().await?;
+        window.into_window().kill().await?;
     }
-    if let Some(mut window) = selected {
-        window.select().await?;
+    if let Some(window) = selected {
+        window.link().select().await?;
     }
     effects.stage = "completed";
     Ok((session, false))
@@ -939,10 +967,13 @@ async fn remove_owned_session(effects: &mut Effects) -> Result<bool> {
     if !effects.owned {
         return Ok(false);
     }
-    let Some(session) = effects.session.clone() else {
+    if let Some((server, receipt)) = &effects.creation {
+        server.kill_created_session(receipt).await?;
+    } else if let Some(session) = effects.session.clone() {
+        session.kill().await?;
+    } else {
         return Ok(false);
-    };
-    session.kill().await?;
+    }
     effects.changed = false;
     effects.windows.clear();
     effects.panes.clear();
@@ -1157,7 +1188,7 @@ async fn build_window(
     effects: &mut Effects,
     window_index: usize,
     readiness: bool,
-) -> Result<libtmux::Window> {
+) -> Result<libtmux_tokio::Window> {
     if let Some(progress) = &mut report.progress {
         progress.window(window_index + 1, config)?;
     }
@@ -1169,9 +1200,9 @@ async fn build_window(
         .name
         .as_ref()
         .map_or_else(NewWindowOptions::unnamed, |name| {
-            NewWindowOptions::new(escape_format(name))
+            NewWindowOptions::new(name.as_str())
         });
-    options = options.start_directory(escape_format(&first.directory));
+    options = options.start_directory(&first.directory);
     if let Some(index) = config.index {
         options = options.index(index);
     }
@@ -1209,8 +1240,8 @@ async fn build_window(
     // divides the active pane, which a detached split never changes.
     let mut source = panes[0].clone();
     for pane_config in config.panes.iter().skip(1) {
-        let mut split = SplitOptions::new(SplitDirection::Below)
-            .start_directory(escape_format(&pane_config.directory));
+        let mut split =
+            SplitOptions::new(SplitDirection::Below).start_directory(&pane_config.directory);
         if let Some(shell) = &pane_config.shell {
             split = split.command(shell);
         }
@@ -1221,7 +1252,7 @@ async fn build_window(
         effects.panes.push(pane.id().to_string());
         source = pane.clone();
         panes.push(pane);
-        window.select_layout(libtmux::Layout::Tiled).await?;
+        window.select_layout(libtmux_tokio::Layout::Tiled).await?;
     }
     if let Some(layout) = config.layout.as_deref().filter(|layout| !layout.is_empty()) {
         window.select_layout(layout).await?;
@@ -1266,7 +1297,10 @@ async fn build_window(
     Ok(window)
 }
 
-async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand]) -> Result<()> {
+async fn send_commands(
+    pane: &libtmux_tokio::Pane,
+    commands: &[normalize::TypedCommand],
+) -> Result<()> {
     for command in commands {
         tokio::time::sleep(command.before).await;
         if command.enter {
@@ -1282,7 +1316,7 @@ async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand
 /// Sets the options held back until the first pane's shell started, then waits
 /// for the window's name to follow it.
 async fn name_after_first_shell(
-    window: &libtmux::Window,
+    window: &libtmux_tokio::Window,
     deferred: &mut Vec<(&String, &String)>,
     wait: bool,
 ) -> Result<()> {
@@ -1302,7 +1336,7 @@ async fn name_after_first_shell(
 /// the forked `tmux` can outlive the shell's start. Without this the window
 /// is `tmux` to whatever reads it as the loader exits. A window that is not
 /// renamed automatically, or a probe that fails, ends the wait at once.
-async fn wait_for_window_name(window: &libtmux::Window) {
+async fn wait_for_window_name(window: &libtmux_tokio::Window) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
         let Ok(reading) = window
@@ -1321,7 +1355,7 @@ async fn wait_for_window_name(window: &libtmux::Window) {
     }
 }
 
-async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<()> {
+async fn wait_for_prompt(pane: &libtmux_tokio::Pane, report: &mut Reporter) -> Result<()> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
         match pane.format("#{cursor_x},#{cursor_y}").await {
@@ -1436,11 +1470,11 @@ pub(super) async fn capture(session: &Session) -> Result<Value> {
     Ok(value)
 }
 
-fn option_value(value: libtmux::OptionValue) -> Value {
+fn option_value(value: libtmux_core::options::OptionValue) -> Value {
     match value {
-        libtmux::OptionValue::Flag(value) => json!(value),
-        libtmux::OptionValue::Number(value) => json!(value),
-        libtmux::OptionValue::Text(value) => json!(value.to_string_lossy()),
+        libtmux_core::options::OptionValue::Flag(value) => json!(value),
+        libtmux_core::options::OptionValue::Number(value) => json!(value),
+        libtmux_core::options::OptionValue::Text(value) => json!(value.to_string_lossy()),
         _ => Value::Null,
     }
 }
@@ -1535,7 +1569,7 @@ async fn require_attach_context(server: &Server) -> Result<bool> {
         command.arg("#{pid}")
     } else {
         let pane = pane
-            .parse::<libtmux::PaneId>()
+            .parse::<libtmux_tokio::PaneId>()
             .map_err(|_| unusable_context("TMUX_PANE does not name a pane"))?;
         // A target tmux cannot resolve is not a refusal: it answers with the
         // fields it could fill and leaves the rest empty, so the pane's own
@@ -1611,7 +1645,7 @@ async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result
 /// reported rather than restarted by a client that was only meant to attach.
 fn handoff_command(
     server: &Server,
-    version: &libtmux::TmuxVersion,
+    version: &libtmux_tokio::TmuxVersion,
     session: String,
     inside_tmux: bool,
 ) -> tokio::process::Command {
@@ -1631,16 +1665,7 @@ fn handoff_command(
     if server.colors() == Some(256) {
         command.arg("-2");
     }
-    command
-        .arg("if-shell")
-        .arg("-F")
-        .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
-        .arg("")
-        .arg("libtmux-core-version-changed")
-        .arg(";")
-        .arg(action)
-        .arg("-t")
-        .arg(session);
+    command.args(version.fence_ordinary_argv(vec![action.into(), "-t".into(), session.into()]));
     command
 }
 
@@ -1650,12 +1675,12 @@ mod handoff_tests {
 
     #[test]
     fn the_handoff_never_lets_the_client_start_a_daemon() {
-        let server = libtmux::Server::builder()
-            .socket_path("/tmp/libtmux-handoff-test")
+        let server = libtmux_tokio::Server::builder()
+            .socket_path("/tmp/libtmux-rs-test/handoff")
             .tmux_executable("tmux")
             .build()
             .expect("client configured");
-        let version = libtmux::TmuxVersion::parse_output(b"tmux 3.3a\n").expect("parses");
+        let version = libtmux_tokio::TmuxVersion::parse_output(b"tmux 3.3a\n").expect("parses");
         let command = handoff_command(&server, &version, "$1".to_owned(), false);
         let args: Vec<_> = command
             .as_std()
@@ -1663,10 +1688,8 @@ mod handoff_tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args.first().map(String::as_str), Some("-N"), "{args:?}");
-        assert!(
-            args.iter().any(|arg| arg == "libtmux-core-version-changed"),
-            "{args:?}"
-        );
+        assert!(args.iter().any(|arg| arg == "}"), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == "libtmux-core-version-changed"));
         assert!(args.iter().any(|arg| arg == "attach-session"), "{args:?}");
     }
 }

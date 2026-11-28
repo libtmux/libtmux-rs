@@ -9,7 +9,7 @@ tmux does not report an option's type over the command line, so the type has
 to come from its source. Generating it keeps the table honest: rerun this
 against a newer tmux and the diff shows exactly what changed.
 
-    generate-option-schema.py TMUX_SOURCE/options-table.c > crates/libtmux/src/options/generated.rs
+    generate-option-schema.py TMUX_SOURCE/options-table.c > crates/libtmux-core/src/options/generated.rs
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use libtmux::{CaptureOptions, Command, TmuxText};
+use libtmux_tokio::{CaptureOptions, Command, TmuxText};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{tool, tool_router};
 
@@ -124,12 +124,20 @@ impl TmuxTools {
     /// List every window on the server, one row per session link.
     #[tool(
         description = "List every window on the server. A window linked into several sessions \
-                       appears once per link, so an id can repeat with a different session_id.",
+                       appears once per link. Copy the returned link object into select_window \
+                       or move_window to act on that exact generation, session and index.",
         title = "List Windows",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
     pub async fn list_windows(&self) -> Result<Json<Windows>, ToolError> {
-        let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
+        let windows: Vec<_> = self
+            .server
+            .window_links()
+            .await
+            .map_err(|e| tmux_error(&e))?
+            .into_iter()
+            .map(libtmux_tokio::WindowLink::into_window)
+            .collect();
         Ok(Json(Self::render_windows(&windows)))
     }
 
@@ -535,7 +543,7 @@ impl TmuxTools {
             entries: entries
                 .into_iter()
                 .map(|(name, entry)| match entry {
-                    libtmux::EnvironmentEntry::Set(value) => {
+                    libtmux_tokio::EnvironmentEntry::Set(value) => {
                         let allowed = self.environment_values.contains(&name);
                         EnvironmentEntry {
                             name,
@@ -544,7 +552,7 @@ impl TmuxTools {
                             withheld: !allowed,
                         }
                     }
-                    libtmux::EnvironmentEntry::Removed => EnvironmentEntry {
+                    libtmux_tokio::EnvironmentEntry::Removed => EnvironmentEntry {
                         name,
                         state: EnvironmentState::Removed,
                         value: None,

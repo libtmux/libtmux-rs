@@ -103,7 +103,7 @@ def main(arguments: list[str]) -> int:
         print(f"  {entry.relative_to(root)}", file=sys.stderr)
     print(
         "\ntmux does not unlink its socket when the server exits, so a test that\n"
-        "names its own socket path has to remove it. libtmux::test::TestServer\n"
+        "names its own socket path has to remove it. libtmux_tokio::test::TestServer\n"
         "owns that lifecycle; prefer it over Server::builder().socket_path().",
         file=sys.stderr,
     )

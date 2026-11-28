@@ -4,9 +4,9 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use libtmux::TmuxText;
-use libtmux::plan::Planner;
-use libtmux::test::TestServer;
+use libtmux_tokio::TmuxText;
+use libtmux_tokio::plan::Planner;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{
     BuildError, ConfigError, PaneConfig, ShellCommand, Workspace, WorkspaceBuilder,
 };
@@ -233,7 +233,7 @@ windows:
 }
 
 #[tokio::test]
-async fn building_over_an_existing_session_is_refused() {
+async fn an_unconfirmed_build_does_not_adopt_an_existing_session() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
@@ -241,18 +241,56 @@ async fn building_over_an_existing_session_is_refused() {
         Workspace::from_yaml("session_name: taken\nwindows: []").expect("configuration parses");
     let builder = WorkspaceBuilder::new(server);
 
-    builder.build(&workspace).await.expect("first build");
+    let original = builder.build(&workspace).await.expect("first build");
+    let original_windows = original.windows().await.expect("original windows");
+    let conflicting = Workspace::from_yaml("session_name: taken\nwindows:\n- window_name: must-not-replace\n  panes: [blank]\n- window_name: must-not-add\n  panes: [blank]\n").expect("conflicting workspace");
     let error = builder
-        .build(&workspace)
+        .build(&conflicting)
         .await
         .expect_err("a second build is refused");
 
-    assert!(
-        matches!(error, BuildError::SessionExists { .. }),
-        "building into an existing session would interleave windows, got {error:?}",
+    let message = error.to_string();
+    let BuildError::CreationUnconfirmed { name, source } = error else {
+        panic!("a missing receipt must preserve its creation uncertainty: {message}");
+    };
+    assert_eq!(name, "taken");
+    assert_eq!(
+        source.operation_effect(),
+        Some(libtmux_core::Effect::Unknown)
     );
+    assert!(source.creation_receipt().is_none());
+    assert!(!source.is_transient());
+    assert!(message.contains("taken") && message.contains("inspect the server"));
+    let sessions = server.sessions().await.expect("inspect actual effects");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id(), original.id());
+    let windows = sessions[0].windows().await.expect("unchanged topology");
+    assert_eq!(windows.len(), original_windows.len());
+    assert_eq!(windows[0].key(), original_windows[0].key());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn layout_preflight_on_a_closed_executor_preserves_its_original_error() {
+    let guard = TestServer::new().await.expect("tmux starts");
+    let server = guard.server().clone();
+    guard.shutdown().await.expect("executor shuts down");
+    let workspace =
+        Workspace::from_yaml("session_name: never-submitted\nwindows: []").expect("workspace");
+    let error = WorkspaceBuilder::new(&server)
+        .build(&workspace)
+        .await
+        .expect_err("a closed executor cannot build");
+    let BuildError::Tmux(error) = error else {
+        panic!("pre-dispatch rejection must retain its phase: {error}");
+    };
+    assert!(
+        matches!(&error, libtmux_tokio::Error::ExecutorShutdown { .. }),
+        "layout validation fails before a typed creation starts: {error:?}"
+    );
+    assert_eq!(error.operation_effect(), None);
+    assert!(error.creation_receipt().is_none());
 }
 
 #[tokio::test]
@@ -274,16 +312,16 @@ async fn failed_lookup_after_a_completed_build_is_a_partial_effect() {
     let BuildError::Tmux(error) = error else {
         panic!("lookup failure must remain a libtmux error");
     };
-    assert_eq!(error.kind(), libtmux::ErrorKind::PartialEffect);
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::PartialEffect);
 
-    let libtmux::Error::AfterEffect {
+    let libtmux_tokio::Error::AfterEffect {
         operation, source, ..
     } = error
     else {
         panic!("the post-build lookup must identify its committed boundary");
     };
     assert_eq!(operation, "workspace-build");
-    assert_eq!(source.kind(), libtmux::ErrorKind::ServerGone);
+    assert_eq!(source.kind(), libtmux_tokio::ErrorKind::ServerGone);
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -310,14 +348,14 @@ windows: []
     let BuildError::Tmux(error) = error else {
         panic!("a refusal after creation must remain a libtmux error");
     };
-    assert_eq!(error.kind(), libtmux::ErrorKind::PartialEffect);
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::PartialEffect);
     assert!(matches!(
         error,
-        libtmux::Error::AfterEffect {
+        libtmux_tokio::Error::AfterEffect {
             operation: "workspace-build",
             source,
             ..
-        } if source.kind() == libtmux::ErrorKind::Refused
+        } if source.kind() == libtmux_tokio::ErrorKind::Refused
     ));
     assert!(
         server
@@ -502,16 +540,17 @@ windows:
     // Joined rather than searched per line: a value this long soft-wraps
     // across more than one row of an 80-column pane.
     let marker = format!("got:{value}:end");
-    let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
-        pane.capture().await.is_ok_and(|lines| {
-            lines
-                .iter()
-                .map(|line| line.to_string_lossy())
-                .collect::<String>()
-                .contains(marker.as_str())
+    let printed =
+        libtmux_tokio::test::retry_until(std::time::Duration::from_secs(30), async || {
+            pane.capture().await.is_ok_and(|lines| {
+                lines
+                    .iter()
+                    .map(|line| line.to_string_lossy())
+                    .collect::<String>()
+                    .contains(marker.as_str())
+            })
         })
-    })
-    .await;
+        .await;
     assert!(printed.is_ok(), "the loader's value reached the pane");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -543,16 +582,17 @@ windows:
     let pane = session.panes().await.expect("panes").remove(1);
 
     let marker = format!("got:{value}:end");
-    let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
-        pane.capture().await.is_ok_and(|lines| {
-            lines
-                .iter()
-                .map(|line| line.to_string_lossy())
-                .collect::<String>()
-                .contains(marker.as_str())
+    let printed =
+        libtmux_tokio::test::retry_until(std::time::Duration::from_secs(30), async || {
+            pane.capture().await.is_ok_and(|lines| {
+                lines
+                    .iter()
+                    .map(|line| line.to_string_lossy())
+                    .collect::<String>()
+                    .contains(marker.as_str())
+            })
         })
-    })
-    .await;
+        .await;
     assert!(printed.is_ok(), "the loader's value reached the pane");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -608,19 +648,20 @@ windows:
         "second:second-pane::end",
         "third:window:inherited:end",
     ] {
-        let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
-            for pane in &panes {
-                if pane.capture().await.is_ok_and(|lines| {
-                    lines
-                        .iter()
-                        .any(|line| line.to_string_lossy().contains(marker))
-                }) {
-                    return true;
+        let printed =
+            libtmux_tokio::test::retry_until(std::time::Duration::from_secs(30), async || {
+                for pane in &panes {
+                    if pane.capture().await.is_ok_and(|lines| {
+                        lines
+                            .iter()
+                            .any(|line| line.to_string_lossy().contains(marker))
+                    }) {
+                        return true;
+                    }
                 }
-            }
-            false
-        })
-        .await;
+                false
+            })
+            .await;
         assert!(printed.is_ok(), "{marker} reached its pane");
     }
 
@@ -840,11 +881,11 @@ windows:
 
     assert!(matches!(
         session.environment("LIBTMUX_WORKSPACE").await.expect("read"),
-        Some(libtmux::EnvironmentEntry::Set(value)) if value.as_bytes() == b"applied",
+        Some(libtmux_tokio::EnvironmentEntry::Set(value)) if value.as_bytes() == b"applied",
     ));
     assert_eq!(
         session.typed_option("base-index").await.expect("read"),
-        Some(libtmux::OptionValue::Number(3)),
+        Some(libtmux_tokio::OptionValue::Number(3)),
     );
 
     let window = session
@@ -856,7 +897,7 @@ windows:
         .expect("one window");
     assert_eq!(
         window.typed_option("main-pane-width").await.expect("read"),
-        Some(libtmux::OptionValue::from("42")),
+        Some(libtmux_tokio::OptionValue::from("42")),
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -1010,15 +1051,16 @@ windows:
         .expect("the workspace builds");
 
     // Typed commands start once each shell reads them.
-    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
-        let panes = built.panes().await.unwrap_or_default();
-        panes.len() == 3
-            && panes.iter().skip(1).all(|pane| {
-                pane.current_command()
-                    .is_some_and(|command| command.to_string_lossy() == "sleep")
-            })
-    })
-    .await;
+    let settled =
+        libtmux_tokio::test::retry_until(std::time::Duration::from_secs(30), async || {
+            let panes = built.panes().await.unwrap_or_default();
+            panes.len() == 3
+                && panes.iter().skip(1).all(|pane| {
+                    pane.current_command()
+                        .is_some_and(|command| command.to_string_lossy() == "sleep")
+                })
+        })
+        .await;
     assert!(settled.is_ok(), "the typed commands are running");
 
     let frozen = tmux_workspace::freeze(&built)
@@ -1175,23 +1217,24 @@ windows:
 /// Callers point `default-command` at `cat`, so a pane shows exactly what was
 /// typed into it: a command kept out of history is the line that starts with
 /// a space.
-async fn typed_line(session: &libtmux::Session, text: &str) -> String {
+async fn typed_line(session: &libtmux_tokio::Session, text: &str) -> String {
     let mut seen = None;
-    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
-        for pane in session.panes().await.unwrap_or_default() {
-            seen = pane.capture().await.ok().and_then(|lines| {
-                lines
-                    .iter()
-                    .map(|line| line.to_string_lossy().trim_end().to_owned())
-                    .find(|line| line.trim_start() == text)
-            });
-            if seen.is_some() {
-                return true;
+    let settled =
+        libtmux_tokio::test::retry_until(std::time::Duration::from_secs(30), async || {
+            for pane in session.panes().await.unwrap_or_default() {
+                seen = pane.capture().await.ok().and_then(|lines| {
+                    lines
+                        .iter()
+                        .map(|line| line.to_string_lossy().trim_end().to_owned())
+                        .find(|line| line.trim_start() == text)
+                });
+                if seen.is_some() {
+                    return true;
+                }
             }
-        }
-        false
-    })
-    .await;
+            false
+        })
+        .await;
     assert!(settled.is_ok(), "{text:?} reached a pane");
     seen.expect("the line was seen")
 }
@@ -1245,8 +1288,8 @@ async fn commands_stay_out_of_history_unless_the_file_says_otherwise() {
 }
 
 /// Whether some pane of `session` shows `text`, waiting for it to.
-async fn shows(session: &libtmux::Session, text: &str) -> bool {
-    libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+async fn shows(session: &libtmux_tokio::Session, text: &str) -> bool {
+    libtmux_tokio::test::retry_until(std::time::Duration::from_secs(30), async || {
         for pane in session.panes().await.unwrap_or_default() {
             if pane.capture().await.is_ok_and(|lines| {
                 lines
@@ -1605,7 +1648,7 @@ windows:
 }
 
 /// The first pane of each window starts where the file says.
-async fn first_pane_directories(session: &libtmux::Session) -> Vec<String> {
+async fn first_pane_directories(session: &libtmux_tokio::Session) -> Vec<String> {
     let mut directories = Vec::new();
     for window in session.windows().await.expect("windows list") {
         let panes = window.panes().await.expect("panes list");
@@ -1766,7 +1809,7 @@ fn an_error_names_the_line_and_column_to_fix() {
 async fn sleeps_pause_the_build_between_commands() {
     use std::time::{Duration, Instant};
 
-    use libtmux::plan::Op;
+    use libtmux_tokio::plan::Op;
 
     let workspace = Workspace::from_yaml(
         "
@@ -1830,14 +1873,10 @@ windows:
 async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
     // The default shell round-trips with shell_command omitted; emitting
     // it would reload the shell as an explicit command inside itself.
-    use libtmux::SplitDirection;
+    use libtmux_tokio::SplitDirection;
 
     let guard = TestServer::new().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session("freeze-shell")
-        .await
-        .expect("session starts");
+    let session = guard.session("freeze-shell").await.expect("session starts");
     let window = session
         .active_window()
         .await
@@ -1849,15 +1888,16 @@ async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
     let other = window.split(SplitDirection::Below).await.expect("split");
     other.send_line("sleep 300").await.expect("type command");
 
-    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(10), async || {
-        let Ok(refreshed) = other.refreshed().await else {
-            return false;
-        };
-        refreshed
-            .current_command()
-            .is_some_and(|command| command.to_string_lossy() == "sleep")
-    })
-    .await;
+    let settled =
+        libtmux_tokio::test::retry_until(std::time::Duration::from_secs(10), async || {
+            let Ok(refreshed) = other.refreshed().await else {
+                return false;
+            };
+            refreshed
+                .current_command()
+                .is_some_and(|command| command.to_string_lossy() == "sleep")
+        })
+        .await;
     assert!(settled.is_ok(), "the split pane's command settled");
 
     let frozen = tmux_workspace::freeze(&session)
@@ -1924,14 +1964,15 @@ windows:
         .zip(["MARK-A", "MARK-B", "MARK-C", "MARK-D"])
         .enumerate()
     {
-        let seen = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
-            pane.capture().await.is_ok_and(|lines| {
-                lines
-                    .iter()
-                    .any(|line| line.to_string_lossy().contains(marker))
+        let seen =
+            libtmux_tokio::test::retry_until(std::time::Duration::from_secs(15), async || {
+                pane.capture().await.is_ok_and(|lines| {
+                    lines
+                        .iter()
+                        .any(|line| line.to_string_lossy().contains(marker))
+                })
             })
-        })
-        .await;
+            .await;
         assert!(seen.is_ok(), "pane index {index} should show {marker}");
     }
 
@@ -1958,15 +1999,16 @@ async fn freeze_recognizes_a_default_shell_whose_running_name_differs() {
         .expect("the workspace builds");
 
     let pane = session.panes().await.expect("panes").remove(0);
-    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(10), async || {
-        let Ok(refreshed) = pane.refreshed().await else {
-            return false;
-        };
-        refreshed
-            .current_command()
-            .is_some_and(|command| command.to_string_lossy() == "bash")
-    })
-    .await;
+    let settled =
+        libtmux_tokio::test::retry_until(std::time::Duration::from_secs(10), async || {
+            let Ok(refreshed) = pane.refreshed().await else {
+                return false;
+            };
+            refreshed
+                .current_command()
+                .is_some_and(|command| command.to_string_lossy() == "bash")
+        })
+        .await;
     assert!(settled.is_ok(), "the pane's command settled to bash");
 
     let frozen = tmux_workspace::freeze(&session)

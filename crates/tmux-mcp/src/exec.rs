@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use libtmux::{CaptureOptions, ControlLimits, ControlModeErrorKind, Error, Pane};
+use libtmux_tokio::{CaptureOptions, ControlLimits, ControlModeErrorKind, Error, Pane};
 use regex::bytes::Regex;
 use serde::Serialize;
 
@@ -66,6 +66,8 @@ pub enum RunOutcome {
     Deadline,
     /// The pane stopped writing for good.
     PaneClosed,
+    /// The output stream lost continuity while the command may still run.
+    StreamLost,
     /// The client withdrew the request while the run was still going.
     Cancelled,
     /// The pane never acknowledged the command.
@@ -258,7 +260,7 @@ impl Patterns {
 ///
 /// Returns an error when the pane cannot be watched or read.
 pub(crate) async fn wait_for_text(
-    server: &libtmux::Server,
+    server: &libtmux_tokio::Server,
     pane: &Pane,
     patterns: &Patterns,
     stops: &Patterns,
@@ -272,7 +274,7 @@ pub(crate) async fn wait_for_text(
     let streams = server
         .daemon_version()
         .await?
-        .has_behavior(&libtmux::since::CONTROL_ACQUISITION);
+        .has_behavior(&libtmux_tokio::since::CONTROL_ACQUISITION);
     if !streams {
         return wait_for_text_polling(pane, patterns, stops, timeout, cancelled, echo).await;
     }
@@ -402,12 +404,20 @@ pub(crate) async fn wait_for_text_with_limits(
 
 /// Whether `pane` still exists and is running, as the daemon reports now.
 ///
-/// A daemon that cannot answer -- it exited, or the pane is gone -- is not
-/// live.
-async fn pane_is_live(pane: &Pane) -> bool {
-    pane.format("#{pane_dead}")
-        .await
-        .is_ok_and(|dead| dead.to_string_lossy().trim() == "0")
+/// Check the original pane on its bound server after the stream ends.
+async fn pane_is_live(pane: &Pane) -> Result<bool, Error> {
+    match pane.refreshed().await {
+        Ok(current) => Ok(!current.is_dead()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                libtmux_tokio::ErrorKind::ObjectGone | libtmux_tokio::ErrorKind::ServerGone
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// One pane's screen, split at the row still being typed into.
@@ -583,7 +593,7 @@ async fn confirmed_above(
 /// The read loop [`wait_for_text_with_limits`] runs once attached.
 async fn wait_on_output(
     pane: &Pane,
-    mut output: libtmux::control::PaneOutput,
+    mut output: libtmux_tokio::control::PaneOutput,
     patterns: &Patterns,
     stops: &Patterns,
     timeout: Duration,
@@ -611,7 +621,7 @@ async fn wait_on_output(
             chunk = tokio::time::timeout_at(deadline, output.next_chunk()) => chunk,
         };
         match chunk {
-            Ok(Some(chunk)) => {
+            Ok(Some(Ok(chunk))) => {
                 bytes = bytes.saturating_add(chunk.len());
                 filter.push(&chunk, &mut text);
 
@@ -651,37 +661,43 @@ async fn wait_on_output(
                     text.drain(..excess);
                 }
             }
-            Ok(None) => {
+            Ok(Some(Err(Error::ControlGap { .. }))) => {
+                outcome = WaitOutcome::StreamLost;
+                break;
+            }
+            Ok(Some(Err(Error::PaneOutputEnded {
+                cause: libtmux_tokio::control::PaneOutputEnd::PaneGone,
+            }))) => {
+                outcome = WaitOutcome::PaneClosed;
+                break;
+            }
+            Ok(Some(Err(Error::PaneOutputEnded { .. })) | None) => {
                 // The stream ending says the wait can no longer see the pane,
                 // not that the pane stopped: a detached control client ends
                 // it too. Only a pane that cannot be read, or one tmux holds
                 // dead, has closed.
-                outcome = if pane_is_live(pane).await {
+                outcome = if pane_is_live(pane).await? {
                     WaitOutcome::StreamLost
                 } else {
                     WaitOutcome::PaneClosed
                 };
                 break;
             }
+            Ok(Some(Err(primary))) => {
+                return Err(match output.shutdown().await {
+                    Ok(()) => primary,
+                    Err(cleanup) => Error::OperationAndCleanup {
+                        primary: Box::new(primary),
+                        cleanup: Box::new(cleanup),
+                    },
+                });
+            }
             Err(_) => break,
         }
     }
 
     let pane_id = output.pane().to_string();
-    // Ordinary EOF (`Closed`) is tolerated: the pane stopped being read, so
-    // that alone is not a failure. Any other shutdown error -- frame budget,
-    // timeout, executor shutdown -- is real and discards the view above.
-    if let Err(error) = output.shutdown().await
-        && !matches!(
-            error,
-            Error::ControlMode {
-                kind: ControlModeErrorKind::Closed,
-                ..
-            }
-        )
-    {
-        return Err(error);
-    }
+    finish_wait_stream(output).await?;
 
     // A chunk can arrive in the same instant the deadline elapses; without
     // this, that race would report `Deadline` while `text` already holds a
@@ -709,6 +725,18 @@ async fn wait_on_output(
         text: String::from_utf8_lossy(&text).into_owned(),
         bytes,
     })
+}
+
+/// A detached client can close normally while the pane keeps running.
+async fn finish_wait_stream(output: libtmux_tokio::control::PaneOutput) -> Result<(), Error> {
+    match output.shutdown().await {
+        Ok(())
+        | Err(Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Reclassify a timed-out wait as matched when the buffer it is about to

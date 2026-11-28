@@ -151,9 +151,12 @@ def main(paths: list[str]) -> int:
         )
         return 1
 
+    if not checked:
+        print("no example-output blocks found in " + ", ".join(paths), file=sys.stderr)
+        return 1
     print(f"{checked} example output block(s) match")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:] or ["README.md"]))
+    raise SystemExit(main(sys.argv[1:] or ["crates/libtmux-tokio/README.md"]))

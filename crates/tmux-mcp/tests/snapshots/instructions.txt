@@ -1,4 +1,4 @@
-Drives tmux: sessions, windows and panes on this machine, Server > Session > Window > Pane. Target by id -- %1 a pane, @1 a window, $1 a session -- since ids survive renames and layout changes. Every tool uses the one socket chosen at startup.
+Drives tmux: Server > Session > Window > Pane. Target by id -- %1 pane, @1 window, $1 session. For select_window and move_window, copy list_windows.link. Refresh it after link_gone. Every tool uses the socket chosen at startup.
 
 USE FOR: tmux panes, windows, sessions, splits, scrollback, sending keys, 'this terminal', 'the shell'. DO NOT USE FOR: browser tabs, editor splits (VS Code, Neovim), desktop windows (i3, sway) or login sessions -- none of those are tmux. If a bare 'window' or 'session' could mean either, ask once.
 
@@ -10,7 +10,7 @@ COST: captures keep the newest lines and count what they dropped; capture_since 
 
 PANE MODES: a pane in copy mode or another tmux mode belongs to the person in it. Read it with capture, search or snapshot; input to it is refused until they leave.
 
-TOOLSETS: inspect reads; manage changes tmux state; execute runs processes and sends pane input; teardown deletes. tmux://capabilities has the surface frozen at startup; a missing tool was not selected.
+TOOLSETS (direct effects): inspect reads; manage changes tmux state; execute runs processes and sends pane input; teardown deletes. tmux://capabilities has the surface frozen at startup; a missing tool was not selected.
 
 REQUIRES tmux 3.3a or newer; an older server is refused as unsupported_version.
 

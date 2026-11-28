@@ -28,7 +28,7 @@ async fn load_signal_term_retains_known_effects() {
 #[tokio::test]
 async fn interrupted_mutation_reports_unknown_unacknowledged_effects() {
     for signal in [Signal::INT, Signal::TERM] {
-        let guard = libtmux::test::TestServer::new().await.unwrap();
+        let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
         let keeper = guard.session("mutation-keeper").await.unwrap();
         let initial = topology(&keeper).await;
         let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
@@ -181,7 +181,7 @@ fn alive(pid: i32) -> bool {
     !state.trim().is_empty() && !state.trim().starts_with('Z')
 }
 
-async fn topology(session: &libtmux::Session) -> Vec<(String, Vec<String>)> {
+async fn topology(session: &libtmux_tokio::Session) -> Vec<(String, Vec<String>)> {
     let mut result = Vec::new();
     for window in session.windows().await.unwrap() {
         result.push((
@@ -249,7 +249,7 @@ fn assert_retained_input(summary: &Value, retained_id: &str, append: bool) {
 }
 
 async fn check_signal(signal: Signal, append: bool, mode: &str) {
-    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let guard = libtmux_tokio::test::TestServer::new().await.unwrap();
     let keeper = guard.session("signal-keeper").await.unwrap();
     let initial = topology(&keeper).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();

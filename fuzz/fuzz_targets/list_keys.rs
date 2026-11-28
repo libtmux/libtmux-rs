@@ -7,5 +7,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    libtmux::__fuzz_parse_key_bindings(data);
+    libtmux_tokio::__fuzz_parse_key_bindings(data);
 });

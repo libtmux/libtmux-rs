@@ -258,7 +258,7 @@ pub struct ShellCommand {
     pub enter: Option<bool>,
     /// How long to wait before typing it. `None` keeps whatever is in force.
     ///
-    /// The wait is a [`libtmux::plan::Pause`], so it happens in tmux and
+    /// The wait is a [`libtmux_tokio::plan::Pause`], so it happens in tmux and
     /// holds the steps after it. tmux keeps typed input until the pane reads
     /// it, so a sleep that only waited for a shell to start is not needed.
     pub sleep_before: Option<Duration>,

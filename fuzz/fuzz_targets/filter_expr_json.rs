@@ -7,13 +7,13 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use libtmux::query::FilterExpr;
+use libtmux_tokio::query::FilterExpr;
 
 fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else {
         return;
     };
-    let Ok(expression) = serde_json::from_str::<FilterExpr<libtmux::Pane>>(text) else {
+    let Ok(expression) = serde_json::from_str::<FilterExpr<libtmux_tokio::Pane>>(text) else {
         return;
     };
     let written = serde_json::to_string(&expression);
@@ -21,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(written) = written else {
         return;
     };
-    let read = serde_json::from_str::<FilterExpr<libtmux::Pane>>(&written);
+    let read = serde_json::from_str::<FilterExpr<libtmux_tokio::Pane>>(&written);
     assert!(read.is_ok(), "{written} did not read back: {read:?}");
     assert_eq!(read.ok(), Some(expression), "{written}");
 });

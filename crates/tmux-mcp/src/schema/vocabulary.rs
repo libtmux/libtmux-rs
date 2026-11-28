@@ -5,7 +5,7 @@
     reason = "schemars reads these types through field attributes"
 )]
 
-use libtmux::{ResizeDirection, SplitDirection};
+use libtmux_tokio::{ResizeDirection, SplitDirection};
 use schemars::JsonSchema;
 
 #[derive(JsonSchema)]

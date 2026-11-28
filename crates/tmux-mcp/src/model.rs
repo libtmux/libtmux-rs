@@ -166,8 +166,8 @@ pub struct CaptureSinceArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SelectWindowArgs {
-    /// The `@`-prefixed window to select, or to move relative to.
-    pub window: String,
+    /// The exact `link` returned by `list_windows` for the intended placement.
+    pub link: crate::WindowLinkRef,
     /// Move relative to that window instead of selecting it.
     ///
     /// `next` and `previous` step through the session in index order, and

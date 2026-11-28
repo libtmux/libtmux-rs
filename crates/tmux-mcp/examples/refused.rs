@@ -10,7 +10,7 @@
 //! $ cargo run --example refused
 //! ```
 
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use rmcp::ServiceExt as _;
 use rmcp::model::CallToolRequestParams;
 use serde_json::json;

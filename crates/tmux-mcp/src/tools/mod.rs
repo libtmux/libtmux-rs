@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
-use libtmux::{CaptureOptions, TmuxText};
+use libtmux_tokio::{CaptureOptions, TmuxText};
 use rmcp::handler::server::wrapper::Json;
 use rmcp::model::ErrorData;
 
@@ -46,11 +46,11 @@ enum OptionScope {
     /// The window options a new window inherits.
     GlobalWindow,
     /// One session's options.
-    Session(Box<libtmux::Session>),
+    Session(Box<libtmux_tokio::Session>),
     /// One window's options.
-    Window(Box<libtmux::Window>),
+    Window(Box<libtmux_tokio::Window>),
     /// One pane's options.
-    Pane(Box<libtmux::Pane>),
+    Pane(Box<libtmux_tokio::Pane>),
 }
 
 pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<TmuxTools> {
@@ -67,7 +67,7 @@ impl TmuxTools {
     /// `foreign_attached` overrides `Session::is_attached` when it is
     /// `Some`: see [`Self::foreign_attached_sessions`].
     pub(super) fn render_sessions(
-        sessions: &[libtmux::Session],
+        sessions: &[libtmux_tokio::Session],
         foreign_attached: Option<&BTreeSet<String>>,
     ) -> Sessions {
         Sessions {
@@ -106,7 +106,7 @@ impl TmuxTools {
         let result = self
             .server
             .cmd(
-                libtmux::Command::new("list-clients")
+                libtmux_tokio::Command::new("list-clients")
                     .arg("-F")
                     .arg("#{session_id} #{client_pid}"),
             )
@@ -146,11 +146,10 @@ impl TmuxTools {
         let target = self.find_pane(pane).await?;
         // The daemon runs the capture, so its version decides the flags; the
         // client executable's can differ.
-        let supported = self
-            .server
-            .daemon_version()
-            .await
-            .is_ok_and(|version| version.has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS));
+        let supported =
+            self.server.daemon_version().await.is_ok_and(|version| {
+                version.has_behavior(&libtmux_tokio::since::CAPTURE_LINE_FLAGS)
+            });
 
         let (rendered, marks) = if supported {
             let lines = target
@@ -216,11 +215,12 @@ impl TmuxTools {
     }
 
     /// Render one window as the protocol sees it.
-    pub(super) fn one_window(window: &libtmux::Window) -> WindowView {
+    pub(super) fn one_window(window: &libtmux_tokio::Window) -> WindowView {
         WindowView {
             id: window.id().to_string(),
             session_id: window.session_id().to_string(),
             index: window.index(),
+            link: crate::WindowLinkRef::observed(window),
             name: lossy(window.name()),
             panes: window.pane_count(),
             active: window.is_active(),
@@ -229,7 +229,7 @@ impl TmuxTools {
     }
 
     /// Render windows as the protocol sees them.
-    pub(super) fn render_windows(windows: &[libtmux::Window]) -> Windows {
+    pub(super) fn render_windows(windows: &[libtmux_tokio::Window]) -> Windows {
         let windows: Vec<_> = windows.iter().map(Self::one_window).collect();
 
         Windows { windows }
@@ -275,7 +275,7 @@ impl TmuxTools {
     }
 
     /// Render panes as the protocol sees them, saying which one is our own.
-    pub(super) fn render_panes(&self, panes: &[libtmux::Pane]) -> Panes {
+    pub(super) fn render_panes(&self, panes: &[libtmux_tokio::Pane]) -> Panes {
         let socket = self.socket();
         let panes: Vec<_> = panes
             .iter()
@@ -286,7 +286,7 @@ impl TmuxTools {
     }
 
     /// Describe one pane, including where it stands relative to this process.
-    pub(super) fn pane_view(&self, pane: &libtmux::Pane, socket: Option<&Path>) -> PaneView {
+    pub(super) fn pane_view(&self, pane: &libtmux_tokio::Pane, socket: Option<&Path>) -> PaneView {
         let id = pane.id().to_string();
         PaneView {
             caller: self
@@ -342,8 +342,8 @@ impl TmuxTools {
     pub(super) fn caller_pane_for_snapshot<'a>(
         &'a self,
         socket: &Path,
-        generation: libtmux::ServerGeneration,
-        panes: &[libtmux::Pane],
+        generation: libtmux_tokio::ServerGeneration,
+        panes: &[libtmux_tokio::Pane],
     ) -> Result<Option<&'a str>, ToolError> {
         let Some(caller) = self.caller.as_deref() else {
             return Ok(None);
@@ -419,13 +419,14 @@ impl TmuxTools {
     /// again" will look again and `not-a-window` will still not be a window.
     /// And `@01` resolves, where a string comparison against the canonical
     /// `@1` called it missing.
-    pub(super) async fn find_window(&self, id: &str) -> Result<libtmux::Window, ToolError> {
-        let window: libtmux::WindowId = id.parse().map_err(|error: libtmux::IdParseError| {
-            let sigil = error.expected_sigil();
-            bad_input(format!(
-                "{id} is not a window id: expected {sigil} followed by digits, as in {sigil}1"
-            ))
-        })?;
+    pub(super) async fn find_window(&self, id: &str) -> Result<libtmux_tokio::Window, ToolError> {
+        let window: libtmux_tokio::WindowId =
+            id.parse().map_err(|error: libtmux_tokio::IdParseError| {
+                let sigil = error.expected_sigil();
+                bad_input(format!(
+                    "{id} is not a window id: expected {sigil} followed by digits, as in {sigil}1"
+                ))
+            })?;
 
         self.server
             .window_by_id(&window)
@@ -437,13 +438,14 @@ impl TmuxTools {
     /// Resolve a pane id, reporting an unknown one as invalid input.
     ///
     /// Shares the reasoning on [`Self::find_window`].
-    pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux::Pane, ToolError> {
-        let pane: libtmux::PaneId = id.parse().map_err(|error: libtmux::IdParseError| {
-            let sigil = error.expected_sigil();
-            bad_input(format!(
-                "{id} is not a pane id: expected {sigil} followed by digits, as in {sigil}1"
-            ))
-        })?;
+    pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux_tokio::Pane, ToolError> {
+        let pane: libtmux_tokio::PaneId =
+            id.parse().map_err(|error: libtmux_tokio::IdParseError| {
+                let sigil = error.expected_sigil();
+                bad_input(format!(
+                    "{id} is not a pane id: expected {sigil} followed by digits, as in {sigil}1"
+                ))
+            })?;
 
         self.server
             .pane_by_id(&pane)
@@ -457,9 +459,12 @@ impl TmuxTools {
     /// An id is looked up as one, because the server's instructions tell an
     /// agent to prefer ids. Text that starts with `$` and is neither an id
     /// nor a session's name is invalid input, not a session that went away.
-    pub(super) async fn find_session(&self, target: &str) -> Result<libtmux::Session, ToolError> {
+    pub(super) async fn find_session(
+        &self,
+        target: &str,
+    ) -> Result<libtmux_tokio::Session, ToolError> {
         if target.starts_with('$')
-            && let Ok(id) = target.parse::<libtmux::SessionId>()
+            && let Ok(id) = target.parse::<libtmux_tokio::SessionId>()
         {
             return self
                 .server

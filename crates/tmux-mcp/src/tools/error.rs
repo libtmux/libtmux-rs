@@ -77,13 +77,16 @@ impl IntoContents for ToolError {
 ///
 /// libtmux already draws the distinctions above, so they are carried through
 /// rather than flattened.
-pub(super) fn tmux_error(error: &libtmux::Error) -> ToolError {
-    use libtmux::ErrorKind;
+pub(crate) fn tmux_error(error: &libtmux_tokio::Error) -> ToolError {
+    use libtmux_tokio::ErrorKind;
 
     let kind = error.kind();
     let retryable = error.is_transient();
-    let detail = serde_json::json!({
-        "kind": match kind {
+    let link_gone = matches!(error, libtmux_tokio::Error::LinkGone { .. });
+    let wire_kind = match error {
+        libtmux_tokio::Error::LinkGone { .. } => "link_gone",
+        libtmux_tokio::Error::ServerGenerationChanged { .. } => "server_replaced",
+        _ => match kind {
             ErrorKind::PartialEffect => "partial_effect",
             ErrorKind::ObjectGone => "object_gone",
             ErrorKind::Refused => "refused",
@@ -98,9 +101,24 @@ pub(super) fn tmux_error(error: &libtmux::Error) -> ToolError {
             // reported rather than mistaken for one of these.
             _ => "other",
         },
+    };
+    let mut detail = serde_json::json!({
+        "kind": wire_kind,
         "retryable": retryable,
-        "stale": error.is_object_gone(),
+        "stale": link_gone || error.is_object_gone(),
     });
+    if let Some(effect) = error.operation_effect() {
+        detail["effect"] = effect.as_str().into();
+    }
+    if let Some(receipt) = error.creation_receipt() {
+        detail["created"] = serde_json::json!({
+            "session_id": receipt.session().as_ref(),
+            "window_id": receipt.window().as_ref(),
+            "pane_id": receipt.pane().id().as_ref(),
+            "server_pid": receipt.generation().pid(),
+            "server_start_time": receipt.generation().unix_start_time(),
+        });
+    }
     let message = error.to_string();
 
     match (kind, retryable) {
@@ -144,7 +162,7 @@ impl EffectBoundary {
         self.effect_seen = true;
     }
 
-    pub(super) fn error(&self, error: libtmux::Error) -> ToolError {
+    pub(super) fn error(&self, error: libtmux_tokio::Error) -> ToolError {
         let error = if self.effect_seen {
             error.after_effect(self.operation)
         } else {
@@ -153,8 +171,22 @@ impl EffectBoundary {
         tmux_error(&error)
     }
 
-    pub(super) fn tmux<T>(&self, result: Result<T, libtmux::Error>) -> Result<T, ToolError> {
+    pub(super) fn tmux<T>(&self, result: Result<T, libtmux_tokio::Error>) -> Result<T, ToolError> {
         result.map_err(|error| self.error(error))
+    }
+
+    pub(super) fn tool_error(&self, error: ToolError) -> ToolError {
+        if !self.effect_seen {
+            return error;
+        }
+        let mut wrapped = partial_effect(format!(
+            "{} changed state before a follow-up failed: {error}",
+            self.operation
+        ));
+        if let Some(detail) = &mut wrapped.0.data {
+            detail["cause"] = error.0.data.unwrap_or(serde_json::Value::Null);
+        }
+        wrapped
     }
 
     pub(super) fn local(&self, message: impl Into<String>) -> ToolError {
@@ -183,7 +215,7 @@ fn stale_detail() -> serde_json::Value {
 /// libtmux, so they mint the classification directly. An agent should not have
 /// to tell the two apart: a pane that vanished between the listing and the call
 /// reads the same either way.
-pub(super) fn object_gone(what: &str, id: &str) -> ToolError {
+pub(crate) fn object_gone(what: &str, id: &str) -> ToolError {
     ErrorData::invalid_params(format!("no {what} {id}"), Some(stale_detail())).into()
 }
 
@@ -200,7 +232,7 @@ pub(super) fn vanished(message: &str) -> ToolError {
 ///
 /// Nothing about the server needs to change for the next call to work, and
 /// nothing has gone stale: the caller has to send something else.
-pub(super) fn bad_input(message: impl Into<String>) -> ToolError {
+pub(crate) fn bad_input(message: impl Into<String>) -> ToolError {
     ErrorData::invalid_params(
         message.into(),
         Some(serde_json::json!({
@@ -273,8 +305,8 @@ pub(crate) fn unoffered_tool(tool: &str, exists: bool) -> ErrorData {
 mod tests {
     use std::time::Duration;
 
-    use libtmux::test::TestServer;
-    use libtmux::{Command, CommandChain, DispatchLimits, ErrorKind, Server};
+    use libtmux_tokio::test::TestServer;
+    use libtmux_tokio::{Command, CommandChain, DispatchLimits, ErrorKind, Server};
     use rmcp::model::ErrorCode;
 
     use super::{EffectBoundary, tmux_error};
@@ -283,10 +315,11 @@ mod tests {
     /// can branch on, not as a transport failure.
     #[test]
     fn a_version_refusal_names_its_remedy() {
-        let found = libtmux::TmuxVersion::parse_output(b"tmux 3.2a\n").expect("parses");
-        let refusal = found
+        let found = libtmux_tokio::TmuxVersion::parse_output(b"tmux 3.2a\n").expect("parses");
+        let refusal: libtmux_tokio::Error = found
             .ensure_supported()
-            .expect_err("3.2a is below the floor");
+            .expect_err("3.2a is below the floor")
+            .into();
         let data = tmux_error(&refusal).into_error_data();
         let detail = data.data.expect("the refusal carries detail");
         assert_eq!(detail["kind"], "unsupported_version", "{detail}");
@@ -306,7 +339,7 @@ mod tests {
     fn an_effect_boundary_changes_only_later_failures() {
         let mut boundary = EffectBoundary::new("send_keys");
         let first = boundary
-            .error(libtmux::Error::RuntimeNested)
+            .error(libtmux_tokio::Error::UnrecognizedLayout)
             .into_error_data();
         assert_eq!(first.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
@@ -316,7 +349,7 @@ mod tests {
 
         boundary.mark();
         let later = boundary
-            .error(libtmux::Error::RuntimeNested)
+            .error(libtmux_tokio::Error::UnrecognizedLayout)
             .into_error_data();
         assert_eq!(later.code, ErrorCode::INTERNAL_ERROR);
         let detail = later.data.expect("the later error carries detail");
@@ -356,12 +389,13 @@ mod tests {
             let server = limited.clone();
             tokio::spawn(async move {
                 server
-                    .chain(
-                        CommandChain::new(
-                            Command::new("wait-for").arg("-S").arg("retry-refused-held"),
-                        )
-                        .then(Command::new("wait-for").arg("retry-refused-release")),
-                    )
+                    .chain(CommandChain::new(
+                        // The nested queue holds an ordinary permit without
+                        // resolving another tmux executable through PATH.
+                        Command::new("run-shell")
+                            .arg("-C")
+                            .arg("wait-for -S retry-refused-held ; wait-for retry-refused-release"),
+                    ))
                     .await
             })
         };
@@ -369,11 +403,13 @@ mod tests {
             .wait_for_channel("retry-refused-held", Duration::from_secs(2))
             .await
             .expect("the holding dispatch starts");
+        assert_eq!(held, libtmux_tokio::ChannelWait::Signalled);
+        assert!(
+            !holding.is_finished(),
+            "the signalled dispatch is still held"
+        );
 
-        let error = limited
-            .cmd(Command::new("list-sessions"))
-            .await
-            .expect_err("the only dispatch permit is occupied");
+        let refused = limited.cmd(Command::new("list-sessions")).await;
         coordinator
             .signal_channel("retry-refused-release")
             .await
@@ -385,7 +421,11 @@ mod tests {
         coordinator.shutdown().await.expect("the coordinator stops");
         guard.shutdown().await.expect("tmux fixture shuts down");
 
-        assert_eq!(held, libtmux::ChannelWait::Signalled);
+        let error = refused.expect_err("the only dispatch permit is occupied");
+        assert!(matches!(
+            &error,
+            libtmux_tokio::Error::Overloaded { in_flight: 1, .. }
+        ));
         assert_eq!(error.kind(), ErrorKind::Refused);
         let projected = tmux_error(&error).into_error_data();
         assert_eq!(projected.code, ErrorCode::INTERNAL_ERROR);

@@ -48,7 +48,8 @@ DEV_ROOT = Path("/tmp/libtmux-rs-dev")
 #
 # The last column is a list of words: `control` for an example that needs
 # control acquisition, `pane` for one that reads `$TMUX` as a process inside a
-# pane does and is handed this script's server by name.
+# pane does and is handed this script's server by name, and `socket` for one
+# that takes the fixture socket as a command-line argument.
 #
 # The column before it is what the example must print, and it answers two
 # questions a leak check cannot.
@@ -65,21 +66,22 @@ DEV_ROOT = Path("/tmp/libtmux-rs-dev")
 # matched nothing every time; `scratch` printed a line count and none of the
 # session it built. Naming what each is for makes that a failure.
 TABLE = """
-libtmux  | api_construction | query | | | construction: private daemon started by new_session
-libtmux  | api_listings | query | | | listings: 1 session, 2 windows, 2 panes
-libtmux  | api_creation | query | | | creation: 2 windows, 4 panes
-libtmux  | api_query | query | | | query: prod-api
-libtmux  | api_cardinality | query | | | cardinality: none, one, multiple
-libtmux  | api_input | query | | | input: C-c is text
-libtmux  | api_capture | query | | | capture: first line, second line
-libtmux  | inspect  |                                               |    |               | examples | pane
-libtmux  | find     | query                                         | sh |               | in window | pane
-libtmux  | scratch  | test-support                                  |    |               | hello from tmux
-libtmux  | sweep    | test-support                                  |    |               | fixture
-libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket | control
-libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
-libtmux  | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
-libtmux  | recover  | test-support                                  |    |               | is_object_gone: false
+libtmux-tokio | api_construction | query | | | construction: private daemon started by new_session
+libtmux-tokio | api_listings | query | | | listings: 1 session, 2 windows, 2 panes
+libtmux-tokio | api_creation | query | | | creation: 2 windows, 4 panes
+libtmux-tokio | api_query | query | | | query: prod-api
+libtmux-tokio | api_cardinality | query | | | cardinality: none, one, multiple
+libtmux-tokio | api_input | query | | | input: C-c is text
+libtmux-tokio | api_capture | query | | | capture: first line, second line
+libtmux-tokio | inspect  |                                               |    |               | examples | pane
+libtmux-tokio | find     | query                                         | sh |               | in window | pane
+libtmux-tokio | scratch  | test-support                                  |    |               | hello from tmux
+libtmux-tokio | sweep    | test-support                                  |    |               | fixture
+libtmux-tokio | watch    | control-mode,test-support                     |    |               | on the same socket | control
+libtmux-tokio | matrix   | plan,control-mode,test-support,query |    |               | every mode built the same thing: true
+libtmux-tokio | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
+libtmux-tokio | recover  | test-support                                  |    |               | is_object_gone: false
+libtmux | api_mixed | blocking,tokio | | | mixed runtime | socket
 tmux-mcp | budget   |                                               |    |               | of it output schemas
 tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
@@ -253,9 +255,12 @@ class Fixture:
         )
 
 
-def cargo_run(row: Row) -> list[str]:
+def cargo_run(row: Row, fixture: Fixture) -> list[str]:
     """The `cargo run` command for a row; its environment is `run_environment`."""
-    return ["cargo", "run", *cargo_options(row), "--", *row.arguments.split()]
+    arguments = row.arguments.split()
+    if row.needs_word("socket"):
+        arguments.append(str(fixture.socket))
+    return ["cargo", "run", *cargo_options(row), "--", *arguments]
 
 
 def run_environment(row: Row, fixture: Fixture) -> dict[str, str]:
@@ -271,7 +276,7 @@ def run_plain(row: Row, fixture: Fixture, out: Path) -> bool:
     with (
         out.open("wb") as log,
         subprocess.Popen(
-            cargo_run(row),
+            cargo_run(row, fixture),
             cwd=ROOT,
             env=run_environment(row, fixture),
             stdin=subprocess.DEVNULL,
@@ -299,7 +304,7 @@ def run_driven(row: Row, fixture: Fixture, out: Path) -> bool:
     with (
         out.open("wb") as log,
         subprocess.Popen(
-            cargo_run(row),
+            cargo_run(row, fixture),
             cwd=ROOT,
             env=run_environment(row, fixture),
             stdin=subprocess.PIPE,
@@ -342,7 +347,7 @@ def sandbox_probe(fixture: Fixture, probe: Path) -> str | None:
                 "run",
                 "--quiet",
                 "--manifest-path",
-                "crates/libtmux/Cargo.toml",
+                "crates/libtmux-tokio/Cargo.toml",
                 "--example",
                 "inspect",
             ],

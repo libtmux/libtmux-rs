@@ -85,7 +85,7 @@ jobs:
   required:
     name: required
     if: ${{ always() }}
-    needs: [plan, check, api, fuzz, bench, python-bridge, compat]
+    needs: [plan, check, api, fuzz, bench, python-bridge, compat, native-clients]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,6 +102,46 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
           ALLOW_SKIPPED: ${{ needs.plan.outputs.skip }}
         run: uv run scripts/ci-plan/ci_plan.py verify
+
+  native-clients:
+    name: Native Rust clients
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: libtmux/.github/actions/apt-get@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          update: "true"
+          args: install --yes --no-install-recommends tmux
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: uv
+      - name: Exercise shared operations on an isolated daemon
+        run: cargo test --locked -p libtmux-tokio --all-features --test shared_operations --test parked_channels
+      - name: Exercise native process registration and cleanup
+        run: cargo test --locked -p libtmux-tokio --all-features --lib internal::subprocess::tests::typed_
+      - name: Check out the shared native recorder
+        uses: actions/checkout@v7
+        with:
+          repository: libtmux/docs
+          ref: e0bb40695c220d0a4b5183283b16502ab20b76c6
+          path: .native-proof-docs
+          sparse-checkout: scripts/example_tmux_sandbox.py
+          sparse-checkout-cone-mode: false
+      - name: Run independent readers and installed applications against staged crates
+        run: uv run scripts/check-package-contents/installed_clients.py --recorder .native-proof-docs/scripts/example_tmux_sandbox.py --output-dir artifacts/native-clients
+      - name: Retain archive and native capture provenance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-clients-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/native-clients
+          if-no-files-found: warn
 
   # Everything `just check` runs: formatting, Clippy, tests, doctests, docs,
   # the feature powerset, cargo-deny, both MSRV floors, and packaging.
@@ -271,10 +311,10 @@ jobs:
           restore-keys: bench-criterion-
 
       - name: Benchmark the hierarchy
-        run: cargo bench --locked --features test-support --bench hierarchy
+        run: cargo bench --locked --package libtmux-tokio --features test-support --bench hierarchy
 
       - name: Benchmark the waits
-        run: cargo bench --locked --features test-support,control-mode --bench waits
+        run: cargo bench --locked --package libtmux-tokio --features test-support,control-mode --bench waits
 
       - name: Compare with the previous run
         run: uv run scripts/bench-regressions/bench_regressions.py target/criterion

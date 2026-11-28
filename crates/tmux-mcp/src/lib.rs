@@ -54,6 +54,7 @@ mod test_support;
 mod text;
 mod tools;
 mod views;
+mod window_link;
 
 pub use caller::{CallerIdentity, Relation};
 pub use exec::{RunOutcome, RunView, WaitOutcome, WaitView};
@@ -67,12 +68,13 @@ pub use policy::{
 pub use tail::Cursor;
 pub use tools::error::ToolError;
 pub use views::*;
+pub use window_link::{WindowLinkGeneration, WindowLinkRef};
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use libtmux::Server;
-use rmcp::model::{ErrorData, ServerCapabilities, ServerConfig};
+use libtmux_tokio::Server;
+use rmcp::model::{ErrorData, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool_handler};
 
 use tail::Tails;
@@ -125,9 +127,9 @@ impl std::fmt::Debug for TmuxTools {
 /// sent on every connection and stays in context for the whole conversation,
 /// so the tests hold it to a byte budget and to a reviewed snapshot.
 pub(crate) const INSTRUCTIONS: &str = concat!(
-    "Drives tmux: sessions, windows and panes on this machine, Server > Session > \
-     Window > Pane. Target by id -- %1 a pane, @1 a window, $1 a session -- since ids \
-     survive renames and layout changes. Every tool uses the one socket chosen at startup.",
+    "Drives tmux: Server > Session > Window > Pane. Target by id -- %1 pane, @1 window, \
+     $1 session. For select_window and move_window, copy list_windows.link. Refresh it \
+     after link_gone. Every tool uses the socket chosen at startup.",
     "\n\nUSE FOR: tmux panes, windows, sessions, splits, scrollback, sending keys, 'this \
      terminal', 'the shell'. DO NOT USE FOR: browser tabs, editor splits (VS Code, \
      Neovim), desktop windows (i3, sway) or login sessions -- none of those are tmux. \
@@ -144,7 +146,7 @@ pub(crate) const INSTRUCTIONS: &str = concat!(
      says missed=true when output was lost before it was read.",
     "\n\nPANE MODES: a pane in copy mode or another tmux mode belongs to the person in it. \
      Read it with capture, search or snapshot; input to it is refused until they leave.",
-    "\n\nTOOLSETS: inspect reads; manage changes tmux state; execute runs processes and \
+    "\n\nTOOLSETS (direct effects): inspect reads; manage changes tmux state; execute runs processes and \
      sends pane input; teardown deletes. tmux://capabilities has the surface frozen at \
      startup; a missing tool was not selected.",
     "\n\nREQUIRES tmux 3.3a or newer; an older server is refused as unsupported_version.",
@@ -223,9 +225,10 @@ impl ServerHandler for TmuxTools {
     }
 
     fn get_info(&self) -> ServerConfig {
-        // ServerConfig is #[non_exhaustive], so it is built from the default
-        // rather than named field by field.
-        let mut info = ServerConfig::default();
+        let mut info = ServerConfig::default().with_server_info(Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ));
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_resources()

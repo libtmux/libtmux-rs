@@ -36,6 +36,8 @@ pub struct WindowView {
     pub session_id: String,
     /// The window's index within that session.
     pub index: i32,
+    /// Copy this exact observed placement into `select_window` or `move_window`.
+    pub link: crate::WindowLinkRef,
     /// The window name.
     pub name: String,
     /// How many panes the window holds.

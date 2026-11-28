@@ -25,24 +25,24 @@ windows:
       - htop
 ```
 
-The Rust examples use `libtmux::test::TestServer` to own and clean up their
-daemon. Add `libtmux` with `test-support` alongside this crate and Tokio, as
+The Rust examples use `libtmux_tokio::test::TestServer` to own and clean up their
+daemon. Add `libtmux-tokio` with `test-support` alongside this crate and Tokio, as
 shown under [Install](#install). An application connecting to an existing
 server can omit that feature and the guard's shutdown call.
 
 Freeze a session someone built by hand back into one:
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{freeze, Workspace};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Runs for real, against an isolated tmux under `/tmp/libtmux-rs-test/`.
     // Your own code reaches a session someone left running through
-    // `libtmux::Server::new()?`.
+    // `libtmux_tokio::Server::new()?`.
     let guard = TestServer::new().await?;
-    let session = guard.server().new_session("dev").await?;
+    let session = guard.session("dev").await?;
 
     let workspace = freeze(&session).await?;
     let yaml = workspace.to_yaml();
@@ -63,14 +63,14 @@ running, not the command someone typed to start it.
 Build it:
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{Workspace, WorkspaceBuilder};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Runs for real, against an isolated tmux under `/tmp/libtmux-rs-test/`.
     // Your own code reads the file, so a `./` start directory is the file's,
-    // and uses `libtmux::Server::new()?`:
+    // and uses `libtmux_tokio::Server::new()?`:
     //   let workspace = Workspace::from_file("dev.yaml")?;
     let source = "
 session_name: dev
@@ -98,6 +98,12 @@ pane cells, with at most 256 nested groups. Geometry correction and pruning
 remain tmux's responsibility. An empty layout string leaves the default
 arrangement in place.
 
+If the first creation has no verified receipt, `build` returns
+[`BuildError::CreationUnconfirmed`](crate::BuildError::CreationUnconfirmed)
+with the requested session name and original tmux error. It adopts no session
+by name and runs no later build step. Inspect the server before repeating the
+build: creation may have run even when a duplicate-name diagnostic was printed.
+
 `cargo run --example build` does all of this end to end: parse, list the
 plan's steps, build, and freeze the result back to YAML.
 
@@ -107,7 +113,7 @@ plan's steps, build, and freeze the result back to YAML.
 count it, or decide against it:
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux_tokio::test::TestServer;
 use tmux_workspace::{Workspace, WorkspaceBuilder};
 
 #[tokio::main]
@@ -154,7 +160,7 @@ where tmuxp's behaviour is surprising:
   so the next one is typed onto the same line. A pane's `enter: false` covers
   its `shell_command_before` commands, which are typed first.
 - `sleep_before` and `sleep_after` hold the same way, and are waited for in
-  tmux: each is a `libtmux::plan::Pause` between the commands it separates.
+  tmux: each is a `libtmux_tokio::plan::Pause` between the commands it separates.
 - `~` and `$NAME` or `${NAME}` expand from the loading process's environment
   in names, start directories, and `environment` and option values. An unset
   variable stays as written, and there is no escape: a frozen name holding
@@ -212,21 +218,23 @@ document the same way, tmuxp's; the last section of
 
 ## Install
 
-The command is a default feature; a library dependent leaves it, and clap
-with it, out:
+The native driver crates are unpublished. Start a binary project beside a
+`libtmux-rs` checkout:
 
 ```console
-$ cargo add tmux-workspace --no-default-features
+$ cargo new workspace-example
+$ cd workspace-example
 ```
 
-<details>
-<summary>Cargo.toml</summary>
+Set its `Cargo.toml` dependencies to:
 
 ```toml
 [dependencies]
-tmux-workspace = { version = "0.1.2", default-features = false }
-libtmux = { version = "0.1.2", features = ["test-support"] }
+tmux-workspace = { path = "../libtmux-rs/crates/tmux-workspace", default-features = false }
+libtmux-tokio = { path = "../libtmux-rs/crates/libtmux-tokio", features = ["test-support"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
-</details>
+`default-features = false` leaves the command and its dependencies out. Save
+any complete Rust example from this page as `src/main.rs`, then run
+`cargo run --quiet`. Each example owns a private daemon through `TestServer`.

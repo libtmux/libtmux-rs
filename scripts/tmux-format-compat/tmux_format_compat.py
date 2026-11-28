@@ -84,7 +84,7 @@ def cargo_test(package: str, *arguments: str, features: bool = True) -> tuple[st
 
 
 def refusal_steps(
-    contract: str, tmux_binary: Path, current_binary: Path, newer_binary: Path
+    contract: str, tmux_binary: Path, current_binary: Path, newer_binary: Path, control_client: Path
 ) -> list[Step]:
     """The steps of a lane that proves a refusal rather than running the workspace.
 
@@ -99,7 +99,9 @@ def refusal_steps(
         }
         return [
             Step(
-                cargo_test("libtmux", "--test", "daemon_version_check", "--", "--test-threads=1"),
+                cargo_test(
+                    "libtmux-tokio", "--test", "daemon_version_check", "--", "--test-threads=1"
+                ),
                 env,
             ),
             Step(
@@ -140,7 +142,7 @@ def refusal_steps(
         return [
             Step(
                 cargo_test(
-                    "libtmux",
+                    "libtmux-tokio",
                     "--test",
                     "daemon_version_check",
                     "real_tmux_compat_pre_probe_",
@@ -157,7 +159,9 @@ def refusal_steps(
     if contract == "reject-boundary":
         return [
             Step(
-                cargo_test("libtmux", "--test", "daemon_version_check", "--", "--test-threads=1"),
+                cargo_test(
+                    "libtmux-tokio", "--test", "daemon_version_check", "--", "--test-threads=1"
+                ),
                 {
                     "LIBTMUX_TEST_BOUNDARY_TMUX": binary,
                     "LIBTMUX_REQUIRE_NATIVE": "LIBTMUX_TEST_BOUNDARY_TMUX",
@@ -167,7 +171,9 @@ def refusal_steps(
     if contract == "feature-boundary":
         return [
             Step(
-                cargo_test("libtmux", "--test", "optional_features", "--", "--test-threads=1"),
+                cargo_test(
+                    "libtmux-tokio", "--test", "optional_features", "--", "--test-threads=1"
+                ),
                 {
                     "LIBTMUX_REQUIRE_NATIVE": (
                         "LIBTMUX_TEST_BROKEN_BREAK_TMUX,"
@@ -177,7 +183,19 @@ def refusal_steps(
                     "LIBTMUX_TEST_MINIMUM_TMUX": str(current_binary),
                     "LIBTMUX_TEST_NEWER_TMUX": str(newer_binary),
                 },
-            )
+            ),
+            Step(
+                cargo_test(
+                    "libtmux-blocking",
+                    "--lib",
+                    "managed_control_accepts_a_compatible_client_older_than_the_daemon_floor",
+                ),
+                {
+                    "LIBTMUX_TEST_TMUX": binary,
+                    "LIBTMUX_TEST_CONTROL_CLIENT": str(control_client),
+                    "LIBTMUX_REQUIRE_NATIVE": "LIBTMUX_TEST_CONTROL_CLIENT",
+                },
+            ),
         ]
     raise ValueError(f"{contract} is not a refusal contract")
 
@@ -350,7 +368,7 @@ class Harness:
         ):
             raise CompatFailure(f"tmux {tag} runs behind the 3.3a client, which is not built")
         if contract in REFUSAL_CONTRACTS:
-            for step in refusal_steps(contract, binary, current, newer):
+            for step in refusal_steps(contract, binary, current, newer, self.binary("3.6b")):
                 self.run_step(step)
             return
 
@@ -358,7 +376,7 @@ class Harness:
             self.run_step(
                 Step(
                     cargo_test(
-                        "libtmux",
+                        "libtmux-tokio",
                         "--test",
                         "daemon_version_check",
                         "real_tmux_compat_minimum_daemon_accepts_newer_clients",
@@ -384,7 +402,15 @@ class Harness:
             raise CompatFailure(f"command-local PATH did not select tmux {tag}")
 
         run(
-            ["cargo", "test", "--locked", "--workspace", "--all-targets", "--all-features"],
+            [
+                "cargo",
+                "test",
+                "--locked",
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--no-fail-fast",
+            ],
             cwd=ROOT,
             env={
                 **LOCALE,
@@ -394,7 +420,15 @@ class Harness:
             },
         )
 
-        compat = ["cargo", "test", "--locked", "--package", "libtmux", "--lib", "--all-features"]
+        compat = [
+            "cargo",
+            "test",
+            "--locked",
+            "--package",
+            "libtmux-tokio",
+            "--lib",
+            "--all-features",
+        ]
         environment = {**LOCALE, "LIBTMUX_TEST_TMUX": str(binary)}
         listing = run(
             [*compat, "real_tmux_compat_", "--", "--test-threads=1", "--list"],

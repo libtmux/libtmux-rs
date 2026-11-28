@@ -113,21 +113,23 @@ impl From<serde_json::Error> for CliError {
         Self::new("encoding", error.to_string())
     }
 }
-impl From<libtmux::Error> for CliError {
-    fn from(error: libtmux::Error) -> Self {
-        // libtmux::ErrorKind is already the coarse category the crate
+impl From<libtmux_tokio::Error> for CliError {
+    fn from(error: libtmux_tokio::Error) -> Self {
+        // libtmux_tokio::ErrorKind is already the coarse category the crate
         // classifies every variant into "for reporting and routing"; reuse
         // it rather than re-deriving the same split from Error's variants.
         let code = match error.kind() {
-            libtmux::ErrorKind::Unreachable | libtmux::ErrorKind::ServerGone => "tmux_unavailable",
+            libtmux_tokio::ErrorKind::Unreachable | libtmux_tokio::ErrorKind::ServerGone => {
+                "tmux_unavailable"
+            }
             // Everything rejected before a command is sent was rejected for
             // what the document said: a layout name that is not one, an
             // option tmux keeps somewhere else. That is a defect in the
             // workspace, not a failure of tmux.
-            libtmux::ErrorKind::InvalidInput => "invalid_workspace",
+            libtmux_tokio::ErrorKind::InvalidInput => "invalid_workspace",
             // A version refusal, including a report that names no release:
             // the tmux is the problem and upgrading it is the remedy.
-            libtmux::ErrorKind::UnsupportedVersion => "tmux_unsupported",
+            libtmux_tokio::ErrorKind::UnsupportedVersion => "tmux_unsupported",
             _ => "tmux_failed",
         };
         Self::new(code, error.to_string())

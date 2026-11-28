@@ -17,7 +17,7 @@ Lists each published crate's tarball with `cargo package --list` and checks it:
   `libtmux`, and `libtmux` without its default features has no optional
   dependency.
 
-`--build` first packages the four crates with `cargo package --locked
+`--build` first packages the seven crates with `cargo package --locked
 --all-features` into a fresh target directory, which `just package` runs.
 Cargo treats staged registry versions as immutable, so a fresh target keeps a
 same-version edit from reusing source an earlier run extracted. The package is
@@ -43,28 +43,57 @@ ROOT = Path(__file__).resolve().parents[2]
 
 CRATES = {
     "libtmux": "crates/libtmux",
+    "libtmux-core": "crates/libtmux-core",
+    "libtmux-blocking": "crates/libtmux-blocking",
+    "libtmux-tokio": "crates/libtmux-tokio",
     "libtmux-macros": "crates/libtmux-macros",
     "tmux-mcp": "crates/tmux-mcp",
     "tmux-workspace": "crates/tmux-workspace",
 }
 
 # Each crate ships its own CHANGELOG.md, so a reader of the packaged crate has
-# the history of that crate and not of the other three.
+# the history of that crate.
 #
 # The `libtmux` front page links docs/design.md and names the examples, so both
 # ship or those references break for anyone reading the packaged crate. The MCP
 # front page names its examples too, but its planning notes under docs/
 # deliberately do not ship: they are working material for this repository.
 #
-# `tmux-workspace`'s `docs/libtmux-macros-README.md` is a symlink to the copy
-# that crate owns, and the doctest verifying it reads that path, so it has to
-# ship or `cargo test --doc` fails for anyone using the published crate.
+# The facade doctests the macro crate's README under the public name its
+# examples import. Cargo follows the symlink when packaging the facade.
 # `cli/bridge.py` is `include_str!`-ed into the binary, so a package missing it
 # fails to build rather than to run. `cargo package`'s own verification build
 # catches that, but only after compiling most of the dependency graph; this
 # check fails in the time a file listing takes.
 REQUIRED = {
     "libtmux": [
+        "CHANGELOG.md",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "README.md",
+        "docs/design.md",
+        "docs/adr/0001-native-blocking-and-tokio.md",
+        "examples/api_mixed.rs",
+        "examples/api/manifest.json",
+        "examples/api/consumer.toml",
+        "libtmux-macros-README.md",
+    ],
+    "libtmux-core": [
+        "CHANGELOG.md",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "README.md",
+        "src/receipt.rs",
+        "src/new_session.rs",
+    ],
+    "libtmux-blocking": [
+        "CHANGELOG.md",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "README.md",
+        "src/supervisor.rs",
+    ],
+    "libtmux-tokio": [
         "CHANGELOG.md",
         "LICENSE-APACHE",
         "LICENSE-MIT",
@@ -105,7 +134,6 @@ REQUIRED = {
         "docs/cli.md",
         "docs/library.md",
         "examples/*.rs",
-        "libtmux-macros-README.md",
         "tests/fixtures/tmuxp/*",
         "src/cli/bridge.py",
     ],
@@ -330,7 +358,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         problems += check_required(root, crate, listing, REQUIRED[crate])
         problems += check_versions(root, crate, listing, versions)
         problems += check_links(root, crate, listing)
-    problems += check_sandbox_tests(listings["libtmux"])
+    problems += check_sandbox_tests(listings["libtmux-tokio"])
     problems += [
         f"libtmux package contains macro source: {entry}"
         for entry in listings["libtmux"]

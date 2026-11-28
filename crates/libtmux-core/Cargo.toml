@@ -1,0 +1,43 @@
+[package]
+name = "libtmux-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Pure tmux operations and reply decoding"
+documentation = "https://docs.rs/libtmux-core"
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
+include = ["/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE-*", "/src/**", "/docs/**", "/tests/**"]
+keywords = ["tmux", "terminal", "multiplexer"]
+categories = ["api-bindings"]
+
+[features]
+default = []
+conformance = []
+unstable-fuzzing = []
+plan = []
+query = ["dep:caseless", "dep:regex"]
+derive = ["dep:libtmux-macros", "query"]
+serde = ["dep:serde"]
+schema = ["dep:schemars", "dep:serde_json", "serde"]
+
+[dependencies]
+caseless = { version = "0.2", optional = true }
+libtmux-macros = { workspace = true, optional = true }
+regex = { version = "1.13", optional = true }
+serde_json = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+static_assertions = "1.1.0"
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

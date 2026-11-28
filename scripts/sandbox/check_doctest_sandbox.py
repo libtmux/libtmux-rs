@@ -28,7 +28,7 @@ from sandbox_runner import restore_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRE_TESTS = ROOT / "scripts" / "require-tests" / "require_tests.py"
-CANARY = ["cargo", "test", "--locked", "--package", "libtmux", "--doc", "SandboxCanary"]
+CANARY = ["cargo", "test", "--locked", "--package", "libtmux-tokio", "--doc", "SandboxCanary"]
 DECOY = "/nonexistent/decoy.sock,1,0"
 AMBIENT = {
     "TMUX": DECOY,

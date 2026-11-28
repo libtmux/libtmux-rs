@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libtmux::{Command, CommandChain, Error, NewSessionOptions};
+use libtmux_tokio::{Command, CommandChain, Error, NewSession};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{tool, tool_router};
 
@@ -63,7 +63,10 @@ fn input_dispatch(
     Some(commands.fold(CommandChain::new(first), CommandChain::then))
 }
 
-async fn delete_private_paste_buffer(server: &libtmux::Server, name: &str) -> Result<(), Error> {
+async fn delete_private_paste_buffer(
+    server: &libtmux_tokio::Server,
+    name: &str,
+) -> Result<(), Error> {
     if server.buffer(name).await?.is_none() {
         return Ok(());
     }
@@ -88,7 +91,7 @@ impl TmuxTools {
     /// Refuse to destroy a window that currently contains the caller pane.
     pub(super) async fn protect_window_caller(
         &self,
-        window: &libtmux::Window,
+        window: &libtmux_tokio::Window,
     ) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
@@ -101,7 +104,10 @@ impl TmuxTools {
     }
 
     /// Refuse to destroy a session that currently contains the caller pane.
-    async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ToolError> {
+    async fn protect_session_caller(
+        &self,
+        session: &libtmux_tokio::Session,
+    ) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
@@ -272,16 +278,21 @@ impl TmuxTools {
             start_directory,
         }): Parameters<CreateSessionArgs>,
     ) -> Result<Json<SessionView>, ToolError> {
-        let mut options = NewSessionOptions::new(name);
+        let mut options = NewSession::new(name);
         if let Some(directory) = start_directory {
             options = options.start_directory(directory);
         }
 
-        let session = self
+        let receipt = self
             .server
             .new_session(options)
             .await
             .map_err(|e| tmux_error(&e))?;
+        let session = self
+            .server
+            .inspect_session(&receipt)
+            .await
+            .map_err(|e| tmux_error(&e.after_creation(receipt)))?;
         let foreign_attached = self.foreign_attached_sessions().await;
 
         Ok(Json(SessionView {
@@ -473,26 +484,27 @@ impl TmuxTools {
 
     /// Move focus to a window, or to the one beside it.
     #[tool(
-        description = "Select a window, making it its session's active window. Give a \
+        description = "Select the exact window link returned by list_windows, making it \
+                       its session's active window. Withdrawn or reindexed links are refused. Give a \
                        direction to move relative to it instead: next and previous step \
                        through the session in index order, and last returns to the \
                        previously active window.",
         title = "Select Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxLookup],
+            "link" => [TmuxLookup],
             "direction" => [TmuxState]
         })
     )]
     pub async fn select_window(
         &self,
-        Parameters(SelectWindowArgs { window, direction }): Parameters<SelectWindowArgs>,
+        Parameters(SelectWindowArgs { link, direction }): Parameters<SelectWindowArgs>,
     ) -> Result<Json<Windows>, ToolError> {
-        let mut target = self.find_window(&window).await?;
+        let mut placement = self.find_window_link(&link).await?;
         let mut boundary = EffectBoundary::new("select_window");
 
         match direction.as_deref() {
             None => {
-                boundary.tmux(target.select().await)?;
+                boundary.tmux(placement.select().await)?;
                 boundary.mark();
             }
             Some(step) => {
@@ -516,20 +528,25 @@ impl TmuxTools {
                 // previously active window, so selecting the named one first
                 // would rewrite the very pointer being asked about.
                 if step != "last" {
-                    boundary.tmux(target.select().await)?;
+                    boundary.tmux(placement.select().await)?;
                     boundary.mark();
                 }
                 let result = boundary.tmux(
                     self.server
-                        .cmd(
-                            Command::new("select-window")
-                                .arg(flag)
-                                .arg("-t")
-                                .arg(target.session_id().to_string()),
+                        .chain(
+                            CommandChain::new(placement.snapshot().guard_command()).then(
+                                Command::new("select-window")
+                                    .arg(flag)
+                                    .arg("-t")
+                                    .arg(placement.snapshot().session().to_string()),
+                            ),
                         )
                         .await,
                 )?;
                 if let Some(error) = result.refusal_for("select-window") {
+                    if let Err(stale) = self.find_window_link(&link).await {
+                        return Err(boundary.tool_error(stale));
+                    }
                     return Err(boundary.error(error));
                 }
                 boundary.mark();
@@ -538,7 +555,7 @@ impl TmuxTools {
 
         // Which window that landed on is tmux's answer, not ours.
         let session = boundary
-            .tmux(self.server.session_by_id(target.session_id()).await)?
+            .tmux(placement.window().session().await)?
             .ok_or_else(|| boundary.local("the window's session is gone"))?;
         let active = boundary
             .tmux(session.active_window().await)?
@@ -658,7 +675,7 @@ impl TmuxTools {
             .arg(&buffer)
             .arg("--")
             .sensitive_arg(OsString::from(payload))
-            .requires_tmux("paste_text", libtmux::since::NAMED_BUFFER_IDENTITY);
+            .requires_tmux("paste_text", libtmux_tokio::since::NAMED_BUFFER_IDENTITY);
         let staged = self.server.cmd(staging).await.and_then(|result| {
             match result.refusal_for("set-buffer") {
                 Some(error) => Err(error),
@@ -777,8 +794,8 @@ fn paste_outcome(pasted: Result<(), Error>, deleted: Result<(), Error>) -> Resul
 mod tests {
     use std::time::Duration;
 
-    use libtmux::test::TestServer;
-    use libtmux::{Command, Error, ErrorKind, Server, ServerGoneKind};
+    use libtmux_tokio::test::TestServer;
+    use libtmux_tokio::{Command, Error, ErrorKind, Server, ServerGoneKind};
     use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ErrorCode;
 
@@ -801,11 +818,11 @@ mod tests {
             .expect_err("a leaked buffer follows a completed paste");
         assert_eq!(cleanup.kind(), ErrorKind::PartialEffect);
 
-        let paste = paste_outcome(Err(Error::RuntimeNested), Ok(()))
+        let paste = paste_outcome(Err(Error::UnrecognizedLayout), Ok(()))
             .expect_err("successful cleanup restores the paste error");
         assert_eq!(paste.kind(), ErrorKind::InvalidInput);
 
-        let both = paste_outcome(Err(Error::RuntimeNested), Err(cleanup_error()))
+        let both = paste_outcome(Err(Error::UnrecognizedLayout), Err(cleanup_error()))
             .expect_err("failed cleanup leaves the setup effect behind");
         assert!(
             matches!(
@@ -821,8 +838,7 @@ mod tests {
     async fn a_later_send_keys_failure_reports_the_first_effect() {
         let guard = TestServer::builder().start().await.expect("tmux starts");
         let session = guard
-            .server()
-            .new_session("send-boundary")
+            .session("send-boundary")
             .await
             .expect("a session starts");
         session
@@ -871,7 +887,7 @@ mod tests {
         bounded.shutdown().await.expect("the bounded handle stops");
         guard.shutdown().await.expect("tmux fixture shuts down");
 
-        assert_eq!(held, libtmux::ChannelWait::Signalled);
+        assert_eq!(held, libtmux_tokio::ChannelWait::Signalled);
         let Err(error) = result else {
             panic!("Enter reached tmux but its held reply did not fail");
         };

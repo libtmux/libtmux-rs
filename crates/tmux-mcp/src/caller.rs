@@ -13,7 +13,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use libtmux::ServerGeneration;
+use libtmux_tokio::ServerGeneration;
 
 use serde::Serialize;
 
@@ -70,7 +70,7 @@ fn canonical_number(value: &str) -> Option<u64> {
 
 fn canonical_pane_id(value: &str) -> bool {
     value
-        .parse::<libtmux::PaneId>()
+        .parse::<libtmux_tokio::PaneId>()
         .is_ok_and(|parsed| parsed.to_string() == value)
 }
 
@@ -162,7 +162,7 @@ impl CallerIdentity {
         &'a self,
         server_socket: &Path,
         generation: ServerGeneration,
-        panes: &[libtmux::Pane],
+        panes: &[libtmux_tokio::Pane],
     ) -> Result<Option<&'a str>, &'static str> {
         if self.malformed {
             return Err("malformed");
@@ -360,13 +360,13 @@ mod tests {
 
     #[tokio::test]
     async fn caller_socket_hard_link_resolves_on_the_same_daemon() {
-        let guard = libtmux::test::TestServer::builder()
+        let guard = libtmux_tokio::test::TestServer::builder()
             .start()
             .await
             .expect("tmux starts");
         let server = guard.server();
-        let session = server
-            .new_session("caller-hard-link")
+        let session = guard
+            .session("caller-hard-link")
             .await
             .expect("session starts");
         let pane = session.panes().await.expect("panes list").remove(0);
@@ -403,7 +403,7 @@ mod tests {
         let path = "/tmp/libtmux-rs-test/caller-debug.sock";
         let caller = identity(&format!("{path},48188,10"), "%3");
         let builder = crate::TmuxTools::builder(
-            libtmux::Server::builder()
+            libtmux_tokio::Server::builder()
                 .socket_path("/tmp/libtmux-rs-test/caller-target.sock")
                 .build()
                 .expect("an inert server builds"),

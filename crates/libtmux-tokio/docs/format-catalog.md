@@ -1,0 +1,1 @@
+../../libtmux-core/docs/format-catalog.md

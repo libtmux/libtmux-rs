@@ -121,15 +121,15 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires TMUX_WORKSPACE_PYTHON with tmuxp 1.74.x"]
     async fn append_bridge_rechecks_borrowed_identity_before_imports_and_build() {
-        let original = libtmux::test::TestServer::new().await.unwrap();
-        let replacement = libtmux::test::TestServer::new().await.unwrap();
+        let original = libtmux_tokio::test::TestServer::new().await.unwrap();
+        let replacement = libtmux_tokio::test::TestServer::new().await.unwrap();
         let first = original.session("original").await.unwrap();
         let second = replacement.session("replacement").await.unwrap();
         assert_eq!(first.id(), second.id());
         let identity = original
             .server()
             .cmd(
-                libtmux::Command::new("display-message")
+                libtmux_tokio::Command::new("display-message")
                     .arg("-p")
                     .arg("-t")
                     .arg(first.id().to_string())

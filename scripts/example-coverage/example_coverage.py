@@ -16,16 +16,30 @@ anyone lands, and a trivial accessor inherits the example on its type.
     example_coverage.py [--require-all] target/doc/libtmux.json
 
 The JSON comes from `cargo +nightly rustdoc -p libtmux --all-features -- \
--Zunstable-options --output-format json`. `--require-all` fails when a type
+-Zunstable-options --output-format json --document-hidden-items`. `--require-all` fails when a type
 has no example.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 TYPES = {"struct", "enum", "trait", "type_alias"}
+
+
+def is_hidden(item: dict) -> bool:
+    """Only an item's own bare `doc(hidden)` excludes its root alias."""
+    for attr in item.get("attrs") or []:
+        text = attr if isinstance(attr, str) else attr.get("other", "")
+        tokens = re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z_]\w*|[^\s]', text)
+        if tokens[:4] == ["#", "[", "doc", "("] and any(
+            token == "hidden" and tokens[at - 1] in {"(", ","} and tokens[at + 1] in {",", ")"}
+            for at, token in enumerate(tokens[1:-1], 1)
+        ):
+            return True
+    return False
 
 
 def exported_ids(doc: dict) -> set[str]:
@@ -39,7 +53,7 @@ def exported_ids(doc: dict) -> set[str]:
     found: set[str] = set()
     for child in (item.get("inner") or {}).get("module", {}).get("items") or []:
         entry = index.get(str(child)) or index.get(child)
-        if not entry:
+        if not entry or is_hidden(entry):
             continue
         inner = entry.get("inner") or {}
         if "use" in inner:
@@ -61,7 +75,7 @@ def main(path: str) -> int:
 
     for identifier in exported_ids(doc):
         item = index.get(identifier)
-        if not item:
+        if not item or is_hidden(item):
             continue
         kind = next(iter(item.get("inner") or {}), None)
         if kind not in TYPES:
@@ -89,7 +103,7 @@ def main_strict(path: str) -> int:
     index = doc["index"]
     for identifier in exported_ids(doc):
         item = index.get(identifier)
-        if not item:
+        if not item or is_hidden(item):
             continue
         if next(iter(item.get("inner") or {}), None) not in TYPES:
             continue
