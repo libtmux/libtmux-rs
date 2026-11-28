@@ -37,7 +37,7 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     };
     let session = guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("paste-enter").command(bash.as_str()))
+        .new_session(libtmux::NewSession::new("paste-enter").command(bash.as_str()))
         .await
         .expect("bash session");
     let panes = session.panes().await.expect("panes");

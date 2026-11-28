@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use libtmux::test::TestServer;
 use libtmux::{
-    Command, Error, NewSessionOptions, NewWindowOptions, Server, ServerGoneKind, SplitDirection,
+    Command, Error, NewSession, NewWindowOptions, Server, ServerGoneKind, SplitDirection,
     SplitOptions,
 };
 use serde_json::Value;
@@ -238,7 +238,7 @@ impl RawServerFiles {
             .expect("raw server config");
         self.running = true;
         let session = server
-            .new_session(NewSessionOptions::new(name).command("/bin/sh"))
+            .new_session(NewSession::new(name).command("/bin/sh"))
             .await
             .expect("raw-path server starts");
         let pane = session

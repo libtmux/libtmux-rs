@@ -123,7 +123,7 @@
 //!
 //! ```no_run
 //! # async fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! use libtmux::{NewSessionOptions, TmuxArg};
+//! use libtmux::{NewSession, TmuxArg};
 //!
 //! // Text is text, whatever is in it.
 //! server.new_session("release#1").await?;
@@ -131,7 +131,7 @@
 //! // Expansion is opt-in, and reads as such. Only for a template the
 //! // program itself wrote.
 //! server
-//!     .new_session(NewSessionOptions::new("build").start_directory(
+//!     .new_session(NewSession::new("build").start_directory(
 //!         TmuxArg::format("#{pane_current_path}"),
 //!     ))
 //!     .await?;
@@ -405,6 +405,7 @@ pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[cfg(feature = "unstable-fuzzing")]
 #[doc(hidden)]
 pub use internal::environment::__fuzz_environment_listing;
+pub use libtmux_core::NewSession;
 #[cfg(feature = "control-mode")]
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};
@@ -417,8 +418,8 @@ pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 #[doc(hidden)]
 pub use server::__fuzz_parse_key_bindings;
 pub use server::{
-    AccessMode, AccessRule, ChannelWait, Chooser, KeyBinding, MenuItem, NewSessionOptions,
-    Principal, PromptKind, Server, ServerBuilder, SessionTree, WindowTree,
+    AccessMode, AccessRule, ChannelWait, Chooser, KeyBinding, MenuItem, Principal, PromptKind,
+    Server, ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};
@@ -430,7 +431,7 @@ pub use target::{
     PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName, SessionNameError,
     SessionTarget, TmuxArg, WindowId, WindowTarget, escape_format,
 };
-pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, since};
+pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, VersionError, since};
 pub use window::{
     JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Respawn, Rotation,
     SplitDirection, SplitOptions, Window,

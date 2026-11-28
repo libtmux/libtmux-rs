@@ -23,9 +23,7 @@ use libtmux::plan::{
     SetEnvironment, SetOption, SplitWindow, StepReason, WindowTarget,
 };
 use libtmux::test::TestServer;
-use libtmux::{
-    ChannelWait, Command, NewSessionOptions, PaneId, PaneWait, Server, SplitDirection, WindowId,
-};
+use libtmux::{ChannelWait, Command, PaneId, PaneWait, Server, SplitDirection, WindowId};
 
 #[tokio::test]
 async fn layout_preflight_precedes_every_planner_mutation() {
@@ -582,7 +580,7 @@ async fn operation_reports_keep_typed_values_aligned_across_planners() {
     let marker = "operation-report";
     let session = guard
         .session(
-            NewSessionOptions::new("report-parent")
+            NewSession::new("report-parent")
                 .command(format!("printf '{marker}\\n'; exec sleep 60")),
         )
         .await
@@ -811,6 +809,41 @@ async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
 
     events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn stored_session_creation_preserves_argument_intent_and_sensitive_operands() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let request = libtmux::NewSession::new("work#1")
+        .window_name(libtmux::TmuxArg::format("#{version}"))
+        .start_directory(OsString::from_vec(vec![b'/', 0xff, b'#']))
+        .command("printf sentinel")
+        .environment("LABEL", "build#1")
+        .size(120, 40);
+    let mut plan = Plan::new();
+    plan.add(request.clone());
+
+    let encoded = serde_json::to_value(&plan).expect("serialize plan");
+    let operation = &encoded[0]["NewSession"];
+    assert_eq!(operation["name"], "work#1");
+    assert_eq!(operation["window_name"]["format"], "#{version}");
+    assert_eq!(
+        operation["start_directory"],
+        serde_json::json!([47, 255, 35])
+    );
+    let restored: libtmux::NewSession =
+        serde_json::from_value(operation.clone()).expect("decode creation request");
+    assert_eq!(restored.operands("ids"), request.operands("ids"));
+    assert!(!format!("{restored:?}").contains("sentinel"));
+
+    let literal: libtmux::NewSession = serde_json::from_value(serde_json::json!({
+        "name": "#{version}", "window_name": null, "start_directory": null
+    }))
+    .expect("decode original literal-only plan spelling");
+    assert_eq!(literal.operands("ids")[5].as_os_str(), "##{version}");
 }
 
 #[cfg(feature = "serde")]

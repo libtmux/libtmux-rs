@@ -4,7 +4,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::{NewSessionOptions, Server, Session};
+use libtmux::{NewSession, Server, Session};
 
 type ExampleError = Box<dyn Error>;
 
@@ -18,10 +18,10 @@ fn check(condition: bool, message: &str) -> Result<(), ExampleError> {
 
 async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
     server
-        .new_session(NewSessionOptions::new("prod-api").command("cat"))
+        .new_session(NewSession::new("prod-api").command("cat"))
         .await?;
     server
-        .new_session(NewSessionOptions::new("dev-api").command("cat"))
+        .new_session(NewSession::new("dev-api").command("cat"))
         .await?;
     let sessions = server.sessions().await?;
     let fields = Session::filter_fields();

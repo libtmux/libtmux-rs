@@ -809,7 +809,7 @@ impl TestServer {
     /// ```
     pub async fn session(
         &self,
-        options: impl Into<crate::NewSessionOptions>,
+        options: impl Into<crate::NewSession>,
     ) -> Result<crate::Session, crate::Error> {
         self.server().new_session(options).await
     }

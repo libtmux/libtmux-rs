@@ -164,7 +164,9 @@ impl VersionProbe {
         let mut framed = b"tmux ".to_vec();
         framed.extend_from_slice(version);
         framed.push(b'\n');
-        TmuxVersion::parse_report(&framed, stderr.len()).map(Some)
+        TmuxVersion::parse_report(&framed, stderr.len())
+            .map(Some)
+            .map_err(Into::into)
     }
 }
 

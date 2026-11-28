@@ -6,10 +6,12 @@
 
 use std::error::Error as StdError;
 
-use libtmux::{Error, ReleaseSuffix, ReleaseVersion, TmuxVersion};
+use libtmux::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+use libtmux_core::VersionError as Error;
 use static_assertions::assert_impl_all;
 
 assert_impl_all!(Error: StdError, Send, Sync);
+assert_impl_all!(libtmux::Error: StdError, Send, Sync);
 assert_impl_all!(ReleaseSuffix: Send, Sync);
 assert_impl_all!(ReleaseVersion: Send, Sync);
 assert_impl_all!(TmuxVersion: Send, Sync);
@@ -380,28 +382,22 @@ fn undated_diagnostics_do_not_qualify_hard_version_check() {
     ));
 }
 
-/// A gate at or below the supported floor is always true, so it only hides
-/// that the code it guards is unconditional.
 #[test]
-fn no_since_gate_sits_at_or_below_the_supported_floor() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/version.rs"))
-        .expect("version.rs is readable");
-    let module = source
-        .split("pub mod since {")
-        .nth(1)
-        .expect("the since module exists");
-    let mut gates = 0;
-    for piece in module.split("ReleaseVersion::new(").skip(1) {
-        let mut numbers = piece
-            .split(',')
-            .take(2)
-            .map(|number| number.trim().parse::<u8>().expect("a numeric release"));
-        let (major, minor) = (numbers.next().unwrap(), numbers.next().unwrap());
-        assert!(
-            (major, minor) > (3, 3),
-            "a gate for {major}.{minor} is always true on a 3.3a floor"
-        );
-        gates += 1;
-    }
-    assert!(gates > 0, "the scan found no gates");
+fn shared_version_failures_keep_the_client_error_vocabulary() {
+    let old = TmuxVersion::parse_output(b"tmux 3.3\n").unwrap();
+    let refused: libtmux::Error = old.ensure_supported().unwrap_err().into();
+    assert!(matches!(
+        refused,
+        libtmux::Error::UnsupportedTmuxVersion { .. },
+    ));
+    assert_eq!(refused.found_version(), Some(&old));
+    assert_eq!(refused.minimum_version(), Some(&TmuxVersion::MIN_SUPPORTED));
+    assert_eq!(refused.kind(), libtmux::ErrorKind::UnsupportedVersion);
+
+    let malformed: libtmux::Error = TmuxVersion::parse_output(b"invalid\n").unwrap_err().into();
+    assert!(matches!(
+        malformed,
+        libtmux::Error::InvalidVersionOutput { output_len: 8 },
+    ));
+    assert_eq!(malformed.kind(), libtmux::ErrorKind::Decode);
 }

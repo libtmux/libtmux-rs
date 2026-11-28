@@ -6,7 +6,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{Client, Command, ErrorKind, NewSessionOptions, NewWindowOptions, Pane, Server};
+use libtmux::{Client, Command, ErrorKind, NewSession, NewWindowOptions, Pane, Server};
 use libtmux::{ServerGoneKind, Session, TmuxArg};
 use libtmux::{SplitDirection, SplitOptions, Window};
 use static_assertions::assert_impl_all;
@@ -577,7 +577,7 @@ async fn session_lookup_finds_a_name_no_target_could_address() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let Ok(session) = server.new_session(NewSessionOptions::new("my.proj")).await else {
+    let Ok(session) = server.new_session(NewSession::new("my.proj")).await else {
         guard.shutdown().await.expect("tmux fixture shuts down");
         return;
     };
@@ -877,7 +877,7 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
     }
 
     let rootless = server
-        .new_session(NewSessionOptions::new("rootless").start_directory(""))
+        .new_session(NewSession::new("rootless").start_directory(""))
         .await
         .expect("an empty start directory");
     assert!(rootless.path().as_bytes().is_empty());
@@ -939,7 +939,7 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_text() {
     // name before the session it would describe exists, which is why a
     // templated name so often expands to nothing.
     let Ok(expanded) = server
-        .new_session(NewSessionOptions::new(TmuxArg::format("#{version}")))
+        .new_session(NewSession::new(TmuxArg::format("#{version}")))
         .await
     else {
         // A release that refuses the name is protecting the caller from all

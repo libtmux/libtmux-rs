@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libtmux::{Command, CommandChain, Error, NewSessionOptions};
+use libtmux::{Command, CommandChain, Error, NewSession};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{tool, tool_router};
 
@@ -272,7 +272,7 @@ impl TmuxTools {
             start_directory,
         }): Parameters<CreateSessionArgs>,
     ) -> Result<Json<SessionView>, ToolError> {
-        let mut options = NewSessionOptions::new(name);
+        let mut options = NewSession::new(name);
         if let Some(directory) = start_directory {
             options = options.start_directory(directory);
         }

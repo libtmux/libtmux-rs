@@ -12,7 +12,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{NewSessionOptions, NewWindowOptions, SplitDirection, SplitOptions};
+use libtmux::{NewSession, NewWindowOptions, SplitDirection, SplitOptions};
 use tempfile::TempDir;
 
 /// Holds a `#()` substitution, and is a legal tmux name.
@@ -108,7 +108,7 @@ async fn a_first_window_name_reaches_tmux_literally() {
 
     let session = guard
         .server()
-        .new_session(NewSessionOptions::new("work").window_name(HOSTILE))
+        .new_session(NewSession::new("work").window_name(HOSTILE))
         .await
         .expect("the session is created");
 

@@ -56,7 +56,7 @@
       "cargoExample": "api_creation",
       "targets": [
         "libtmux::Server::new_session",
-        "libtmux::NewSessionOptions",
+        "libtmux::NewSession",
         "libtmux::Session::new_window",
         "libtmux::NewWindowOptions",
         "libtmux::Window::split",

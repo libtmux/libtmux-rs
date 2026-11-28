@@ -1891,7 +1891,7 @@ async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("existing"))
+        .new_session(libtmux::NewSession::new("existing"))
         .await
         .unwrap();
     let directory = tempfile::tempdir().unwrap();
@@ -3302,7 +3302,7 @@ async fn appended_before_script_failure_leaves_the_borrowed_session_and_stays_pa
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let session = guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("owner"))
+        .new_session(libtmux::NewSession::new("owner"))
         .await
         .unwrap();
     let pane = current_pane(&session).await;
@@ -3414,7 +3414,7 @@ async fn failed_append_reports_borrowed_session_and_created_ids() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let session = guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("borrowed"))
+        .new_session(libtmux::NewSession::new("borrowed"))
         .await
         .unwrap();
     let pane = session
@@ -3570,7 +3570,7 @@ async fn append_leaves_the_client_on_its_window_unless_one_appended_window_focus
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let session = guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("owner"))
+        .new_session(libtmux::NewSession::new("owner"))
         .await
         .unwrap();
     let original = session.active_window().await.unwrap().unwrap();
@@ -3998,7 +3998,7 @@ async fn python_shell_uses_the_checked_console_entrypoint() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("bridge"))
+        .new_session(libtmux::NewSession::new("bridge"))
         .await
         .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_tmux-workspace"))
@@ -4796,7 +4796,7 @@ async fn reusing_a_session_without_the_document_s_windows_is_a_mismatch() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let session = guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("half"))
+        .new_session(libtmux::NewSession::new("half"))
         .await
         .unwrap();
     let mut window = session.active_window().await.unwrap().unwrap();
@@ -5108,7 +5108,7 @@ async fn freeze_refuses_an_existing_dotted_session_the_same_way() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let Ok(session) = guard
         .server()
-        .new_session(libtmux::NewSessionOptions::new("my.proj"))
+        .new_session(libtmux::NewSession::new("my.proj"))
         .await
     else {
         guard.shutdown().await.unwrap();

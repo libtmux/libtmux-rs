@@ -9,7 +9,7 @@
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::test::TestServer;
 use libtmux::{
-    NewSessionOptions, NewWindowOptions, Pane, SessionTree, SplitDirection, SplitOptions,
+    NewSession, NewWindowOptions, Pane, SessionTree, SplitDirection, SplitOptions,
     WindowTree,
 };
 
@@ -22,7 +22,7 @@ use libtmux::{
 /// one window, `shell`.
 async fn populate(server: &libtmux::Server) {
     let build = server
-        .new_session(NewSessionOptions::new("build").window_name("editor"))
+        .new_session(NewSession::new("build").window_name("editor"))
         .await
         .expect("session");
     build
@@ -39,7 +39,7 @@ async fn populate(server: &libtmux::Server) {
         .expect("window");
 
     server
-        .new_session(NewSessionOptions::new("idle").window_name("shell"))
+        .new_session(NewSession::new("idle").window_name("shell"))
         .await
         .expect("session");
 }
@@ -204,7 +204,7 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let busy = server
-        .new_session(NewSessionOptions::new("busy"))
+        .new_session(NewSession::new("busy"))
         .await
         .expect("session");
     for name in ["one", "two", "three"] {
@@ -213,7 +213,7 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
             .expect("window");
     }
     server
-        .new_session(NewSessionOptions::new("quiet"))
+        .new_session(NewSession::new("quiet"))
         .await
         .expect("session");
 
@@ -244,7 +244,7 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
     // Ordering is numeric, not lexicographic: ten windows beat a bound of
     // nine, where a string comparison would put "10" below "9".
     let ten = server
-        .new_session(NewSessionOptions::new("ten"))
+        .new_session(NewSession::new("ten"))
         .await
         .expect("session");
     for index in 0..9 {

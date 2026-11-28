@@ -647,7 +647,8 @@ impl Core {
         if !self.check_versions {
             return TmuxVersion::parse_output(
                 format!("tmux {}\n", TmuxVersion::MIN_SUPPORTED).as_bytes(),
-            );
+            )
+            .map_err(Into::into);
         }
         crate::internal::support::versions::endpoint_version(
             &self.executor,

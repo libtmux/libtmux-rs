@@ -17,7 +17,7 @@ use super::{
 };
 
 /// The format a creating operation prints so its ids can be bound.
-const SESSION_FORMAT: &str = "#{session_id} #{window_id} #{pane_id}";
+pub(super) const SESSION_FORMAT: &str = "#{session_id} #{window_id} #{pane_id}";
 const WINDOW_FORMAT: &str = "#{window_id} #{pane_id}";
 const PANE_FORMAT: &str = "#{pane_id}";
 

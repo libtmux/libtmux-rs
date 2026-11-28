@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 
@@ -52,7 +52,7 @@ impl CommandArg {
     }
 
     fn lower(&self) -> OsString {
-        lower_logical_token(&self.value)
+        libtmux_core::argv_operand(&self.value)
     }
 
     /// Return the argument's own bytes.
@@ -119,6 +119,18 @@ pub struct Command {
 }
 
 impl Command {
+    pub(crate) fn new_session(operation: &libtmux_core::NewSession, print_format: &str) -> Self {
+        let mut command = Self::new("new-session");
+        for operand in operation.operands(print_format) {
+            command = if operand.kind() == libtmux_core::OperandKind::Sensitive {
+                command.sensitive_arg(operand.into_os_string())
+            } else {
+                command.arg(operand.into_os_string())
+            };
+        }
+        command
+    }
+
     /// Start a command with one logical tmux subcommand token.
     ///
     /// # Examples
@@ -307,7 +319,7 @@ impl Command {
 
     /// Append this command's lowered argv tokens to `argv`.
     ///
-    /// Every token passes through [`lower_logical_token`], so no argument a
+    /// Every token passes through [`libtmux_core::argv_operand`], so no argument a
     /// caller supplied can reach tmux as a separator.
     fn extend_argv(&self, argv: &mut Vec<OsString>) {
         argv.push(self.subcommand.lower());
@@ -748,19 +760,6 @@ fn push_hex_escape(output: &mut String, byte: u8) {
     output.push_str("\\x");
     output.push(char::from(HEX[usize::from(byte >> 4)]));
     output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-}
-
-fn lower_logical_token(value: &OsStr) -> OsString {
-    let bytes = value.as_bytes();
-    if bytes.last() != Some(&b';') {
-        return value.to_os_string();
-    }
-
-    let mut lowered = Vec::with_capacity(bytes.len() + 1);
-    lowered.extend_from_slice(&bytes[..bytes.len() - 1]);
-    lowered.push(b'\\');
-    lowered.push(b';');
-    OsString::from_vec(lowered)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::time::Duration;
 
-use libtmux::{NewSessionOptions, NewWindowOptions, Server};
+use libtmux::{NewSession, NewWindowOptions, Server};
 
 type ExampleError = Box<dyn Error>;
 
@@ -18,7 +18,7 @@ fn check(condition: bool, message: &str) -> Result<(), ExampleError> {
 async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
     let session = server
         .new_session(
-            NewSessionOptions::new("work")
+            NewSession::new("work")
                 .window_name("editor")
                 .command("cat"),
         )

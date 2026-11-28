@@ -233,7 +233,7 @@ async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
 #[tokio::test]
 async fn reading_a_listed_pane_field_costs_no_command() {
     use libtmux::query::Filterable as _;
-    use libtmux::{Availability, Command, NewSessionOptions, Pane, PaneWait};
+    use libtmux::{Availability, Command, NewSession, Pane, PaneWait};
 
     let counter = CommandCounter::default();
     let subscriber = tracing_subscriber::registry().with(counter.clone());
@@ -244,7 +244,7 @@ async fn reading_a_listed_pane_field_costs_no_command() {
     // History to scroll back through, then a cursor off the origin, then a
     // reader that prints nothing more, so the cursor holds still.
     let session = server
-        .new_session(NewSessionOptions::new("read").command("seq 1 200; printf abc; exec cat"))
+        .new_session(NewSession::new("read").command("seq 1 200; printf abc; exec cat"))
         .await
         .expect("session");
     let mut pane = session.panes().await.expect("panes").remove(0);

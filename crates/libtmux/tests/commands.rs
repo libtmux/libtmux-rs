@@ -2187,7 +2187,7 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
     // this capture assertion.
     let session = server
         .new_session(
-            libtmux::NewSessionOptions::new("trailing").command("printf 'AB   \\n'; exec /bin/sh"),
+            libtmux::NewSession::new("trailing").command("printf 'AB   \\n'; exec /bin/sh"),
         )
         .await
         .expect("session");

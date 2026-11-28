@@ -4,7 +4,7 @@
 
 use libtmux::test::TestServer;
 use libtmux::{
-    Command, ErrorKind, NewSessionOptions, NewWindowOptions, SplitDirection, SplitOptions,
+    Command, ErrorKind, NewSession, NewWindowOptions, SplitDirection, SplitOptions,
 };
 
 #[tokio::test]
@@ -138,7 +138,7 @@ async fn real_tmux_compat_dash_creation_commands_are_not_flags() {
     // The shell refuses -d; retaining exited panes makes its exact command
     // observable without racing the process exit against the creation reply.
     let session = server
-        .new_session(NewSessionOptions::new("created").command("-d"))
+        .new_session(NewSession::new("created").command("-d"))
         .await
         .expect("the session command is positional");
     let first = session.panes().await.expect("panes").remove(0);

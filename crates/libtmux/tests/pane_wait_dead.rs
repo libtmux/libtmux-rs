@@ -6,16 +6,16 @@
 use std::time::Duration;
 
 use libtmux::test::TestServer;
-use libtmux::{Command, NewSessionOptions, PaneWait};
+use libtmux::{Command, NewSession, PaneWait};
 
 async fn waiting_pane(guard: &TestServer) -> libtmux::Pane {
     let server = guard.server();
     server
-        .new_session(NewSessionOptions::new("keeper").command("sleep 600"))
+        .new_session(NewSession::new("keeper").command("sleep 600"))
         .await
         .expect("keeper session");
     let session = server
-        .new_session(NewSessionOptions::new("watched").command("sleep 600"))
+        .new_session(NewSession::new("watched").command("sleep 600"))
         .await
         .expect("session");
     session.panes().await.expect("panes").remove(0)

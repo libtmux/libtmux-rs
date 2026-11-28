@@ -81,7 +81,7 @@ async fn native_frame_generation_case(replacement: Option<OsString>) {
         .build()
         .expect("server handle");
     server
-        .new_session(libtmux::NewSessionOptions::new("original").command("exec sleep 60"))
+        .new_session(libtmux::NewSession::new("original").command("exec sleep 60"))
         .await
         .expect("original daemon starts");
     let generation = server.generation().await.expect("checked generation");

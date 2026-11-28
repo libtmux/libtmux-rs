@@ -225,7 +225,7 @@ pane.split(
 # }
 ```
 
-The sinks: `NewSessionOptions::{new, window_name, start_directory}`,
+The sinks: `NewSession::{new, window_name, start_directory}`,
 `NewWindowOptions::{new, start_directory}`, `SplitOptions::start_directory`,
 `Session::rename`, `Window::rename`, `Pane::set_title`. Option names and the
 `plan` operations escape internally and need no change at the call site.

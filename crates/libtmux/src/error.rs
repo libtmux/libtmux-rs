@@ -336,59 +336,7 @@ pub enum ErrorKind {
     Decode,
 }
 
-/// An invalid scope-specific tmux object ID.
-///
-/// The error records the expected sigil but never retains the rejected input.
-///
-/// # Examples
-///
-/// ```
-/// use libtmux::SessionId;
-///
-/// // The sigil is the whole difference between the id types, so a mistake
-/// // names the one that was expected.
-/// let error = "@1".parse::<SessionId>().expect_err("@ denotes a window");
-/// assert_eq!(error.expected_sigil(), '$');
-/// ```
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub struct IdParseError {
-    expected_sigil: char,
-}
-
-impl IdParseError {
-    pub(crate) const fn new(expected_sigil: char) -> Self {
-        Self { expected_sigil }
-    }
-
-    /// Return the sigil required by the requested ID scope.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use libtmux::SessionId;
-    ///
-    /// let error = "@1".parse::<SessionId>().expect_err("@ denotes a window");
-    /// assert_eq!(error.expected_sigil(), '$');
-    /// ```
-    #[must_use]
-    pub const fn expected_sigil(self) -> char {
-        self.expected_sigil
-    }
-}
-
-impl fmt::Display for IdParseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "invalid tmux ID: expected {} followed by an integer from 0 through {}",
-            self.expected_sigil,
-            u32::MAX,
-        )
-    }
-}
-
-impl std::error::Error for IdParseError {}
+pub use libtmux_core::IdParseError;
 
 /// An error returned by libtmux.
 ///
@@ -1431,7 +1379,9 @@ impl Error {
     /// use libtmux::TmuxVersion;
     ///
     /// let output = b"invalid\n";
-    /// let error = TmuxVersion::parse_output(output).expect_err("output is invalid");
+    /// let error: libtmux::Error = TmuxVersion::parse_output(output)
+    ///     .expect_err("output is invalid")
+    ///     .into();
     /// assert_eq!(error.invalid_version_output_len(), Some(output.len()));
     /// ```
     #[must_use]
@@ -1450,7 +1400,9 @@ impl Error {
     /// use libtmux::TmuxVersion;
     ///
     /// let version = TmuxVersion::parse_output(b"tmux 3.2\n")?;
-    /// let error = version.ensure_supported().expect_err("3.2 is unsupported");
+    /// let error: libtmux::Error = version.ensure_supported()
+    ///     .expect_err("3.2 is unsupported")
+    ///     .into();
     /// assert_eq!(error.found_version(), Some(&version));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
@@ -1472,7 +1424,9 @@ impl Error {
     /// use libtmux::TmuxVersion;
     ///
     /// let version = TmuxVersion::parse_output(b"tmux 3.2\n")?;
-    /// let error = version.ensure_supported().expect_err("3.2 is unsupported");
+    /// let error: libtmux::Error = version.ensure_supported()
+    ///     .expect_err("3.2 is unsupported")
+    ///     .into();
     /// assert_eq!(error.minimum_version(), Some(&TmuxVersion::MIN_SUPPORTED));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
@@ -1482,6 +1436,31 @@ impl Error {
             Self::UnsupportedTmuxVersion { minimum, .. } => Some(minimum),
             Self::UnsupportedCapability { needs, .. } => Some(needs),
             _ => None,
+        }
+    }
+}
+
+impl From<libtmux_core::VersionError> for Error {
+    fn from(error: libtmux_core::VersionError) -> Self {
+        match error {
+            libtmux_core::VersionError::InvalidVersionOutput { output_len } => {
+                Self::from_invalid_version_output(output_len)
+            }
+            libtmux_core::VersionError::UnsupportedTmuxVersion { found, minimum } => {
+                Self::unsupported_tmux_version(found, minimum)
+            }
+            libtmux_core::VersionError::UnrecognizedTmuxVersion { found } => {
+                Self::unrecognized_tmux_version(found)
+            }
+            libtmux_core::VersionError::UnsupportedCapability {
+                capability,
+                needs,
+                found,
+            } => Self::UnsupportedCapability {
+                capability,
+                needs,
+                found,
+            },
         }
     }
 }

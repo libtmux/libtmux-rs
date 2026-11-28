@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use libtmux::NewSessionOptions;
+use libtmux::NewSession;
 use libtmux::test::TestServer;
 
 mod support;
@@ -35,7 +35,7 @@ async fn paste_staging_refuses_3_3a_while_basic_tools_remain_available() {
         .expect("3.3a starts");
     let server = guard.server();
     let session = server
-        .new_session(NewSessionOptions::new("keeper").command("env ENV=/dev/null PS1='ready> ' sh"))
+        .new_session(NewSession::new("keeper").command("env ENV=/dev/null PS1='ready> ' sh"))
         .await
         .expect("basic creation");
     let pane = session.panes().await.expect("panes").remove(0);
@@ -96,7 +96,7 @@ async fn paste_staging_works_on_3_4_without_acquiring_control() {
         .expect("3.4 starts");
     let server = guard.server();
     let session = server
-        .new_session(NewSessionOptions::new("keeper").command("env ENV=/dev/null PS1='ready> ' sh"))
+        .new_session(NewSession::new("keeper").command("env ENV=/dev/null PS1='ready> ' sh"))
         .await
         .expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
@@ -141,7 +141,7 @@ async fn wait_for_text_polls_on_3_3a_without_acquiring_control() {
         .expect("3.3a starts");
     let server = guard.server();
     let session = server
-        .new_session(NewSessionOptions::new("keeper").command("env ENV=/dev/null PS1='ready> ' sh"))
+        .new_session(NewSession::new("keeper").command("env ENV=/dev/null PS1='ready> ' sh"))
         .await
         .expect("session");
     let pane = session.panes().await.expect("panes").remove(0);

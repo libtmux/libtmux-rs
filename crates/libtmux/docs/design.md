@@ -790,9 +790,9 @@ The same method accepts configured options without adding a second operation:
 
 ```no_run
 # async fn build(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-use libtmux::NewSessionOptions;
+use libtmux::NewSession;
 
-let options = NewSessionOptions::new("work")
+let options = NewSession::new("work")
     .window_name("editor")
     .start_directory("workspace");
 let session = server.new_session(options).await?;

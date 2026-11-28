@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::time::Duration;
 
-use libtmux::{NewSessionOptions, Server};
+use libtmux::{NewSession, Server};
 
 type ExampleError = Box<dyn Error>;
 
@@ -22,7 +22,7 @@ async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
         "wrong config path",
     )?;
     let session = server
-        .new_session(NewSessionOptions::new("work").command("cat"))
+        .new_session(NewSession::new("work").command("cat"))
         .await?;
     check(
         server.is_alive().await,

@@ -3,14 +3,14 @@
 use std::error::Error;
 use std::time::Duration;
 
-use libtmux::{NewSessionOptions, PaneWait, Server};
+use libtmux::{NewSession, PaneWait, Server};
 
 type ExampleError = Box<dyn Error>;
 
 async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
     let session = server
         .new_session(
-            NewSessionOptions::new("capture").command("env ENV=/dev/null PS1='api-ready> ' sh"),
+            NewSession::new("capture").command("env ENV=/dev/null PS1='api-ready> ' sh"),
         )
         .await?;
     let panes = session.panes().await?;

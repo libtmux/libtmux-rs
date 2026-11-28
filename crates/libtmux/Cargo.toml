@@ -149,14 +149,15 @@ plan = []
 query = ["dep:caseless", "dep:regex"]
 # Describe serde's plan and portable-filter wire grammars without making schema
 # generation part of the ordinary serialization feature.
-schema = ["dep:schemars", "dep:serde_json", "serde"]
-serde = ["dep:serde"]
+schema = ["dep:schemars", "dep:serde_json", "libtmux-core/schema", "serde"]
+serde = ["dep:serde", "libtmux-core/serde"]
 test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
 tracing = ["dep:tracing"]
 
 [dependencies]
 caseless = { version = "0.2", optional = true }
 futures-core = { version = "0.3", optional = true }
+libtmux-core.workspace = true
 libtmux-macros = { workspace = true, optional = true }
 regex = { version = "1.13", optional = true }
 rustix = { version = "1.1.4", features = ["process"] }

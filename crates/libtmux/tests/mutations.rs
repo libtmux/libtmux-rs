@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use libtmux::test::{TestServer, retry_until, scaled};
-use libtmux::{ErrorKind, Layout, NewSessionOptions, NewWindowOptions};
+use libtmux::{ErrorKind, Layout, NewSession, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
 #[tokio::test]
@@ -206,7 +206,7 @@ async fn creation_options_reach_tmux() {
 
     let session = server
         .new_session(
-            NewSessionOptions::new("configured")
+            NewSession::new("configured")
                 .window_name("first")
                 .start_directory(directory.path())
                 .size(120, 40)
@@ -311,7 +311,7 @@ async fn flag_shaped_names_layouts_and_keys_stay_literal() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let mut session = server
-        .new_session(NewSessionOptions::new("ordinary").command("cat"))
+        .new_session(NewSession::new("ordinary").command("cat"))
         .await
         .expect("session is created");
     let mut window = session
@@ -403,7 +403,7 @@ async fn flag_shaped_commands_and_paths_stay_literal() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server
-        .new_session(NewSessionOptions::new("respawn").command("cat"))
+        .new_session(NewSession::new("respawn").command("cat"))
         .await
         .expect("session is created");
     let mut window = session
@@ -601,7 +601,7 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
     let server = guard.server();
 
     let session = server
-        .new_session(NewSessionOptions::new("io").command("sh"))
+        .new_session(NewSession::new("io").command("sh"))
         .await
         .expect("session is created");
     let mut pane = session
@@ -1000,7 +1000,7 @@ async fn pane_window_follows_an_external_move() {
         .await
         .expect("moving pane");
     let destination_session = server
-        .new_session(NewSessionOptions::new("pane-destination").command("sleep 300"))
+        .new_session(NewSession::new("pane-destination").command("sleep 300"))
         .await
         .expect("destination session");
     let destination = destination_session
@@ -2267,7 +2267,7 @@ async fn a_new_session_carries_environment_to_its_first_process() {
 
     let session = guard
         .server()
-        .new_session(NewSessionOptions::new("env").environment("LIBTMUX_RS", "set-here"))
+        .new_session(NewSession::new("env").environment("LIBTMUX_RS", "set-here"))
         .await
         .expect("the session is created");
     let pane = session.panes().await.expect("panes list").remove(0);

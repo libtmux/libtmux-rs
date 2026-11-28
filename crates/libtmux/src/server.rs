@@ -19,7 +19,7 @@ use crate::pane::Pane;
 use crate::session::Session;
 use crate::{
     Command, CommandChain, CommandResult, EngineCapabilities, Error, ListingDecodeError,
-    ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, TmuxArg,
+    NewSession, ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
     TmuxVersion,
 };
 
@@ -1089,7 +1089,7 @@ impl Server {
     /// a lookup.
     ///
     /// A name given as text reaches tmux as that text, `#` included. Only a
-    /// name built with [`TmuxArg::format`], through [`NewSessionOptions::new`],
+    /// name built with [`crate::TmuxArg::format`], through [`NewSession::new`],
     /// is expanded as a format, so `#(command)` in one runs a shell command.
     /// See [the crate documentation][crate#a-name-reaches-tmux-as-text].
     ///
@@ -1097,13 +1097,11 @@ impl Server {
     ///
     /// Returns an error when tmux refuses the command, which includes a name
     /// that already exists, and when its output cannot be decoded.
-    pub async fn new_session(
-        &self,
-        options: impl Into<NewSessionOptions>,
-    ) -> Result<Session, Error> {
+    pub async fn new_session(&self, options: impl Into<NewSession>) -> Result<Session, Error> {
         let options = options.into();
         let info =
-            listing::create_session(&self.core, |format| options.into_command(format)).await?;
+            listing::create_session(&self.core, |format| Command::new_session(&options, format))
+                .await?;
 
         Ok(Session::new(Arc::clone(&self.core), info))
     }
@@ -1483,7 +1481,11 @@ impl Server {
         capability: &'static str,
         needs: ReleaseVersion,
     ) -> Result<(), Error> {
-        self.core.format_version().await?.require(capability, needs)
+        self.core
+            .format_version()
+            .await?
+            .require(capability, needs)
+            .map_err(Into::into)
     }
 
     /// The entries tmux remembers for one kind of prompt.
@@ -1680,7 +1682,7 @@ impl Server {
     /// failure then has no caller to reach; the `tracing` feature records it.
     pub async fn with_session<T, E>(
         &self,
-        options: impl Into<NewSessionOptions>,
+        options: impl Into<NewSession>,
         operation: impl AsyncFnOnce(&Session) -> Result<T, E>,
     ) -> Result<T, crate::ScopeError<T, E>> {
         let server = self.clone();
@@ -1832,7 +1834,7 @@ impl Server {
             });
         };
 
-        Ok(ServerGeneration { pid, start_time })
+        Ok(ServerGeneration::from_raw(pid, start_time))
     }
 
     /// Fail unless the daemon answering is still the one that was captured.
@@ -2047,7 +2049,7 @@ mod tests {
 
     use tokio::sync::{Notify, watch};
 
-    use super::{AccessMode, NewSessionOptions, Principal, Server, parse_access_rule};
+    use super::{AccessMode, NewSession, Principal, Server, parse_access_rule};
     use crate::command::{CommandRequest, CommandResult, ProcessStatus};
     use crate::formats::{DecoderKind, FormatDescriptor, FormatPlan, ListProfile};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
@@ -2311,10 +2313,10 @@ mod tests {
     #[test]
     fn new_session_options_redact_the_shell_command() {
         let secret = "sentinel-session-command";
-        let options = NewSessionOptions::new("work").command(secret);
+        let options = NewSession::new("work").command(secret);
         assert!(!format!("{options:?}").contains(secret));
 
-        let summary = options.into_command("#{session_id}").summary();
+        let summary = crate::Command::new_session(&options, "#{session_id}").summary();
         assert_eq!(summary.sensitive_argument_count(), 1);
         assert!(!summary.to_string().contains(secret));
     }
@@ -2370,161 +2372,6 @@ mod tests {
         let no_marker =
             parse_access_rule("mallory").expect_err("a line with no trailing marker is rejected");
         assert!(matches!(no_marker, Error::UnreadableAccessRule { .. }));
-    }
-}
-
-/// Options for creating a session.
-///
-/// A bare name is accepted wherever this is, so the common case stays short:
-/// `server.new_session("work")`.
-///
-/// # Examples
-///
-/// ```
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// use libtmux::NewSessionOptions;
-///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let server = guard.server();
-///
-/// let session = server
-///     .new_session(NewSessionOptions::new("work").window_name("editor"))
-///     .await?;
-///
-/// let window = session.active_window().await?.expect("a session has a window");
-/// assert_eq!(window.name().to_string_lossy(), "editor");
-///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
-/// # Ok(())
-/// # }
-/// ```
-#[must_use = "options describe a session but do not create one"]
-#[derive(Clone)]
-pub struct NewSessionOptions {
-    name: TmuxArg,
-    start_directory: Option<TmuxArg>,
-    window_name: Option<TmuxArg>,
-    command: Option<OsString>,
-    environment: Vec<(OsString, OsString)>,
-    width: Option<u32>,
-    height: Option<u32>,
-}
-
-impl fmt::Debug for NewSessionOptions {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("NewSessionOptions")
-            .field("has_start_directory", &self.start_directory.is_some())
-            .field("has_window_name", &self.window_name.is_some())
-            .field("has_command", &self.command.is_some())
-            .field("environment_count", &self.environment.len())
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .finish_non_exhaustive()
-    }
-}
-
-impl NewSessionOptions {
-    /// Describe a session with the given name.
-    ///
-    /// The name is sent literally. [`TmuxArg::format`] opts into expansion.
-    pub fn new(name: impl Into<TmuxArg>) -> Self {
-        Self {
-            name: name.into(),
-            start_directory: None,
-            window_name: None,
-            command: None,
-            environment: Vec::new(),
-            width: None,
-            height: None,
-        }
-    }
-
-    /// Set the working directory for the session's first window.
-    ///
-    /// The directory is sent literally. [`TmuxArg::format`] opts into
-    /// expansion, which is how `#{pane_current_path}` is asked for.
-    pub fn start_directory(mut self, directory: impl Into<TmuxArg>) -> Self {
-        self.start_directory = Some(directory.into());
-        self
-    }
-
-    /// Name the session's first window, literally.
-    pub fn window_name(mut self, name: impl Into<TmuxArg>) -> Self {
-        self.window_name = Some(name.into());
-        self
-    }
-
-    /// Run a command instead of the default shell.
-    pub fn command(mut self, command: impl Into<OsString>) -> Self {
-        self.command = Some(command.into());
-        self
-    }
-
-    /// Set an environment variable for the process the new session starts.
-    ///
-    /// Call this more than once for more than one variable. tmux applies
-    /// these to the new process only, not to the session. The value is not
-    /// format-expanded, so it needs no escaping.
-    pub fn environment(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
-        self.environment.push((name.into(), value.into()));
-        self
-    }
-
-    /// Set the initial size, which a detached session would otherwise default.
-    pub fn size(mut self, width: u32, height: u32) -> Self {
-        self.width = Some(width);
-        self.height = Some(height);
-        self
-    }
-
-    /// Lower these options into a detached `new-session` command.
-    ///
-    /// `print_format` is placed with the other flags because tmux stops
-    /// parsing flags at the first positional, and the shell command is one.
-    fn into_command(self, print_format: &str) -> Command {
-        // Always detached: attaching would take over the calling terminal,
-        // which a library must never do on the caller's behalf.
-        let mut command = Command::new("new-session")
-            .arg("-d")
-            .arg("-P")
-            .arg("-F")
-            .arg(print_format)
-            .arg("-s")
-            .arg(self.name.into_os_string());
-        if let Some(directory) = self.start_directory {
-            command = command.arg("-c").arg(directory.into_os_string());
-        }
-        if let Some(name) = self.window_name {
-            command = command.arg("-n").arg(name.into_os_string());
-        }
-        if let (Some(width), Some(height)) = (self.width, self.height) {
-            command = command
-                .arg("-x")
-                .arg(width.to_string())
-                .arg("-y")
-                .arg(height.to_string());
-        }
-        for (name, value) in self.environment {
-            command = command
-                .arg("-e")
-                .sensitive_arg(crate::window::assignment(&name, &value));
-        }
-        if let Some(shell_command) = self.command {
-            command = command.arg("--").sensitive_arg(shell_command);
-        }
-        command
-    }
-}
-
-impl<T: Into<OsString>> From<T> for NewSessionOptions {
-    fn from(name: T) -> Self {
-        let name: OsString = name.into();
-        Self::new(name)
     }
 }
 

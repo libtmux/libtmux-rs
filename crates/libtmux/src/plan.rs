@@ -863,7 +863,7 @@ impl Op {
         _reserved: (),
     ) -> Option<Command> {
         match self {
-            Self::NewSession(op) => Some(op.render()),
+            Self::NewSession(op) => Some(Command::new_session(op, ops::SESSION_FORMAT)),
             Self::NewWindow(op) => op.render(resolve),
             Self::SplitWindow(op) => op.render(resolve),
             Self::SendKeys(op) => op.render(resolve),

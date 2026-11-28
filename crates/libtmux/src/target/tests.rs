@@ -16,6 +16,24 @@ fn hash(value: &ServerIdentity) -> u64 {
     hasher.finish()
 }
 
+#[test]
+fn core_and_client_use_identical_primitive_types() {
+    let pane: libtmux_core::PaneId = "%0002".parse().unwrap();
+    let pane: crate::PaneId = pane;
+    let text: libtmux_core::TmuxText = crate::TmuxText::from_bytes([b'#', 0xff]);
+    let argument: crate::TmuxArg = libtmux_core::TmuxArg::from(&text);
+    let identity: crate::ServerIdentity =
+        libtmux_core::ServerIdentity::from_socket_path("/private/shared/socket".into());
+    let generation: crate::ServerGeneration = libtmux_core::ServerGeneration::from_raw(42, 1);
+    let error: crate::IdParseError = "@1".parse::<libtmux_core::PaneId>().unwrap_err();
+
+    assert_eq!(pane.as_ref(), "%2");
+    assert_eq!(argument.as_os_str().as_bytes(), [b'#', b'#', 0xff]);
+    assert_eq!(identity.socket_path(), Path::new("/private/shared/socket"));
+    assert_eq!(generation.pid(), 42);
+    assert_eq!(error.expected_sigil(), '%');
+}
+
 fn inputs<'a>(
     cwd: &'a Path,
     socket_root: Option<&'a OsStr>,

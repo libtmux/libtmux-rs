@@ -6,7 +6,7 @@ use std::{
 
 use clap::ArgMatches;
 use libtmux::{
-    Command, NewSessionOptions, NewWindowOptions, Server, Session, SplitDirection, SplitOptions,
+    Command, NewSession, NewWindowOptions, Server, Session, SplitDirection, SplitOptions,
     escape_format,
 };
 use serde_json::{Value, json};
@@ -831,8 +831,8 @@ async fn build(
     } else {
         effects.stage = "session-creation";
         effects.mutation_started = Some(effects.stage);
-        let mut options = NewSessionOptions::new(escape_format(&workspace.name))
-            .start_directory(escape_format(&workspace.directory));
+        let mut options = NewSession::new(&workspace.name)
+            .start_directory(&workspace.directory);
         // No `-x`/`-y` at all with detection disabled: tmux then sizes the
         // session from the largest attached client, or `default-size`.
         if let Some((columns, rows)) = context.dimensions {

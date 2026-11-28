@@ -284,9 +284,10 @@ mod tests {
     #[test]
     fn a_version_refusal_names_its_remedy() {
         let found = libtmux::TmuxVersion::parse_output(b"tmux 3.2a\n").expect("parses");
-        let refusal = found
+        let refusal: libtmux::Error = found
             .ensure_supported()
-            .expect_err("3.2a is below the floor");
+            .expect_err("3.2a is below the floor")
+            .into();
         let data = tmux_error(&refusal).into_error_data();
         let detail = data.data.expect("the refusal carries detail");
         assert_eq!(detail["kind"], "unsupported_version", "{detail}");

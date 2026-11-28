@@ -140,7 +140,7 @@ pub(crate) fn dispatch(
             return Err(match replacement {
                 Ok(Some(replacement)) => match replacement.ensure_supported() {
                     Ok(()) => Error::server_replaced(request_id.get(), summary.clone()),
-                    Err(unsupported) => unsupported,
+                    Err(unsupported) => unsupported.into(),
                 },
                 Err(
                     error @ (Error::Timeout { .. }
@@ -319,7 +319,7 @@ async fn binary_version(
         .ok_or_else(|| Error::from_invalid_version_output(output.len()))?;
     let mut canonical = b"tmux ".to_vec();
     canonical.extend_from_slice(version);
-    TmuxVersion::parse_report(&canonical, output.len())
+    TmuxVersion::parse_report(&canonical, output.len()).map_err(Into::into)
 }
 
 /// What tmux 3.1 and older answer the probe with.
