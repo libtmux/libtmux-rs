@@ -29,15 +29,12 @@ impl ListProfile {
 }
 
 /// Version evidence retained by a format plan.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
+#[derive(Debug)]
 pub(super) enum PlanVersion {
     /// Version detected from tmux.
     Detected(TmuxVersion),
     /// Fixed evidence used by descriptor-only codec fixtures.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "conformance"))]
     MinimumSupportedFixture,
 }
 
@@ -46,7 +43,7 @@ impl PlanVersion {
     fn dialect(&self) -> TransportDialect {
         match self {
             Self::Detected(version) => TransportDialect::for_version(version),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "conformance"))]
             Self::MinimumSupportedFixture => TransportDialect::RawQ,
         }
     }
@@ -58,7 +55,7 @@ impl PlanVersion {
 /// version probe ran. A mismatch is possible, so each dialect rejects escapes
 /// the other produces instead of decoding them into different bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TransportDialect {
+pub enum TransportDialect {
     /// `#{q:}` escaping only, printed verbatim.
     ///
     /// Applies to releases before 3.4 and from 3.6 onward.
@@ -95,7 +92,8 @@ impl TransportDialect {
     /// below 3.4 and selects `RawQ`, although master emitted `Vis` from
     /// `7e497c7f`; `next-3.6` ranks below 3.6 and selects `Vis`, although
     /// master emitted `RawQ` again after `5fd45b38`.
-    pub(crate) fn for_version(version: &TmuxVersion) -> Self {
+    #[must_use]
+    pub fn for_version(version: &TmuxVersion) -> Self {
         match version.behavior_release() {
             Some(release) if release >= Self::VIS_FIRST && release < Self::VIS_RESTORED => {
                 Self::Vis
@@ -106,12 +104,8 @@ impl TransportDialect {
 }
 
 /// Consumer intent carried by a format plan.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlanPurpose {
+pub enum PlanPurpose {
     /// Complete intrinsic snapshot for one placement.
     Intrinsic(InfoPlacement),
     /// Explicit trusted-static projection.
@@ -119,12 +113,8 @@ pub(crate) enum PlanPurpose {
 }
 
 /// Version-selection state for one planned field.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlanFieldState {
+pub enum PlanFieldState {
     /// Field is rendered at this selected-slot coordinate.
     Selected { slot: usize },
     /// Numbered tmux release predates the field.
@@ -134,10 +124,6 @@ pub(crate) enum PlanFieldState {
 }
 
 /// Descriptor and availability evidence retained in request order.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlannedField {
     /// Trusted static descriptor.
@@ -147,11 +133,7 @@ pub(crate) struct PlannedField {
 }
 
 /// Ordered trusted metadata and exact tmux format template.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
-pub(crate) struct FormatPlan {
+pub struct FormatPlan {
     /// List operation represented by the plan.
     pub(super) profile: ListProfile,
     /// Version evidence used to select descriptors.
@@ -170,18 +152,15 @@ pub(crate) struct FormatPlan {
     pub(super) dialect: TransportDialect,
 }
 
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 impl FormatPlan {
     /// Build a plan from one supported detected tmux version.
-    pub(crate) fn for_profile(profile: ListProfile, version: &TmuxVersion) -> Self {
+    #[must_use]
+    pub fn for_profile(profile: ListProfile, version: &TmuxVersion) -> Self {
         select_for_profile(profile, version, profile.supplements())
     }
 
     /// Build an explicit projection from trusted static descriptors.
-    pub(crate) fn for_descriptors(
+    pub fn for_descriptors(
         profile: ListProfile,
         version: &TmuxVersion,
         requested: &[&'static FormatDescriptor],
@@ -231,16 +210,16 @@ impl FormatPlan {
     }
 
     /// Construct a descriptor-only plan for codec tests.
-    #[cfg(test)]
-    pub(crate) fn for_codec_test(
+    #[cfg(any(test, feature = "conformance"))]
+    pub fn for_codec_test(
         descriptors: Vec<&'static FormatDescriptor>,
     ) -> Result<Self, FormatCodecError> {
         Self::for_codec_test_with(descriptors, PlanVersion::MinimumSupportedFixture)
     }
 
     /// Construct a descriptor-only plan whose dialect follows a real version.
-    #[cfg(test)]
-    pub(crate) fn for_codec_test_at(
+    #[cfg(any(test, feature = "conformance"))]
+    pub fn for_codec_test_at(
         descriptors: Vec<&'static FormatDescriptor>,
         version: &TmuxVersion,
     ) -> Result<Self, FormatCodecError> {
@@ -248,7 +227,7 @@ impl FormatPlan {
     }
 
     /// Share codec-fixture plan construction across version evidence.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "conformance"))]
     fn for_codec_test_with(
         descriptors: Vec<&'static FormatDescriptor>,
         version: PlanVersion,
@@ -276,18 +255,21 @@ impl FormatPlan {
     }
 
     /// Return the selected descriptor sequence to codec fixtures.
-    #[cfg(test)]
-    pub(crate) fn descriptors_for_test(&self) -> &[&'static FormatDescriptor] {
+    #[cfg(any(test, feature = "conformance"))]
+    #[must_use]
+    pub fn descriptors_for_test(&self) -> &[&'static FormatDescriptor] {
         &self.descriptors
     }
 
     /// Return this plan's list profile.
-    pub(crate) const fn profile(&self) -> ListProfile {
+    #[must_use]
+    pub const fn profile(&self) -> ListProfile {
         self.profile
     }
 
     /// Return this plan's purpose.
-    pub(crate) const fn purpose(&self) -> PlanPurpose {
+    #[must_use]
+    pub const fn purpose(&self) -> PlanPurpose {
         self.purpose
     }
 
@@ -297,7 +279,8 @@ impl FormatPlan {
     }
 
     /// Return the exact format template passed to tmux.
-    pub(crate) fn template(&self) -> &str {
+    #[must_use]
+    pub fn template(&self) -> &str {
         &self.template
     }
 
@@ -334,10 +317,6 @@ impl FormatPlan {
 }
 
 /// Select a profile's mandatory identity and supported supplements.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 fn select_for_profile(
     profile: ListProfile,
     version: &TmuxVersion,
@@ -375,10 +354,6 @@ fn select_for_profile(
 }
 
 /// Classify one nonbaseline field from numbered or development evidence.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 fn classify_field(
     version: &TmuxVersion,
     descriptor: &'static FormatDescriptor,
@@ -406,4 +381,14 @@ pub(super) fn for_profile_selection_test(
     supplements: &'static [&'static FormatDescriptor],
 ) -> FormatPlan {
     select_for_profile(profile, version, supplements)
+}
+
+impl std::fmt::Debug for FormatPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FormatPlan")
+            .field("profile", &self.profile)
+            .field("version", &self.version)
+            .field("fields", &self.descriptors.len())
+            .finish_non_exhaustive()
+    }
 }

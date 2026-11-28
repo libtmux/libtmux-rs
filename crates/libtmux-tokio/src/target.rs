@@ -9,54 +9,6 @@ pub use libtmux_core::{
     SessionTarget, TmuxArg, WindowId, WindowTarget, escape_format,
 };
 
-#[allow(
-    dead_code,
-    reason = "modelled and tested; no public accessor returns it yet"
-)]
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct WindowLinkIdentity {
-    server_identity: ServerIdentity,
-    session_id: SessionId,
-    window_index: i32,
-    window_id: WindowId,
-}
-
-#[allow(
-    dead_code,
-    reason = "modelled and tested; no public accessor returns it yet"
-)]
-impl WindowLinkIdentity {
-    pub(crate) fn new(
-        server_identity: ServerIdentity,
-        session_id: SessionId,
-        window_index: i32,
-        window_id: WindowId,
-    ) -> Self {
-        Self {
-            server_identity,
-            session_id,
-            window_index,
-            window_id,
-        }
-    }
-
-    pub(crate) const fn server_identity(&self) -> &ServerIdentity {
-        &self.server_identity
-    }
-
-    pub(crate) const fn session_id(&self) -> &SessionId {
-        &self.session_id
-    }
-
-    pub(crate) const fn window_index(&self) -> i32 {
-        self.window_index
-    }
-
-    pub(crate) const fn window_id(&self) -> &WindowId {
-        &self.window_id
-    }
-}
-
 pub(crate) mod endpoint_resolution {
     use std::ffi::OsString;
 

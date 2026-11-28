@@ -382,6 +382,9 @@ pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[doc(hidden)]
 pub use internal::environment::__fuzz_environment_listing;
 pub use libtmux_core::{
+    Availability, ClientSnapshot, PaneProgressState, PaneSnapshot, SessionSnapshot, WindowSnapshot,
+};
+pub use libtmux_core::{
     CreatedSession, NewSession, PaneKey, SessionKey, WindowKey, WindowLinkSnapshot,
 };
 #[cfg(feature = "control-mode")]
@@ -402,7 +405,6 @@ pub use server::{
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};
 pub use session::{EnvironmentEntry, NewWindowOptions, Session, WindowPlacement};
-pub use snapshot::{Availability, PaneProgressState};
 #[cfg(feature = "query")]
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{

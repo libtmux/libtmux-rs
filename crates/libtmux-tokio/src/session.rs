@@ -255,6 +255,12 @@ pub struct Session {
 }
 
 impl Session {
+    /// Borrow the immutable fields returned by the last listing.
+    #[must_use]
+    pub const fn snapshot(&self) -> &libtmux_core::SessionSnapshot {
+        &self.info
+    }
+
     /// Build a handle from a hydrated snapshot.
     pub(crate) const fn new(core: Arc<Core>, info: SessionInfo) -> Self {
         Self { core, info }
@@ -1352,5 +1358,12 @@ mod option_tests {
         let summary = options.into_command("$1", "#{window_id}").summary();
         assert_eq!(summary.sensitive_argument_count(), 2);
         assert!(!summary.to_string().contains(secret));
+    }
+}
+
+#[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Session {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
     }
 }

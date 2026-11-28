@@ -282,6 +282,12 @@ fn send_line_command(target: &PaneId, mut text: OsString) -> Command {
 }
 
 impl Pane {
+    /// Borrow the immutable fields returned by the last listing.
+    #[must_use]
+    pub const fn snapshot(&self) -> &libtmux_core::PaneSnapshot {
+        self.projection.pane()
+    }
+
     /// Build a handle from a hydrated projection.
     pub(crate) const fn new(core: Arc<Core>, projection: PaneProjection) -> Self {
         Self { core, projection }
@@ -2008,5 +2014,12 @@ mod tests {
         for depth in [1, 2, u32::MAX] {
             assert!(pane_mode_is_active(depth), "mode depth {depth}");
         }
+    }
+}
+
+#[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Pane {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
     }
 }

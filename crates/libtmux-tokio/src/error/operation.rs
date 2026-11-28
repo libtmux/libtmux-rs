@@ -98,9 +98,10 @@ pub(super) fn core_kind(error: &libtmux_core::Error) -> ErrorKind {
         }
         CoreError::UnsupportedVersion => ErrorKind::UnsupportedVersion,
         CoreError::Spawn(_) => ErrorKind::Unreachable,
-        CoreError::InvalidKey | CoreError::FramedRead | CoreError::UnconfirmedCreation { .. } => {
-            ErrorKind::Decode
-        }
+        CoreError::SnapshotRow(_)
+        | CoreError::InvalidKey
+        | CoreError::FramedRead
+        | CoreError::UnconfirmedCreation { .. } => ErrorKind::Decode,
         CoreError::WrongEndpoint => ErrorKind::InvalidInput,
         CoreError::PaneNotFound(_) | CoreError::StalePane => ErrorKind::ObjectGone,
         CoreError::ObservationFailed { source, .. } => core_kind(source),

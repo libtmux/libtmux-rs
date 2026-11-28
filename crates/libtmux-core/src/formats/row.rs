@@ -2,8 +2,8 @@ use std::fmt;
 use std::ops::Range;
 
 use super::plan::{FormatPlan, TransportDialect};
-use super::text::TmuxText;
 use super::{DecoderKind, FormatDescriptor, ListProfile};
+use crate::TmuxText;
 
 /// Bytes that `#{q:}` prefixes with a backslash.
 ///
@@ -21,24 +21,37 @@ pub(super) const QUOTE_SHELL_SPECIALS: &[u8] = b"|&;<>()$`\\\"'*?[# =%{}\n\t";
 /// Not `%`: `display-message` expands its template through `strftime` before
 /// `format_expand`, and a template free of `%` skips that pass entirely
 /// (`format.c`'s `strchr(fmt, '%') != NULL` guard). `=` is in
-/// [`QUOTE_SHELL_SPECIALS`], so `#{q:}` still escapes it inside a value.
-pub(crate) const FIELD_SEPARATOR: u8 = b'=';
+/// `QUOTE_SHELL_SPECIALS`, so `#{q:}` still escapes it inside a value.
+pub const FIELD_SEPARATOR: u8 = b'=';
 
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 impl FormatPlan {
     /// Parse raw tmux stdout into immutable byte-preserving rows.
     ///
     /// NUL rejection stays at this framing boundary because [`TmuxText`]
     /// intentionally remains a general byte container outside tmux parsing.
-    pub(crate) fn parse_rows(&self, stdout: &[u8]) -> Result<Vec<ParsedRow>, FormatCodecError> {
+    pub fn parse_rows(&self, stdout: &[u8]) -> Result<Vec<ParsedRow>, FormatCodecError> {
+        self.parse_marked_rows(stdout, b"")
+    }
+
+    pub(crate) fn parse_marked_rows(
+        &self,
+        stdout: &[u8],
+        marker: &[u8],
+    ) -> Result<Vec<ParsedRow>, FormatCodecError> {
         let mut cursor = 0;
         let mut row = 0;
         let mut parsed = Vec::new();
 
         while cursor < stdout.len() {
+            if !stdout[cursor..].starts_with(marker) {
+                return Err(FormatCodecError::row_mismatch(
+                    row,
+                    None,
+                    None,
+                    Some(cursor),
+                ));
+            }
+            cursor += marker.len();
             parsed.push(self.parse_row(stdout, &mut cursor, row)?);
             row += 1;
         }
@@ -266,7 +279,7 @@ const fn vis_cstyle_byte(letter: u8) -> Option<u8> {
 /// Written from tmux's side rather than from the decoder's constants, so a
 /// round trip through it checks the decoder against tmux.
 #[cfg(any(test, feature = "unstable-fuzzing"))]
-pub(crate) fn encode_like_tmux(
+pub(super) fn encode_like_tmux(
     value: &[u8],
     escaped: &[u8],
     dialect: TransportDialect,
@@ -314,12 +327,8 @@ fn decode_octal_escape(digits: &[u8]) -> Option<u8> {
 }
 
 /// Scalar category of a private format codec failure.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FormatCodecErrorKind {
+pub enum FormatCodecErrorKind {
     /// A test-only descriptor plan was empty.
     EmptyPlan,
     /// A field reached EOF without an unescaped percent.
@@ -349,12 +358,8 @@ pub(crate) enum FormatCodecErrorKind {
 }
 
 /// Parser or decoder phase in which a codec failure occurred.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FormatCodecPhase {
+pub enum FormatCodecPhase {
     /// Plan construction.
     Plan,
     /// Ordinary field scanning.
@@ -369,7 +374,7 @@ pub(crate) enum FormatCodecPhase {
 
 /// Payload-free diagnostic metadata for a private format codec failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FormatCodecError {
+pub struct FormatCodecError {
     /// Stable error category.
     kind: FormatCodecErrorKind,
     /// State in which the error was detected.
@@ -388,12 +393,9 @@ pub(crate) struct FormatCodecError {
     profile: Option<ListProfile>,
 }
 
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 impl FormatCodecError {
     /// Construct an empty-plan error without row metadata.
+    #[cfg(any(test, feature = "conformance"))]
     pub(super) const fn empty_plan() -> Self {
         Self {
             kind: FormatCodecErrorKind::EmptyPlan,
@@ -447,7 +449,8 @@ impl FormatCodecError {
     }
 
     /// Construct a failure in a field named outside the catalog.
-    pub(crate) const fn uncatalogued(
+    #[must_use]
+    pub const fn uncatalogued(
         kind: FormatCodecErrorKind,
         phase: FormatCodecPhase,
         row: usize,
@@ -468,6 +471,7 @@ impl FormatCodecError {
     }
 
     /// Construct an ASCII decoder failure from slot coordinates only.
+    #[cfg(test)]
     const fn non_ascii(slot: &ParsedSlot<'_>) -> Self {
         Self {
             kind: FormatCodecErrorKind::NonAscii,
@@ -482,7 +486,8 @@ impl FormatCodecError {
     }
 
     /// Construct a typed decoder or required-empty failure.
-    pub(crate) const fn typed(kind: FormatCodecErrorKind, slot: &ParsedSlot<'_>) -> Self {
+    #[must_use]
+    pub const fn typed(kind: FormatCodecErrorKind, slot: &ParsedSlot<'_>) -> Self {
         Self {
             kind,
             phase: FormatCodecPhase::Decode,
@@ -496,7 +501,8 @@ impl FormatCodecError {
     }
 
     /// Construct a structural row mismatch from scalar coordinates.
-    pub(crate) const fn row_mismatch(
+    #[must_use]
+    pub const fn row_mismatch(
         row: usize,
         field: Option<usize>,
         field_name: Option<&'static str>,
@@ -515,7 +521,8 @@ impl FormatCodecError {
     }
 
     /// Construct a purpose or placement mismatch.
-    pub(crate) const fn purpose_mismatch(profile: ListProfile, row: usize) -> Self {
+    #[must_use]
+    pub const fn purpose_mismatch(profile: ListProfile, row: usize) -> Self {
         Self {
             kind: FormatCodecErrorKind::PlanRowMismatch,
             phase: FormatCodecPhase::Decode,
@@ -529,42 +536,50 @@ impl FormatCodecError {
     }
 
     /// Return the stable error category.
-    pub(crate) const fn kind(&self) -> FormatCodecErrorKind {
+    #[must_use]
+    pub const fn kind(&self) -> FormatCodecErrorKind {
         self.kind
     }
 
     /// Return the parser or decoder phase.
-    pub(crate) const fn phase(&self) -> FormatCodecPhase {
+    #[must_use]
+    pub const fn phase(&self) -> FormatCodecPhase {
         self.phase
     }
 
     /// Return the zero-based row coordinate.
-    pub(crate) const fn row(&self) -> Option<usize> {
+    #[must_use]
+    pub const fn row(&self) -> Option<usize> {
         self.row
     }
 
     /// Return the zero-based field coordinate.
-    pub(crate) const fn field(&self) -> Option<usize> {
+    #[must_use]
+    pub const fn field(&self) -> Option<usize> {
         self.field
     }
 
     /// Return the trusted static field name.
-    pub(crate) const fn field_name(&self) -> Option<&'static str> {
+    #[must_use]
+    pub const fn field_name(&self) -> Option<&'static str> {
         self.field_name
     }
 
     /// Return the expected decoder when decoding failed.
-    pub(crate) const fn expected(&self) -> Option<DecoderKind> {
+    #[must_use]
+    pub const fn expected(&self) -> Option<DecoderKind> {
         self.expected
     }
 
     /// Return the absolute raw stdout offset.
-    pub(crate) const fn offset(&self) -> Option<usize> {
+    #[must_use]
+    pub const fn offset(&self) -> Option<usize> {
         self.offset
     }
 
     /// Return the implicated list profile.
-    pub(crate) const fn profile(&self) -> Option<ListProfile> {
+    #[must_use]
+    pub const fn profile(&self) -> Option<ListProfile> {
         self.profile
     }
 }
@@ -600,7 +615,7 @@ impl fmt::Display for FormatCodecError {
 impl std::error::Error for FormatCodecError {}
 
 /// One parsed row backed by a single owned unescaped byte buffer.
-pub(crate) struct ParsedRow {
+pub struct ParsedRow {
     /// Zero-based row coordinate in raw stdout.
     row: usize,
     /// Shared unescaped payload storage for every slot in this row.
@@ -621,7 +636,7 @@ struct SlotMeta {
 
 /// Borrowed view of one parsed format slot.
 #[derive(Clone, Copy)]
-pub(crate) struct ParsedSlot<'row> {
+pub struct ParsedSlot<'row> {
     /// Trusted descriptor selected by the plan.
     descriptor: &'static FormatDescriptor,
     /// Exact unescaped bytes borrowed from shared row storage.
@@ -636,12 +651,14 @@ pub(crate) struct ParsedSlot<'row> {
 
 impl ParsedRow {
     /// Return the zero-based source row coordinate.
-    pub(crate) const fn row(&self) -> usize {
+    #[must_use]
+    pub const fn row(&self) -> usize {
         self.row
     }
 
     /// Borrow one selected slot by its monotonic coordinate.
-    pub(crate) fn slot(&self, field: usize) -> Option<ParsedSlot<'_>> {
+    #[must_use]
+    pub fn slot(&self, field: usize) -> Option<ParsedSlot<'_>> {
         self.slots.get(field).map(|slot| ParsedSlot {
             descriptor: slot.descriptor,
             bytes: &self.bytes[slot.range.clone()],
@@ -652,20 +669,13 @@ impl ParsedRow {
     }
 
     /// Return the number of selected slots.
-    #[allow(
-        dead_code,
-        reason = "modelled and tested; only a projection of it is hydrated today"
-    )]
-    pub(crate) const fn slot_count(&self) -> usize {
+    #[must_use]
+    pub const fn slot_count(&self) -> usize {
         self.slots.len()
     }
 
     /// Borrow every slot in plan order.
-    #[allow(
-        dead_code,
-        reason = "modelled and tested; only a projection of it is hydrated today"
-    )]
-    pub(crate) fn slots(&self) -> impl ExactSizeIterator<Item = ParsedSlot<'_>> + '_ {
+    pub fn slots(&self) -> impl ExactSizeIterator<Item = ParsedSlot<'_>> + '_ {
         self.slots
             .iter()
             .enumerate()
@@ -681,31 +691,32 @@ impl ParsedRow {
 
 impl<'row> ParsedSlot<'row> {
     /// Return the trusted descriptor for this slot.
-    pub(crate) const fn descriptor(&self) -> &'static FormatDescriptor {
+    #[must_use]
+    pub const fn descriptor(&self) -> &'static FormatDescriptor {
         self.descriptor
     }
 
     /// Return the exact unescaped bytes.
-    pub(crate) const fn as_bytes(&self) -> &'row [u8] {
+    #[must_use]
+    pub const fn as_bytes(&self) -> &'row [u8] {
         self.bytes
     }
 
     /// Return the zero-based selected-slot coordinate.
-    pub(crate) const fn field(&self) -> usize {
+    #[must_use]
+    pub const fn field(&self) -> usize {
         self.field
     }
 
     /// Return the absolute raw slot-start offset.
-    pub(crate) const fn raw_start(&self) -> usize {
+    #[must_use]
+    pub const fn raw_start(&self) -> usize {
         self.raw_start
     }
 }
 
 /// Decode an ASCII slot without assigning higher-level field semantics.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
+#[cfg(test)]
 pub(crate) fn decode_ascii(slot: ParsedSlot<'_>) -> Result<&str, FormatCodecError> {
     if !slot.as_bytes().is_ascii() {
         return Err(FormatCodecError::non_ascii(&slot));
@@ -718,7 +729,8 @@ pub(crate) fn decode_ascii(slot: ParsedSlot<'_>) -> Result<&str, FormatCodecErro
 }
 
 /// Copy a text slot into an exact byte-preserving public value.
-pub(crate) fn decode_text(slot: ParsedSlot<'_>) -> TmuxText {
+#[must_use]
+pub fn decode_text(slot: ParsedSlot<'_>) -> TmuxText {
     TmuxText::from_bytes(slot.as_bytes())
 }
 
@@ -728,7 +740,7 @@ pub(crate) fn decode_text(slot: ParsedSlot<'_>) -> TmuxText {
 /// [`FIELD_SEPARATOR`], and each row ends with LF, as in a plan's template.
 /// Escapes decode as a plan's do in `dialect`. A row that does not frame
 /// fails the whole listing: nothing is skipped.
-pub(crate) fn split_quoted_rows<const N: usize>(
+pub fn split_quoted_rows<const N: usize>(
     stdout: &[u8],
     names: [&'static str; N],
     dialect: TransportDialect,
@@ -794,4 +806,22 @@ pub(crate) fn split_quoted_rows<const N: usize>(
     }
 
     Ok(rows)
+}
+
+impl fmt::Debug for ParsedRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParsedRow")
+            .field("row", &self.row)
+            .field("slots", &self.slots.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for ParsedSlot<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParsedSlot")
+            .field("field", &self.field)
+            .field("name", &self.descriptor.name())
+            .finish_non_exhaustive()
+    }
 }

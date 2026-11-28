@@ -292,6 +292,12 @@ pub struct Window {
 }
 
 impl Window {
+    /// Borrow the immutable fields returned by the last listing.
+    #[must_use]
+    pub const fn snapshot(&self) -> &libtmux_core::WindowSnapshot {
+        self.projection.window()
+    }
+
     /// Build a handle from a hydrated projection.
     pub(crate) fn new(core: Arc<Core>, projection: WindowProjection) -> Result<Self, Error> {
         let generation = core
@@ -2355,5 +2361,12 @@ mod layout_version_tests {
             classify("main-vertical-mirrored", b"tmux 3.3a\n"),
             SavedLayout::Unrecognized,
         );
+    }
+}
+
+#[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Window {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
     }
 }

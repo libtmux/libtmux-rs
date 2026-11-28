@@ -375,6 +375,7 @@ use regex::RegexBuilder;
 mod grammar;
 use grammar::{RelationQuantifier, SetOperator, TextOperator};
 mod fields;
+pub use crate::snapshot::ReadField;
 pub use fields::{BoolField, EnumField, IntegerField, ManyRelation, OneRelation, TextField};
 mod matching;
 use matching::{
