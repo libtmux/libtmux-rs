@@ -138,7 +138,11 @@ mod json {
         }
 
         fn schema_id() -> Cow<'static, str> {
-            format!("libtmux_core::query::FilterExpr<{}>", std::any::type_name::<T>()).into()
+            format!(
+                "libtmux_core::query::FilterExpr<{}>",
+                std::any::type_name::<T>()
+            )
+            .into()
         }
 
         fn json_schema(generator: &mut SchemaGenerator) -> Schema {

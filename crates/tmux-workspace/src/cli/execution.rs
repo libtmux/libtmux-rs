@@ -71,7 +71,8 @@ impl LoadState {
         let mut partial = !self.results.is_empty();
         let mut results = self.results.clone();
         if let Some(effects) = &self.current {
-            let uncertain = effects.unknown_creation || (error.code == "interrupted" && effects.mutation_started.is_some());
+            let uncertain = effects.unknown_creation
+                || (error.code == "interrupted" && effects.mutation_started.is_some());
             partial |= effects.changed || uncertain;
             failure["input_index"] = json!(effects.input);
             failure["partial_effects"] = json!(effects.changed);
@@ -122,8 +123,14 @@ impl LoadState {
 
 impl Effects {
     fn session_id(&self) -> Option<String> {
-        self.creation.as_ref().map(|(_, receipt)| receipt.session().to_string())
-            .or_else(|| self.session.as_ref().map(|session| session.id().to_string()))
+        self.creation
+            .as_ref()
+            .map(|(_, receipt)| receipt.session().to_string())
+            .or_else(|| {
+                self.session
+                    .as_ref()
+                    .map(|session| session.id().to_string())
+            })
     }
 
     fn record_creation(&mut self, server: &Server, receipt: &libtmux_tokio::CreatedSession) {
@@ -857,7 +864,8 @@ async fn build(
             if let Some(created) = error.creation_receipt() {
                 effects.record_creation(server, created);
             } else {
-                effects.unknown_creation = error.operation_effect() == Some(libtmux_core::Effect::Unknown);
+                effects.unknown_creation =
+                    error.operation_effect() == Some(libtmux_core::Effect::Unknown);
             }
         })?;
         effects.record_creation(server, &receipt);

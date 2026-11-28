@@ -12,10 +12,10 @@ use super::{
     Chainable, Effects, Op, Operation, PaneSlot, PaneTarget, Safety, Scope, Slot, WindowTarget,
 };
 use super::{PANE_FORMAT, Resolver};
+use crate::assignment;
 #[cfg(feature = "serde")]
 use crate::plan::ProducerIdentity;
 use crate::plan::SlotUse;
-use crate::assignment;
 use crate::{Command, SplitDirection};
 
 /// `split-window`'s `-t`: a window (its active pane divides) or an exact
