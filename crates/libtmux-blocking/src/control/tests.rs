@@ -17,6 +17,60 @@ fn managed() -> Option<(Fixture, ControlMode)> {
 }
 
 #[test]
+fn native_attachment_keeps_session_environment() {
+    const VARIABLE: &str = "LIBTMUX_TEST_CONTROL_ENVIRONMENT";
+    const ABSENT: &str = "LIBTMUX_TEST_CONTROL_ABSENT";
+
+    if std::env::var_os(VARIABLE).as_deref() != Some(std::ffi::OsStr::new("caller")) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "control::tests::native_attachment_keeps_session_environment",
+            ])
+            .env(VARIABLE, "caller")
+            .env_remove(ABSENT)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "controlled attachment: {output:?}");
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let output = fixture.checked(["display-message", "-p", "#{version}"]);
+    let version = libtmux_core::TmuxVersion::parse_output(
+        format!("tmux {}", String::from_utf8(output.stdout).unwrap()).as_bytes(),
+    )
+    .unwrap();
+    if !version.managed_control_eligible(true) {
+        return;
+    }
+    fixture.checked([
+        "set-option",
+        "-t",
+        "$0",
+        "update-environment",
+        &format!("{VARIABLE} {ABSENT}"),
+    ]);
+    for name in [VARIABLE, ABSENT] {
+        fixture.checked(["set-environment", "-t", "$0", name, "session"]);
+    }
+    let mode = ControlMode::attach(&fixture.server, "$0".parse().unwrap()).unwrap();
+    assert_eq!(
+        fixture
+            .checked(["show-environment", "-t", "$0", VARIABLE])
+            .stdout,
+        b"LIBTMUX_TEST_CONTROL_ENVIRONMENT=session\n"
+    );
+    assert_eq!(
+        fixture
+            .checked(["show-environment", "-t", "$0", ABSENT])
+            .stdout,
+        b"LIBTMUX_TEST_CONTROL_ABSENT=session\n"
+    );
+    mode.shutdown().unwrap();
+}
+
+#[test]
 fn native_attachment_challenges_identity_and_drains_controlled_nested_hooks() {
     let Some((fixture, mode)) = managed() else {
         return;

@@ -380,6 +380,7 @@ impl Server {
         command
             .arg("-S")
             .arg(&self.socket)
+            .arg("-u")
             .args(args)
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")

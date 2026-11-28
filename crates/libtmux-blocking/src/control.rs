@@ -146,8 +146,14 @@ impl ControlMode {
             identity,
         });
         let (tx, rx) = mpsc::sync_channel(limits.max_pending_requests);
-        let mut command =
-            pinned.command(["-N", "-C", "attach-session", "-t", &format!("{session}:")]);
+        let mut command = pinned.command([
+            "-N",
+            "-C",
+            "attach-session",
+            "-E",
+            "-t",
+            &format!("{session}:"),
+        ]);
         command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

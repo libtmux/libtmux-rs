@@ -425,6 +425,30 @@ fn cleanup_cannot_kill_a_replacement_session_with_the_same_id() {
 }
 
 #[test]
+fn snapshots_preserve_non_ascii_session_names_in_the_c_locale() {
+    use libtmux_core::SessionSnapshot;
+
+    if std::env::var_os("LC_ALL").as_deref() != Some(OsStr::new("C")) {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_contracts::snapshots_preserve_non_ascii_session_names_in_the_c_locale",
+            ])
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "C-locale snapshot: {output:?}");
+        return;
+    }
+
+    let fixture = Fixture::new();
+    fixture.checked(["rename-session", "-t", "fixture", "café"]);
+    let snapshots = fixture.server.snapshots::<SessionSnapshot>().unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].session_name().as_bytes(), "café".as_bytes());
+}
+
+#[test]
 fn snapshots_keep_the_observed_session_name_and_count_a_linked_window_once() {
     use libtmux_core::{ClientSnapshot, PaneSnapshot, SessionSnapshot, WindowSnapshot};
 
