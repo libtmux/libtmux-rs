@@ -8,6 +8,20 @@ import sys
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "public_api.py"
 
 
+def test_capability_links_name_public_items() -> None:
+    root = SCRIPT.parents[2]
+    manifest = json.loads((root / "capabilities.json").read_text())
+    public = {
+        line.split()[1].removesuffix(":").replace("::", ".")
+        for inventory in (root / "crates").glob("*/docs/public-api.txt")
+        for line in inventory.read_text().splitlines()
+        if line.startswith(("enum ", "struct ", "function ", "variant "))
+    }
+    for entry in manifest["capabilities"] + manifest["workarounds"]:
+        links = entry["apis"] + ([entry["error"]] if "error" in entry else [])
+        assert set(links) <= public, (entry["id"], sorted(set(links) - public))
+
+
 def fixture() -> dict:
     return {
         "root": 0,
