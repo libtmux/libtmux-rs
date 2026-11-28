@@ -40,6 +40,7 @@ pub use libtmux_macros::Filterable;
 
 pub use command::{Command, CommandChain, CommandSummary};
 pub use error::{CommandKind, Effect, Error};
+#[doc(inline)]
 pub use formats::FormatCodecError;
 pub use new_session::NewSession;
 pub use operand::{Operand, OperandKind, argv_operand};
@@ -52,11 +53,14 @@ pub use receipt::{
     Capture, CreatedSession, ObjectKey, ObservePane, PaneKey, SessionKey, WindowKey,
 };
 pub use reply::Reply;
+#[doc(inline)]
 pub use snapshot::list::{Snapshot, SnapshotList};
+#[doc(inline)]
 pub use snapshot::{
     Availability, ClientSnapshot, PaneProgressState, PaneSnapshot, SessionSnapshot, WindowSnapshot,
 };
 #[cfg(feature = "query")]
+#[doc(inline)]
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{
     IdParseError, PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName,
