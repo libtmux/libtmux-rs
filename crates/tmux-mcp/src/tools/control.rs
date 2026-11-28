@@ -498,12 +498,13 @@ impl TmuxTools {
         &self,
         Parameters(SelectWindowArgs { window, direction }): Parameters<SelectWindowArgs>,
     ) -> Result<Json<Windows>, ToolError> {
-        let mut target = self.find_window(&window).await?;
+        let target = self.find_window(&window).await?;
+        let mut placement = target.link();
         let mut boundary = EffectBoundary::new("select_window");
 
         match direction.as_deref() {
             None => {
-                boundary.tmux(target.select().await)?;
+                boundary.tmux(placement.select().await)?;
                 boundary.mark();
             }
             Some(step) => {
@@ -527,7 +528,7 @@ impl TmuxTools {
                 // previously active window, so selecting the named one first
                 // would rewrite the very pointer being asked about.
                 if step != "last" {
-                    boundary.tmux(target.select().await)?;
+                    boundary.tmux(placement.select().await)?;
                     boundary.mark();
                 }
                 let result = boundary.tmux(

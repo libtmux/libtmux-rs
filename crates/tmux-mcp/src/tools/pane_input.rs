@@ -762,12 +762,13 @@ mod tests {
             )
             .await
             .expect("initial input state is safe");
-        let mut window = server
+        let window = server
             .window_by_id(pane.window_id())
             .await
             .expect("source window lookup")
             .expect("source window exists");
         window
+            .link()
             .move_to(&session, 7)
             .await
             .expect("source window moves to another index");

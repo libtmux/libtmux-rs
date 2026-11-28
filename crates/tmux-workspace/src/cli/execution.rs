@@ -875,7 +875,7 @@ async fn build(
     let mut bootstrap = if append {
         None
     } else {
-        session.active_window().await?
+        session.active_window().await?.map(|window| window.link())
     };
     if let Some(window) = &mut bootstrap {
         let spare = workspace
@@ -900,10 +900,10 @@ async fn build(
         }
     }
     if let Some(window) = bootstrap {
-        window.kill().await?;
+        window.into_window().kill().await?;
     }
-    if let Some(mut window) = selected {
-        window.select().await?;
+    if let Some(window) = selected {
+        window.link().select().await?;
     }
     effects.stage = "completed";
     Ok((session, false))

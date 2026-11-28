@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
-use crate::internal::listing::{self, Pushdown as _};
+use crate::internal::listing;
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
@@ -20,6 +20,7 @@ use crate::snapshot::{WindowProjection, stored_time};
 use crate::target::{SessionId, WindowId};
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
+mod link;
 mod navigation;
 mod settings;
 
@@ -151,25 +152,25 @@ impl PaneDirection {
 /// **Changing the window.** Renaming changes the name for every session that
 /// links the window. A name is sent as text, and only a [`TmuxArg::format`]
 /// value is expanded: see
-/// [the crate documentation][crate#a-name-reaches-tmux-as-text]. Selecting
-/// makes the window active in the session this handle came through;
-/// respawning restarts the window's command and replaces every pane with the
-/// one it runs in, and fails while a pane is still running unless
+/// [the crate documentation][crate#a-name-reaches-tmux-as-text]. Respawning
+/// restarts the window's command and replaces every pane with the one it runs
+/// in, and fails while a pane is still running unless
 /// [`Respawn::Replacing`] says to kill it. `resize` sets the window to an
 /// exact size in cells, and `resize_by` moves one of its edges. Killing
 /// consumes the handle and closes the window in every session that links it.
 ///
-/// [`rename`], [`select`], [`resize`], [`resize_by`], [`respawn`], [`kill`]
+/// [`rename`], [`resize`], [`resize_by`], [`respawn`], [`kill`]
 ///
 /// **Linking and moving.** Linking puts the same window in another session, so
 /// a rename or a split shows in both; unlinking removes only this session's
 /// link, and tmux refuses when only one session holds the window. Moving
-/// places the window at an index, possibly in another session, and fails when
-/// the destination is occupied or absent; swapping trades places with another
-/// window. Linking, moving and swapping return [`Error::ServerMismatch`] for a
-/// window or session on another server.
+/// places a [`WindowLink`] at an index, possibly in another session, and
+/// swapping trades two observed links. Selection, moving and swapping refuse
+/// a reindexed or withdrawn link. A successful move or swap updates the link
+/// with its fresh destination placement. Linking, moving and swapping return
+/// [`Error::ServerMismatch`] for a window or session on another server.
 ///
-/// [`link_to`], [`unlink`], [`move_to`], [`swap_with`]
+/// [`link_to`], [`select`], [`unlink`], [`move_to`], [`swap_with`]
 ///
 /// **Options and hooks.** Read and set options at this window's scope:
 /// listings report what this window has set, not what it inherits, and
@@ -232,13 +233,13 @@ impl PaneDirection {
 /// [`resize`]: Window::resize
 /// [`resize_by`]: Window::resize_by
 /// [`rename`]: Window::rename
-/// [`select`]: Window::select
+/// [`select`]: WindowLink::select
 /// [`respawn`]: Window::respawn
 /// [`kill`]: Window::kill
 /// [`link_to`]: Window::link_to
 /// [`unlink`]: WindowLink::unlink
-/// [`move_to`]: Window::move_to
-/// [`swap_with`]: Window::swap_with
+/// [`move_to`]: WindowLink::move_to
+/// [`swap_with`]: WindowLink::swap_with
 /// [`option_names`]: Window::option_names
 /// [`options`]: Window::options
 /// [`typed_option`]: Window::typed_option
@@ -514,10 +515,6 @@ impl Window {
         *self.projection.window().window_zoomed_flag()
     }
 
-    fn link_target(&self) -> String {
-        format!("{}:{}", self.session_id(), self.id())
-    }
-
     /// Replace this handle's snapshot with the window's current state.
     ///
     /// The handle keeps following the same link, so a window that moved to a
@@ -603,36 +600,6 @@ impl Window {
         self.refresh()
             .await
             .map_err(|error| error.after_effect("rename-window"))?;
-        Ok(self)
-    }
-
-    /// Make this window active in the session it was reached through.
-    ///
-    /// Targeted by id rather than by index. An index is a slot, not an
-    /// identity: anything that renumbers windows -- breaking a lone pane out
-    /// of one moves it to a free index -- leaves a handle's cached index
-    /// pointing at whatever occupies that slot now, which is a different live
-    /// window rather than nothing. tmux answers such a target without
-    /// complaint, so an index-scoped select would switch to the wrong window
-    /// and report success.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the command, and
-    /// [`Error::ObjectGone`] when the window is no longer on the server.
-    pub async fn select(&mut self) -> Result<&mut Self, Error> {
-        listing::mutate(
-            &self.core,
-            "select-window",
-            Command::new("select-window")
-                .arg("-t")
-                .arg(self.id().to_string()),
-        )
-        .await?;
-
-        self.refresh()
-            .await
-            .map_err(|error| error.after_effect("select-window"))?;
         Ok(self)
     }
 
@@ -1059,78 +1026,6 @@ impl Window {
         .await
     }
 
-    /// Swap this window's position with another.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ServerMismatch`] when `other` belongs to another
-    /// server, or an error when tmux refuses the swap.
-    pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
-        self.core
-            .require_same_instance(&other.core, "swap-window")?;
-        if let Err(error) = listing::mutate(
-            &self.core,
-            "swap-window",
-            Command::new("swap-window")
-                .arg("-s")
-                .arg(self.link_target())
-                .arg("-t")
-                // `session:id`, not `session:index`: the session half says
-                // which of the target's links to swap, and the id half cannot
-                // go stale under a renumber the way a cached index does.
-                .arg(format!("{}:{}", other.session_id(), other.id())),
-        )
-        .await
-        {
-            // Either half can be the one tmux could not resolve, and a window
-            // still linked elsewhere is not a window that is gone.
-            return Err(link_or_object_gone(
-                &self.core,
-                error,
-                &[
-                    (self.session_id(), self.id()),
-                    (other.session_id(), other.id()),
-                ],
-            )
-            .await);
-        }
-
-        self.refresh_in(other.session_id())
-            .await
-            .map_err(|error| error.after_effect("swap-window"))?;
-        Ok(self)
-    }
-
-    /// Move this window to an index, possibly in another session.
-    ///
-    /// The destination is a session and an index rather than a target string,
-    /// because those are the two things tmux needs and a string could express
-    /// neither or both.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ServerMismatch`] when `session` belongs to another
-    /// server, or an error when the destination is occupied or absent.
-    pub async fn move_to(&mut self, session: &Session, index: i32) -> Result<&mut Self, Error> {
-        self.core
-            .require_same_instance(&session.core, "move-window")?;
-        listing::mutate(
-            &self.core,
-            "move-window",
-            Command::new("move-window")
-                .arg("-s")
-                .arg(self.link_target())
-                .arg("-t")
-                .arg(format!("{}:{index}", session.id())),
-        )
-        .await?;
-
-        self.refresh_in(session.id())
-            .await
-            .map_err(|error| error.after_effect("move-window"))?;
-        Ok(self)
-    }
-
     /// Resize the window to an exact size in cells.
     ///
     /// # Errors
@@ -1241,7 +1136,7 @@ impl Window {
             "link-window",
             Command::new("link-window")
                 .arg("-s")
-                .arg(self.link_target())
+                .arg(self.id().to_string())
                 .arg("-t")
                 .arg(target),
         )
@@ -1319,10 +1214,24 @@ impl Hash for Window {
 /// # Examples
 ///
 /// ```
-/// # async fn remove_link(window: &libtmux_tokio::Window) -> Result<(), libtmux_tokio::Error> {
-/// let link = window.link();
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux_tokio::test::TestServer::new().await?;
+/// let source = guard.session("link-source").await?;
+/// let target = guard.session("link-target").await?;
+/// let window = source.active_window().await?.ok_or("missing window")?;
+/// window.link_to(&target, Some(9)).await?;
+/// let mut link = target.windows().await?.into_iter()
+///     .find(|candidate| candidate.id() == window.id())
+///     .ok_or("missing target link")?.link();
+/// link.select().await?;
 /// assert_eq!(link.snapshot().window(), window.key());
 /// link.unlink().await?;
+/// assert!(guard.server().window_by_id(window.id()).await?.is_some());
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
 /// # Ok(())
 /// # }
 /// ```
@@ -1335,79 +1244,6 @@ pub struct WindowLink {
 impl fmt::Debug for WindowLink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.snapshot.fmt(f)
-    }
-}
-
-impl WindowLink {
-    /// The observed window shared by this and any other links to it.
-    #[must_use]
-    pub const fn window(&self) -> &Window {
-        &self.window
-    }
-
-    /// Take the observed window, keeping its handle and cached fields.
-    #[must_use]
-    pub fn into_window(self) -> Window {
-        self.window
-    }
-
-    /// The immutable placement this handle addresses.
-    #[must_use]
-    pub const fn snapshot(&self) -> &crate::WindowLinkSnapshot {
-        &self.snapshot
-    }
-
-    /// Remove this placement if it still names the observed window.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a replaced daemon, a withdrawn or reindexed link, and removal
-    /// of a window's only link. Other links to the window remain available.
-    pub async fn unlink(self) -> Result<(), Error> {
-        let result = self
-            .window
-            .core
-            .execute_chain(self.snapshot.unlink_command())
-            .await?;
-        if result.success() {
-            return Ok(());
-        }
-        let target = self.snapshot.target();
-        let error = Error::from_refused_result("unlink-window", &result, Some(target.as_ref()));
-        let server = crate::Server::from_core(Arc::clone(&self.window.core));
-        match server.window_by_id(&self.snapshot.window().id()).await {
-            Ok(None) => Err(Error::ObjectGone {
-                kind: ObjectKind::Window,
-                id: self.snapshot.window().id().to_string(),
-            }),
-            Ok(Some(_)) => {
-                let filter = self.snapshot.window().id().predicate("window_id");
-                match listing::windows(
-                    &self.window.core,
-                    listing::Scope::Target(self.snapshot.session().as_ref()),
-                    Some(&filter),
-                )
-                .await
-                {
-                    Ok(rows)
-                        if rows.iter().all(|r| {
-                            r.link().identity().window_index() != self.snapshot.index()
-                        }) =>
-                    {
-                        Err(Error::LinkGone {
-                            kind: ObjectKind::Window,
-                            target,
-                        })
-                    }
-                    Err(cause) if cause.is_object_gone() => Err(Error::LinkGone {
-                        kind: ObjectKind::Window,
-                        target,
-                    }),
-                    _ => Err(error),
-                }
-            }
-            Err(_) => Err(error),
-        }
     }
 }
 
@@ -2231,59 +2067,6 @@ impl fmt::Display for Window {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}:{}", self.session_id(), self.id())
     }
-}
-
-/// Tell a missing link from a missing window, on the failure path only.
-///
-/// A link-scoped command targets `session:@id`: a window linked into three
-/// sessions has one id and three links, so the session half says which link to
-/// act on, while the window half stays an identity because a cached index
-/// stops being one the moment anything renumbers the session.
-///
-/// tmux echoes such a target back unresolved whether the window died or is
-/// merely linked somewhere else -- the two are the same string -- so the
-/// classifier cannot separate them and reports the stronger fact. This buys
-/// the weaker one for a lookup, and only when the answer changes what a caller
-/// should do with the handle.
-///
-/// Asked of the server rather than of a handle. A window refreshes within its
-/// own session, and a window whose link to that session is gone is exactly the
-/// case being told apart -- so refreshing would report it missing and answer
-/// the question with its own premise.
-/// `links` are the `session:id` targets the command sent, so the one tmux
-/// named is the one to ask about: a command carrying both a source and a
-/// destination fails on whichever it could not resolve, and probing the other
-/// would answer about a window that was never in question.
-async fn link_or_object_gone(
-    core: &Arc<Core>,
-    error: Error,
-    links: &[(&SessionId, &WindowId)],
-) -> Error {
-    let Error::ObjectGone {
-        kind: ObjectKind::Window,
-        ref id,
-    } = error
-    else {
-        return error;
-    };
-
-    let Some(&(session, window)) = links.iter().find(|(_, window)| window.to_string() == *id)
-    else {
-        return error;
-    };
-
-    let alive = crate::Server::from_core(Arc::clone(core))
-        .window_by_id(window)
-        .await
-        .is_ok_and(|found| found.is_some());
-
-    if alive {
-        return Error::LinkGone {
-            kind: ObjectKind::Window,
-            target: format!("{session}:{window}"),
-        };
-    }
-    error
 }
 
 #[cfg(test)]
