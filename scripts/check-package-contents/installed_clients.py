@@ -79,7 +79,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", guard.socket_path().display());
         println!("{}", receipt.pane().id());
         io::stdout().flush()?;
-        io::stdin().read_line(&mut String::new())?;
+        let window = guard.server().window_by_id(&receipt.window()).await?
+            .ok_or("missing fixture window")?;
+        if window.key() != &receipt.window_key() { return Err("fixture window generation changed".into()); }
+        let mut linked = None;
+        loop {
+            let mut line = String::new();
+            if io::stdin().read_line(&mut line)? == 0 { break; }
+            let fields: Vec<_> = line.split_whitespace().collect();
+            match fields.as_slice() {
+                ["link", session, index] if linked.is_none() => {
+                    let session = guard.server().session_by_id(&session.parse()?).await?
+                        .ok_or("missing workspace session")?;
+                    let index = index.parse()?;
+                    window.link_to(&session, Some(index)).await?;
+                    linked = Some(session.window_at(index).await?.ok_or("missing new link")?.link());
+                    println!("linked");
+                }
+                ["unlink"] => {
+                    linked.take().ok_or("fixture link is not present")?.unlink().await?;
+                    println!("unlinked");
+                }
+                _ => return Err("invalid fixture control command".into()),
+            }
+            io::stdout().flush()?;
+        }
         Ok::<_, Box<dyn std::error::Error>>(())
     });
     let cleaned = runtime.block_on(guard.shutdown());
@@ -162,6 +186,85 @@ def capture_bytes(capture: Mapping, pane: str) -> bytes:
     if capture.get("lines") != text.count("\n") + 1:
         raise ValueError("MCP capture line count differs from its text")
     return text.encode("utf-8") + b"\n"
+
+
+def check_window_link(row: Mapping) -> dict:
+    """Require the exact reusable placement carried beside one listed window."""
+    link = row.get("link")
+    if not isinstance(link, dict) or set(link) != {
+        "session_id",
+        "index",
+        "window_id",
+        "generation",
+    }:
+        raise ValueError("MCP window omitted its exact link reference")
+    generation = link["generation"]
+    if (
+        not isinstance(generation, dict)
+        or set(generation) != {"pid", "started"}
+        or type(generation["pid"]) is not int
+        or not 0 < generation["pid"] < 2**32
+        or type(generation["started"]) is not int
+        or not -(2**63) <= generation["started"] < 2**63
+        or not isinstance(link["session_id"], str)
+        or not re.fullmatch(r"\$[0-9]+", link["session_id"])
+        or not isinstance(link["window_id"], str)
+        or not re.fullmatch(r"@[0-9]+", link["window_id"])
+        or type(link["index"]) is not int
+        or not -(2**31) <= link["index"] < 2**31
+        or (link["session_id"], link["index"], link["window_id"])
+        != (row.get("session_id"), row.get("index"), row.get("id"))
+    ):
+        raise ValueError("MCP window link differs from its listed placement or generation")
+    return link
+
+
+def check_withdrawn_link(
+    saved: Mapping, before: Sequence[Mapping], after: Sequence[Mapping], refusal: Mapping
+) -> dict:
+    """Confirm stale-link refusal without changing any surviving placement or focus."""
+    try:
+        [content] = refusal["content"]
+        error = json.loads(content["text"])
+        detail = error["data"]
+    except (KeyError, ValueError, TypeError) as cause:
+        raise ValueError("MCP omitted its withdrawn-link refusal") from cause
+    if (
+        refusal.get("isError") is not True
+        or content.get("type") != "text"
+        or detail.get("kind") != "link_gone"
+        or detail.get("retryable") is not False
+        or detail.get("stale") is not True
+    ):
+        raise ValueError("MCP omitted its non-retryable stale-link refusal")
+
+    def state(rows: Sequence[Mapping]) -> list[tuple]:
+        result = []
+        for row in rows:
+            link = check_window_link(row)
+            if link["generation"] != saved["generation"] or type(row.get("active")) is not bool:
+                raise ValueError("MCP link proof changed generation or omitted focus")
+            if link == saved:
+                raise ValueError("withdrawn placement is still present")
+            result.append((link["session_id"], link["index"], link["window_id"], row["active"]))
+        if len(set(result)) != len(result):
+            raise ValueError("MCP link proof repeats a placement")
+        return sorted(result)
+
+    before_state, after_state = state(before), state(after)
+    survivors = [row for row in before if row["id"] == saved["window_id"]]
+    if not survivors:
+        raise ValueError("MCP link proof has no surviving intrinsic window")
+    if before_state != after_state:
+        raise ValueError("MCP stale-link call changed a surviving placement or focus")
+    return {
+        "saved": dict(saved),
+        "refusal": error,
+        "before": list(before),
+        "after": list(after),
+        "survivingLinks": survivors,
+        "focusPreserved": True,
+    }
 
 
 def check_workspace(summary: Mapping) -> None:
@@ -609,6 +712,18 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                 r"%[0-9]+", pane
             ):
                 raise ValueError("fixture did not report a private endpoint and exact pane")
+            fixture_control = []
+
+            def fixture_command(command: str, expected: bytes) -> None:
+                assert host.stdin is not None
+                encoded = command.encode() + b"\n"
+                host.stdin.write(encoded)
+                host.stdin.flush()
+                answer = stream.line()
+                fixture_control.append({"stdinHex": encoded.hex(), "stdoutHex": answer.hex()})
+                if answer != expected:
+                    raise ValueError("fixture did not confirm its exact link operation")
+
             document = output / "workspace.json"
             document.write_text(
                 json.dumps(
@@ -642,7 +757,7 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
             with (output / "mcp.stderr").open("wb") as mcp_errors:
                 mcp = subprocess.Popen(
                     [str(binaries / "tmux-mcp"), "-S", socket],
-                    env=env,
+                    env={**env, "LIBTMUX_TOOLS": "select_window"},
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=mcp_errors,
@@ -698,10 +813,25 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                     tools = request("tools/list", {})
                     names = {tool["name"] for tool in tools["tools"]}
                     if (
-                        not {"list_sessions", "capture_pane"}.issubset(names)
-                        or "kill_session" in names
+                        not {
+                            "list_sessions",
+                            "list_windows",
+                            "capture_pane",
+                            "select_window",
+                        }.issubset(names)
+                        or any(name.startswith("kill_") for name in names)
+                        or any(
+                            tool["name"] != "select_window"
+                            and tool.get("_meta", {})
+                            .get("com.git-pull.libtmux-mcp/capability", {})
+                            .get("toolset")
+                            != "inspect"
+                            for tool in tools["tools"]
+                        )
                     ):
-                        raise ValueError("installed MCP exposed the wrong inspect surface")
+                        raise ValueError(
+                            "installed MCP exposed more than inspect and select_window"
+                        )
                     uri = "tmux://capabilities"
                     resources = request("resources/list", {})["resources"]
                     if uri not in {item["uri"] for item in resources}:
@@ -728,6 +858,53 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                         raise ValueError(
                             "MCP did not inspect the workspace created by the installed CLI"
                         )
+
+                    def window_rows() -> list[dict]:
+                        answer = request("tools/call", {"name": "list_windows", "arguments": {}})
+                        if answer.get("isError"):
+                            raise ValueError("installed MCP could not list its exact placements")
+                        rows = answer["structuredContent"]["windows"]
+                        for row in rows:
+                            check_window_link(row)
+                        return rows
+
+                    workspace_id = summary["results"][0]["session_id"]
+                    keeper_id = next(
+                        row["id"]
+                        for row in sessions["structuredContent"]["sessions"]
+                        if row["name"] == "installed-keeper"
+                    )
+                    fixture_command(f"link {workspace_id} 7", b"linked\n")
+                    linked = window_rows()
+                    [intended] = [
+                        row
+                        for row in linked
+                        if row["session_id"] == workspace_id and row["index"] == 7
+                    ]
+                    saved = intended["link"]
+                    if not any(
+                        row["session_id"] == keeper_id and row["id"] == saved["window_id"]
+                        for row in linked
+                    ):
+                        raise ValueError(
+                            "installed MCP did not observe both links to the fixture window"
+                        )
+                    selected = request(
+                        "tools/call", {"name": "select_window", "arguments": {"link": saved}}
+                    )
+                    if (
+                        selected.get("isError")
+                        or selected["structuredContent"]["windows"][0]["link"] != saved
+                    ):
+                        raise ValueError("installed MCP did not select the exact live listed link")
+                    fixture_command("unlink", b"unlinked\n")
+                    before_refusal = window_rows()
+                    refused_link = request(
+                        "tools/call", {"name": "select_window", "arguments": {"link": saved}}
+                    )
+                    withdrawn_link = check_withdrawn_link(
+                        saved, before_refusal, window_rows(), refused_link
+                    )
                     captured = request(
                         "tools/call", {"name": "capture_pane", "arguments": {"pane": pane}}
                     )
@@ -750,6 +927,7 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                 "socket": socket,
                 "pane": pane,
                 "captureHex": screen.hex(),
+                "withdrawnLink": withdrawn_link,
                 "workspace": {
                     "stdinHex": "",
                     "stdoutHex": workspace.stdout.hex(),
@@ -765,9 +943,12 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                     "transcript": transcript,
                 },
             }
-            (output / "stdio.json").write_text(json.dumps(result, indent=2) + "\n")
         finally:
             close_child(host)
+        if stream.finish():
+            raise ValueError("fixture printed unexpected stdout after its control replies")
+        result["fixture"] = {"control": fixture_control, "stdoutHex": bytes(stream.raw).hex()}
+        (output / "stdio.json").write_text(json.dumps(result, indent=2) + "\n")
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
 
 

@@ -1,4 +1,4 @@
-Drives tmux: sessions, windows and panes on this machine, Server > Session > Window > Pane. Target by id -- %1 a pane, @1 a window, $1 a session -- since ids survive renames and layout changes. Every tool uses the one socket chosen at startup.
+Drives tmux: Server > Session > Window > Pane. Target by id -- %1 pane, @1 window, $1 session. For select_window and move_window, copy list_windows.link. Refresh it after link_gone. Every tool uses the socket chosen at startup.
 
 USE FOR: tmux panes, windows, sessions, splits, scrollback, sending keys, 'this terminal', 'the shell'. DO NOT USE FOR: browser tabs, editor splits (VS Code, Neovim), desktop windows (i3, sway) or login sessions -- none of those are tmux. If a bare 'window' or 'session' could mean either, ask once.
 

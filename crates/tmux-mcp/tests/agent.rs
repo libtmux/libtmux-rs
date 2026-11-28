@@ -3823,13 +3823,12 @@ async fn window_selection_uses_core_fixture_setup() {
     let second = session
         .new_window(NewWindowOptions::new("second"))
         .await
-        .expect("window starts")
-        .id()
-        .to_string();
+        .expect("window starts");
+    let link = support::listed_window_link(&tools, &second).await;
 
     let selected = json(
         tools
-            .select_window(args(serde_json::json!({"window": second})))
+            .select_window(args(serde_json::json!({"link": link})))
             .await
             .expect("window selects"),
     );
@@ -3838,10 +3837,75 @@ async fn window_selection_uses_core_fixture_setup() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|window| window["id"] == second && window["active"] == true)
+            .any(|window| window["id"] == second.id().as_ref() && window["active"] == true)
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_link_withdrawn_after_resolution_is_refused_by_each_command_queue() {
+    for (tool, direction, command) in [
+        ("select_window", None, "select-window"),
+        ("select_window", Some("next"), "select-window"),
+        ("select_window", Some("previous"), "select-window"),
+        ("select_window", Some("last"), "select-window"),
+        ("move_window", None, "move-window"),
+    ] {
+        let logged = LoggedTmux::new();
+        let guard = TestServer::builder()
+            .tmux_executable(&logged.executable)
+            .start()
+            .await
+            .expect("guarded link fixture starts");
+        let source = guard.session("source").await.expect("source session");
+        let target = guard.session("target").await.expect("target session");
+        let window = source.new_window("shared").await.expect("source window");
+        window.link_to(&target, Some(7)).await.expect("second link");
+        let linked = target.window_at(7).await.unwrap().unwrap();
+        let tools = bare_tools(guard.server());
+        let saved = support::listed_window_link(&tools, &linked).await;
+        let mut arguments = serde_json::json!({"link": saved});
+        if tool == "move_window" {
+            arguments["destination_session"] = source.id().as_ref().into();
+            arguments["destination_index"] = 9.into();
+        } else if let Some(direction) = direction {
+            arguments["direction"] = direction.into();
+        }
+        let mut barrier = logged.hold_next(command);
+        let pending = tokio::spawn(call_tool(tools.clone(), tool, arguments));
+        barrier.wait().await;
+        linked
+            .link()
+            .unlink()
+            .await
+            .expect("withdraw resolved placement");
+        let before = json(tools.list_windows().await.expect("state after withdrawal"));
+        barrier.release();
+        let result = pending.await.expect("placement call joins");
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "{tool} {direction:?}: {result:?}"
+        );
+        let wire = serde_json::to_value(result).unwrap();
+        let body: Value =
+            serde_json::from_str(wire["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            body["data"]["kind"], "link_gone",
+            "{tool} {direction:?}: {body}"
+        );
+        assert_eq!(body["data"]["retryable"], false);
+        assert_eq!(body["data"]["stale"], true);
+        assert_eq!(
+            json(tools.list_windows().await.expect("state after refusal")),
+            before
+        );
+        guard
+            .shutdown()
+            .await
+            .expect("guarded link fixture cleanup");
+    }
 }
 
 /// The server's instructions tell an agent to prefer ids, so every tool that
@@ -3862,9 +3926,8 @@ async fn every_session_input_accepts_the_listed_id() {
     let moving = donor
         .new_window(NewWindowOptions::new("moving"))
         .await
-        .expect("donor gains a second window")
-        .id()
-        .to_string();
+        .expect("donor gains a second window");
+    let moving_link = support::listed_window_link(&tools, &moving).await;
     let listed = call_tool(tools.clone(), "list_sessions", serde_json::json!({})).await;
     let id = listed.structured_content.expect("session listing")["sessions"]
         .as_array()
@@ -3899,7 +3962,7 @@ async fn every_session_input_accepts_the_listed_id() {
         ("create_window", serde_json::json!({"session": id})),
         (
             "move_window",
-            serde_json::json!({"window": moving, "destination_session": id, "destination_index": 7}),
+            serde_json::json!({"link": moving_link, "destination_session": id, "destination_index": 7}),
         ),
         (
             "rename_session",

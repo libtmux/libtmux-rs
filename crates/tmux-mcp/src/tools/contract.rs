@@ -57,8 +57,8 @@ pub(crate) struct WindowSizeArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MoveWindowArgs {
-    /// The `@`-prefixed window id to move.
-    pub(crate) window: String,
+    /// The exact `link` returned by `list_windows` for the placement to move.
+    pub(crate) link: crate::WindowLinkRef,
     /// The session to move the window into, by `$`-prefixed id or name.
     pub(crate) destination_session: String,
     /// The window index there. tmux refuses one already in use.
@@ -789,10 +789,11 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Move one window to a session and index.",
+        description = "Move the exact listed window link to a session and index. Copy its link \
+                       object from list_windows; a withdrawn or reindexed link is refused.",
         title = "Move Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxLookup],
+            "link" => [TmuxLookup],
             "destination_session" => [TmuxLookup],
             "destination_index" => [TmuxState]
         })
@@ -800,13 +801,13 @@ impl TmuxTools {
     pub async fn move_window(
         &self,
         Parameters(MoveWindowArgs {
-            window,
+            link,
             destination_session,
             destination_index,
         }): Parameters<MoveWindowArgs>,
     ) -> Result<Json<WindowView>, ToolError> {
+        let mut placement = self.find_window_link(&link).await?;
         let session = self.find_session(&destination_session).await?;
-        let mut placement = self.find_window(&window).await?.link();
         placement
             .move_to(&session, destination_index)
             .await

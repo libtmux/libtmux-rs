@@ -71,6 +71,53 @@ fn tools(toolsets: &str) -> Result<TmuxTools, Box<dyn Error>> {
 }
 
 #[test]
+fn placement_tools_require_the_complete_listed_link() -> TestResult {
+    let offered = tools("manage")?.offered();
+    let link = json!({
+        "session_id": "$1", "index": 2, "window_id": "@3",
+        "generation": {"pid": 123, "started": 456},
+    });
+    for (name, mut arguments) in [
+        ("select_window", json!({"link": link})),
+        (
+            "move_window",
+            json!({"link": link, "destination_session": "$4", "destination_index": 7}),
+        ),
+    ] {
+        let tool = offered
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("placement tool");
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        let validator = jsonschema::draft202012::new(&schema)?;
+        assert!(
+            validator.is_valid(&arguments),
+            "{name} rejected a complete link"
+        );
+        let old = arguments.as_object_mut().expect("arguments").remove("link");
+        arguments["window"] = json!("@3");
+        assert!(
+            !validator.is_valid(&arguments),
+            "{name} accepted an intrinsic id"
+        );
+        arguments
+            .as_object_mut()
+            .expect("arguments")
+            .remove("window");
+        arguments["link"] = old.expect("saved link");
+        arguments["link"]
+            .as_object_mut()
+            .expect("link")
+            .remove("generation");
+        assert!(
+            !validator.is_valid(&arguments),
+            "{name} accepted an unqualified link"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn mcp_layout_schema_describes_native_names_and_saved_layouts() -> TestResult {
     let tool = tools("manage")?
         .offered()
@@ -371,8 +418,8 @@ fn choice_vocabularies_reject_unknown_values() -> TestResult {
         ),
         (
             "select_window",
-            json!({"window": "@1", "direction": "last"}),
-            json!({"window": "@1", "direction": "first"}),
+            json!({"link": {"session_id": "$1", "index": 2, "window_id": "@3", "generation": {"pid": 123, "started": 456}}, "direction": "last"}),
+            json!({"link": {"session_id": "$1", "index": 2, "window_id": "@3", "generation": {"pid": 123, "started": 456}}, "direction": "first"}),
         ),
     ] {
         let tool = tools

@@ -220,6 +220,7 @@ impl TmuxTools {
             id: window.id().to_string(),
             session_id: window.session_id().to_string(),
             index: window.index(),
+            link: crate::WindowLinkRef::observed(window),
             name: lossy(window.name()),
             panes: window.pane_count(),
             active: window.is_active(),

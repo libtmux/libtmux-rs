@@ -22,6 +22,22 @@ pub(crate) fn json<T: serde::Serialize>(answer: Json<T>) -> Value {
     serde_json::to_value(answer.0).expect("a tool answer serialises")
 }
 
+/// Copy the exact placement from the public listing for a known fixture link.
+pub(crate) async fn listed_window_link(tools: &TmuxTools, window: &libtmux_tokio::Window) -> Value {
+    let listed = json(tools.list_windows().await.expect("window links list"));
+    listed["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .find(|row| {
+            row["id"] == window.id().as_ref()
+                && row["session_id"] == window.session_id().as_ref()
+                && row["index"] == window.index()
+        })
+        .expect("the exact fixture placement is listed")["link"]
+        .clone()
+}
+
 /// Read the id from an answer that made or destroyed one object.
 pub(crate) fn id<T: serde::Serialize>(answer: Json<T>) -> String {
     json(answer)["id"]

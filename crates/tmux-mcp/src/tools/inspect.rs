@@ -124,7 +124,8 @@ impl TmuxTools {
     /// List every window on the server, one row per session link.
     #[tool(
         description = "List every window on the server. A window linked into several sessions \
-                       appears once per link, so an id can repeat with a different session_id.",
+                       appears once per link. Copy the returned link object into select_window \
+                       or move_window to act on that exact generation, session and index.",
         title = "List Windows",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]

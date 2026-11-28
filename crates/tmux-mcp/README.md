@@ -412,6 +412,28 @@ Each result row keeps its own `content`, `structuredContent`, `_meta`, and
 
 ## The tools
 
+### [`select_window`][select_window]: choose a listed link
+
+[`list_windows`][list_windows] returns one row per session link. Copy the row's
+`link` object into [`select_window`][select_window] or
+[`move_window`][move_window], including the observed daemon generation:
+
+```json
+{
+  "link": {
+    "session_id": "$1",
+    "index": 2,
+    "window_id": "@3",
+    "generation": {"pid": 123, "started": 456}
+  }
+}
+```
+
+Those example values stand for the link returned by your listing. Selection
+and movement check its session, index, window and generation in the command
+queue. A `link_gone` error requires a fresh listing; another session may still
+hold the window. A successful move returns the new placement in `link`.
+
 Tools belong to toolsets, and an operator grants or withholds a toolset as a
 whole. The [generated tool reference](TOOLS.md) lists every tool's routes and
 capabilities, and the [tool pages][tools] publish it.
@@ -560,8 +582,11 @@ without reading prose:
 {"kind": "object_gone", "retryable": false, "stale": true}
 ```
 
-- **`stale`** means the target is gone, so look again before you retry.
+- **`stale`** means the saved observation changed, so refresh the listing.
 - **`retryable`** means the same call is safe to repeat unchanged.
+- **`link_gone`** means the saved window placement was withdrawn or reindexed.
+  **`object_gone`** means the window has no surviving link, and
+  **`server_replaced`** means the reference names another daemon generation.
 - **`partial_effect`** (a `kind`) means tmux accepted part of a multi-step call
   before a later step failed. Inspect the current state first.
 

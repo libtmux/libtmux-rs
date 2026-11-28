@@ -48,13 +48,19 @@ Both apps are installed from their archives with an explicit Cargo registry
 patch configuration. On a library-owned fixture, the installed
 `tmux-workspace` emits a JSON load result and the installed `tmux-mcp` serves
 JSON-RPC over stdio, inspects that workspace and captures its keeper pane.
+It links that pane's window into the workspace, saves the listed placement,
+withdraws it and requires `select_window` to refuse the saved reference. The
+surviving link and session focus must stay unchanged. The MCP process enables
+`select_window` alongside `inspect`; kill tools stay disabled.
 The app protocol transcript and native pane witness are recorded separately.
 
 The `native-clients` CI job checks out the recorder at the revision named by
 `RECORDER_REVISION`, then retains `proof.json`, the original archives and
 recorder output in the `native-clients-<source SHA>` artefact. The report
 includes source, archive, program, recorder and installed-binary hashes.
-Start from a clean checkout. The app installs keep the external versions and checksums from each archived `Cargo.lock`. The MCP check reads its advertised capabilities and calls a disabled tool to verify its retry evidence.
+Start from a clean checkout. The app installs keep the external versions and
+checksums from each archived `Cargo.lock`. The MCP check reads its advertised
+capabilities and calls a disabled tool to verify its retry evidence.
 
 With that exact docs revision checked out beside this repository:
 

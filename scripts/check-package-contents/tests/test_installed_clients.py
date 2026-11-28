@@ -131,6 +131,61 @@ def test_mcp_capture_preserves_the_documented_terminal_newline() -> None:
         clients.capture_bytes({**capture, "lines": 3}, "%7")
 
 
+def test_withdrawn_link_proof_requires_a_stale_refusal_and_unchanged_survivor_focus() -> None:
+    generation = {"pid": 123, "started": 456}
+
+    def row(session: str, index: int, window: str, *, active: bool) -> dict:
+        return {
+            "id": window,
+            "session_id": session,
+            "index": index,
+            "active": active,
+            "link": {
+                "session_id": session,
+                "index": index,
+                "window_id": window,
+                "generation": generation,
+            },
+        }
+
+    saved = row("$2", 7, "@3", active=False)["link"]
+    before = [row("$1", 0, "@3", active=True), row("$2", 0, "@4", active=True)]
+    error = {"data": {"kind": "link_gone", "retryable": False, "stale": True}}
+    refusal = {"isError": True, "content": [{"type": "text", "text": json.dumps(error)}]}
+    record = clients.check_withdrawn_link(saved, before, before, refusal)
+    assert record["focusPreserved"] is True
+    assert record["saved"] == saved
+    for broken in [
+        {**refusal, "isError": False},
+        {
+            **refusal,
+            "content": [
+                {"type": "text", "text": json.dumps({"data": {**error["data"], "retryable": True}})}
+            ],
+        },
+        {
+            **refusal,
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps({"data": {**error["data"], "kind": "object_gone"}}),
+                }
+            ],
+        },
+    ]:
+        with pytest.raises(ValueError, match="refusal"):
+            clients.check_withdrawn_link(saved, before, before, broken)
+    for changed in [
+        [{**before[0], "active": False}, before[1]],
+        before[1:],
+        [*before, row("$2", 7, "@3", active=False)],
+    ]:
+        with pytest.raises(ValueError):
+            clients.check_withdrawn_link(saved, before, changed, refusal)
+    with pytest.raises(ValueError, match="surviving"):
+        clients.check_withdrawn_link(saved, before[1:], before[1:], refusal)
+
+
 def test_cli_summary_requires_created_session_and_pane_identities() -> None:
     summary = {
         "schema_version": 1,

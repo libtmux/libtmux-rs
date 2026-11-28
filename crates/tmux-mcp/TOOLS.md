@@ -306,7 +306,7 @@ List every tmux session on the server. Inspect tmux metadata; accepts no client-
 
 ## `list_windows`
 
-List every window on the server. A window linked into several sessions appears once per link, so an id can repeat with a different session_id. Inspect tmux metadata; accepts no client-supplied executable input.
+List every window on the server. A window linked into several sessions appears once per link. Copy the returned link object into select_window or move_window to act on that exact generation, session and index. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -321,7 +321,7 @@ List every window on the server. A window linked into several sessions appears o
 
 ## `move_window`
 
-Move one window to a session and index. Change tmux state; no client-supplied executable input.
+Move the exact listed window link to a session and index. Copy its link object from list_windows; a withdrawn or reindexed link is refused. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -486,7 +486,7 @@ Select a pane, making it its window's active pane. Give a direction to move rela
 
 ## `select_window`
 
-Select a window, making it its session's active window. Give a direction to move relative to it instead: next and previous step through the session in index order, and last returns to the previously active window. Change tmux state; no client-supplied executable input.
+Select the exact window link returned by list_windows, making it its session's active window. Withdrawn or reindexed links are refused. Give a direction to move relative to it instead: next and previous step through the session in index order, and last returns to the previously active window. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`

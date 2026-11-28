@@ -54,6 +54,7 @@ mod test_support;
 mod text;
 mod tools;
 mod views;
+mod window_link;
 
 pub use caller::{CallerIdentity, Relation};
 pub use exec::{RunOutcome, RunView, WaitOutcome, WaitView};
@@ -67,6 +68,7 @@ pub use policy::{
 pub use tail::Cursor;
 pub use tools::error::ToolError;
 pub use views::*;
+pub use window_link::{WindowLinkGeneration, WindowLinkRef};
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -125,9 +127,9 @@ impl std::fmt::Debug for TmuxTools {
 /// sent on every connection and stays in context for the whole conversation,
 /// so the tests hold it to a byte budget and to a reviewed snapshot.
 pub(crate) const INSTRUCTIONS: &str = concat!(
-    "Drives tmux: sessions, windows and panes on this machine, Server > Session > \
-     Window > Pane. Target by id -- %1 a pane, @1 a window, $1 a session -- since ids \
-     survive renames and layout changes. Every tool uses the one socket chosen at startup.",
+    "Drives tmux: Server > Session > Window > Pane. Target by id -- %1 pane, @1 window, \
+     $1 session. For select_window and move_window, copy list_windows.link. Refresh it \
+     after link_gone. Every tool uses the socket chosen at startup.",
     "\n\nUSE FOR: tmux panes, windows, sessions, splits, scrollback, sending keys, 'this \
      terminal', 'the shell'. DO NOT USE FOR: browser tabs, editor splits (VS Code, \
      Neovim), desktop windows (i3, sway) or login sessions -- none of those are tmux. \

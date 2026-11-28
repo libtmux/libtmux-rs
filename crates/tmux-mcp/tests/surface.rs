@@ -62,6 +62,7 @@ struct Target {
     session: String,
     window: String,
     pane: String,
+    link: Value,
 }
 
 impl Target {
@@ -81,10 +82,19 @@ impl Target {
             .expect("fixture second window");
         let panes = session.panes().await.expect("fixture panes");
         let pane = panes.first().expect("a new session has a pane");
+        let window = session
+            .windows()
+            .await
+            .expect("fixture windows")
+            .into_iter()
+            .find(|window| window.id() == pane.window_id())
+            .expect("fixture pane's window");
+        let link = support::listed_window_link(&support::bare_tools(server), &window).await;
         Self {
             session: session_name,
             window: pane.window_id().to_string(),
             pane: pane.id().to_string(),
+            link,
         }
     }
 }
@@ -92,6 +102,9 @@ impl Target {
 /// Produce a value for one required property from its schema, preferring a live
 /// identifier whenever the property names a tmux object.
 fn value_for(property: &str, schema: &Value, target: &Target) -> Value {
+    if property == "link" {
+        return target.link.clone();
+    }
     // Match on the suffix so a second target (`swap_pane`'s `with_pane`) is
     // still recognised as needing a live identifier.
     if property.ends_with("pane") {

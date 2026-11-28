@@ -484,22 +484,22 @@ impl TmuxTools {
 
     /// Move focus to a window, or to the one beside it.
     #[tool(
-        description = "Select a window, making it its session's active window. Give a \
+        description = "Select the exact window link returned by list_windows, making it \
+                       its session's active window. Withdrawn or reindexed links are refused. Give a \
                        direction to move relative to it instead: next and previous step \
                        through the session in index order, and last returns to the \
                        previously active window.",
         title = "Select Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxLookup],
+            "link" => [TmuxLookup],
             "direction" => [TmuxState]
         })
     )]
     pub async fn select_window(
         &self,
-        Parameters(SelectWindowArgs { window, direction }): Parameters<SelectWindowArgs>,
+        Parameters(SelectWindowArgs { link, direction }): Parameters<SelectWindowArgs>,
     ) -> Result<Json<Windows>, ToolError> {
-        let target = self.find_window(&window).await?;
-        let mut placement = target.link();
+        let mut placement = self.find_window_link(&link).await?;
         let mut boundary = EffectBoundary::new("select_window");
 
         match direction.as_deref() {
@@ -533,15 +533,20 @@ impl TmuxTools {
                 }
                 let result = boundary.tmux(
                     self.server
-                        .cmd(
-                            Command::new("select-window")
-                                .arg(flag)
-                                .arg("-t")
-                                .arg(target.session_id().to_string()),
+                        .chain(
+                            CommandChain::new(placement.snapshot().guard_command()).then(
+                                Command::new("select-window")
+                                    .arg(flag)
+                                    .arg("-t")
+                                    .arg(placement.snapshot().session().to_string()),
+                            ),
                         )
                         .await,
                 )?;
                 if let Some(error) = result.refusal_for("select-window") {
+                    if let Err(stale) = self.find_window_link(&link).await {
+                        return Err(boundary.tool_error(stale));
+                    }
                     return Err(boundary.error(error));
                 }
                 boundary.mark();
@@ -550,7 +555,7 @@ impl TmuxTools {
 
         // Which window that landed on is tmux's answer, not ours.
         let session = boundary
-            .tmux(self.server.session_by_id(target.session_id()).await)?
+            .tmux(placement.window().session().await)?
             .ok_or_else(|| boundary.local("the window's session is gone"))?;
         let active = boundary
             .tmux(session.active_window().await)?

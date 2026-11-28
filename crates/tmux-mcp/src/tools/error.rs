@@ -77,13 +77,16 @@ impl IntoContents for ToolError {
 ///
 /// libtmux already draws the distinctions above, so they are carried through
 /// rather than flattened.
-pub(super) fn tmux_error(error: &libtmux_tokio::Error) -> ToolError {
+pub(crate) fn tmux_error(error: &libtmux_tokio::Error) -> ToolError {
     use libtmux_tokio::ErrorKind;
 
     let kind = error.kind();
     let retryable = error.is_transient();
-    let mut detail = serde_json::json!({
-        "kind": match kind {
+    let link_gone = matches!(error, libtmux_tokio::Error::LinkGone { .. });
+    let wire_kind = match error {
+        libtmux_tokio::Error::LinkGone { .. } => "link_gone",
+        libtmux_tokio::Error::ServerGenerationChanged { .. } => "server_replaced",
+        _ => match kind {
             ErrorKind::PartialEffect => "partial_effect",
             ErrorKind::ObjectGone => "object_gone",
             ErrorKind::Refused => "refused",
@@ -98,8 +101,11 @@ pub(super) fn tmux_error(error: &libtmux_tokio::Error) -> ToolError {
             // reported rather than mistaken for one of these.
             _ => "other",
         },
+    };
+    let mut detail = serde_json::json!({
+        "kind": wire_kind,
         "retryable": retryable,
-        "stale": error.is_object_gone(),
+        "stale": link_gone || error.is_object_gone(),
     });
     if let Some(effect) = error.operation_effect() {
         detail["effect"] = effect.as_str().into();
@@ -169,6 +175,20 @@ impl EffectBoundary {
         result.map_err(|error| self.error(error))
     }
 
+    pub(super) fn tool_error(&self, error: ToolError) -> ToolError {
+        if !self.effect_seen {
+            return error;
+        }
+        let mut wrapped = partial_effect(format!(
+            "{} changed state before a follow-up failed: {error}",
+            self.operation
+        ));
+        if let Some(detail) = &mut wrapped.0.data {
+            detail["cause"] = error.0.data.unwrap_or(serde_json::Value::Null);
+        }
+        wrapped
+    }
+
     pub(super) fn local(&self, message: impl Into<String>) -> ToolError {
         debug_assert!(self.effect_seen);
         partial_effect(message)
@@ -195,7 +215,7 @@ fn stale_detail() -> serde_json::Value {
 /// libtmux, so they mint the classification directly. An agent should not have
 /// to tell the two apart: a pane that vanished between the listing and the call
 /// reads the same either way.
-pub(super) fn object_gone(what: &str, id: &str) -> ToolError {
+pub(crate) fn object_gone(what: &str, id: &str) -> ToolError {
     ErrorData::invalid_params(format!("no {what} {id}"), Some(stale_detail())).into()
 }
 
@@ -212,7 +232,7 @@ pub(super) fn vanished(message: &str) -> ToolError {
 ///
 /// Nothing about the server needs to change for the next call to work, and
 /// nothing has gone stale: the caller has to send something else.
-pub(super) fn bad_input(message: impl Into<String>) -> ToolError {
+pub(crate) fn bad_input(message: impl Into<String>) -> ToolError {
     ErrorData::invalid_params(
         message.into(),
         Some(serde_json::json!({
