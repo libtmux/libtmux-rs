@@ -1,3 +1,6 @@
+use std::time::{Duration, Instant};
+
+use super::registry::{SnapshotRequest, TailSnapshot, next_live_snapshot};
 use super::*;
 
 #[test]
@@ -12,19 +15,6 @@ fn subscriber_gaps_reset_filter_state_and_invalidate_older_cursors() {
     assert_eq!(read.text(), "OK\n");
     assert!(!ring.snapshot_from(ring.end()).missed);
     assert!(!ring.closed);
-}
-use std::time::{Duration, Instant};
-
-use super::registry::{SnapshotRequest, TailSnapshot, next_live_snapshot};
-use crate::text::TextFilter;
-
-fn ring() -> Ring {
-    Ring {
-        bytes: Vec::new(),
-        start: 0,
-        checkpoint: TextFilter::new(),
-        closed: false,
-    }
 }
 
 fn tails_with_owner(owner: u128) -> Tails {
@@ -80,7 +70,7 @@ fn foreign_text_is_not_a_cursor() {
 
 #[test]
 fn a_ring_reads_from_an_offset() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"hello world");
 
     assert_eq!(ring.read_from(6), (&b"world"[..], false));
@@ -89,7 +79,7 @@ fn a_ring_reads_from_an_offset() {
 
 #[test]
 fn reading_at_the_end_yields_nothing() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"hello");
 
     assert_eq!(ring.read_from(5), (&b""[..], false));
@@ -97,7 +87,7 @@ fn reading_at_the_end_yields_nothing() {
 
 #[test]
 fn an_offset_past_the_end_admits_the_cursor_is_invalid() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"hello");
 
     assert_eq!(ring.read_from(99), (&b""[..], true));
@@ -105,7 +95,7 @@ fn an_offset_past_the_end_admits_the_cursor_is_invalid() {
 
 #[test]
 fn overflow_drops_the_oldest_and_says_so() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     let mut stream = b"\x1b[31mred".to_vec();
     stream.resize(RING_BYTES + 4, b'a');
     ring.push(&stream);
@@ -123,7 +113,7 @@ fn overflow_drops_the_oldest_and_says_so() {
 
 #[test]
 fn one_oversized_chunk_does_not_leave_an_oversized_allocation() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     let chunk = vec![b'x'; RING_BYTES * 8];
 
     ring.push(&chunk);
@@ -139,7 +129,7 @@ fn one_oversized_chunk_does_not_leave_an_oversized_allocation() {
 #[test]
 fn a_first_read_resumes_at_the_end_and_has_missed_nothing() {
     let tails = tails_with_owner(1);
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"written before anyone looked");
 
     assert_eq!(resume_for(&tails, &ring, None, 1), (ring.end(), false));
@@ -148,7 +138,7 @@ fn a_first_read_resumes_at_the_end_and_has_missed_nothing() {
 #[test]
 fn a_cursor_from_this_tail_resumes_where_it_says() {
     let tails = tails_with_owner(1);
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"hello");
     let cursor = cursor_for(&tails, "%1", 1, 2);
 
@@ -158,7 +148,7 @@ fn a_cursor_from_this_tail_resumes_where_it_says() {
 #[test]
 fn a_cursor_from_an_evicted_tail_admits_the_gap() {
     let tails = tails_with_owner(1);
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"written after the tail came back");
     let cursor = cursor_for(&tails, "%1", 1, 0);
 
@@ -173,7 +163,7 @@ fn a_cursor_from_an_evicted_tail_admits_the_gap() {
 fn a_cursor_from_a_fresh_owner_admits_the_gap() {
     let first = tails_with_owner(1);
     let second = tails_with_owner(2);
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"written after the server restarted");
     let cursor = cursor_for(&first, "%1", first.next_epoch(), 0);
     let epoch = second.next_epoch();
@@ -195,7 +185,7 @@ fn tail_epochs_increase_within_one_owner() {
 
 #[test]
 fn a_cursor_still_inside_the_ring_is_not_a_miss() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(&vec![b'a'; RING_BYTES]);
     ring.push(b"tail");
 
@@ -206,7 +196,7 @@ fn a_cursor_still_inside_the_ring_is_not_a_miss() {
 
 #[test]
 fn a_cursor_inside_a_control_sequence_resumes_its_state() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"before\x1b[31");
     let cursor = ring.end();
     ring.push(b"mred");
@@ -219,7 +209,7 @@ fn a_cursor_inside_a_control_sequence_resumes_its_state() {
 
 #[test]
 fn reusing_an_old_cursor_preserves_a_pending_return() {
-    let mut ring = ring();
+    let mut ring = Ring::new();
     ring.push(b"working\r");
     let cursor = ring.end();
     ring.push(b"done");
@@ -242,7 +232,7 @@ async fn publishing_a_tail_evicts_the_exact_lru_and_aborts_its_reader() {
         (
             Tail {
                 epoch,
-                ring: Arc::new(Mutex::new(ring())),
+                ring: Arc::new(Mutex::new(Ring::new())),
                 snapshots,
                 reader,
                 last_read,
@@ -286,7 +276,7 @@ async fn baseline_admission_is_bounded_and_fail_fast() {
     let (snapshots, _requests) = tokio::sync::mpsc::channel(1);
     let tail = RetainedTail {
         epoch: 1,
-        ring: Arc::new(Mutex::new(ring())),
+        ring: Arc::new(Mutex::new(Ring::new())),
         snapshots,
     };
     let first = {
@@ -413,7 +403,7 @@ async fn opening_is_fail_fast_and_a_failed_replacement_preserves_tails() {
             format!("%fake-{index}"),
             Tail {
                 epoch: u64::try_from(index).expect("eight indices fit"),
-                ring: Arc::new(Mutex::new(ring())),
+                ring: Arc::new(Mutex::new(Ring::new())),
                 snapshots,
                 reader: tokio::spawn(std::future::pending()),
                 last_read: Instant::now(),
