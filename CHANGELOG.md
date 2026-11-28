@@ -26,6 +26,10 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- The docs preview resolves showcase API links to the defining Rust crate
+  while retaining the released `0.1.2` identifiers. Its curated links omit
+  the retired `Window::select` owner. CI and the installed-reader proof use
+  the same docs revision for those links and the native recorder.
 - The root, facade and blocking crate READMEs start with a native blocking
   program that creates, observes and kills its own session on an explicit
   private socket. `installed_clients.py` now compiles and runs the displayed
