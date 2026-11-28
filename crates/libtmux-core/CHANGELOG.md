@@ -6,6 +6,10 @@ Notable changes to `libtmux-core`.
 
 ### Added
 
+- `Error::JoinedCaptureHook` reports an ordinary joined pane capture whose
+  stdout can include a configured hook's reply. The caller receives no
+  partial pane bytes. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - `Error::creation_receipt` borrows verified creation identities through
   cleanup, admission and observation wrappers.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
