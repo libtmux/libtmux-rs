@@ -39,6 +39,11 @@ from the staged facade README, with its default features in the blocking
 lane. The report retains the program's digest and checks its stdout and
 owned-endpoint cleanup.
 
+The ordinary Tokio consumer comes from its archived README and lists the
+sessions at a supplied endpoint. Its fixture is built in a separate Cargo
+project. Resolved feature trees must keep `test-support` out of every public
+reader, including the mixed consumer.
+
 Seven Tokio programs use the guide's consumer manifest and the sources in the
 Tokio archive. The proof records each program's digest, stdout bytes and
 cleanup result so the docs job can compare them with the examples copied
@@ -46,7 +51,12 @@ from its HTML and Markdown.
 
 The mixed program is copied from the facade archive. The pinned bare
 recorder from `libtmux/docs` verifies its raw stdout against native captures
-of the same pane and generation, and checks endpoint cleanup.
+of the same pane and generation. The caller creates and retires the fixture;
+the reader removes only its own verified session. The proof checks the
+borrowed session identities before and after the reader. Separate runs
+exercise a name conflict, a failing creation hook, a failed read, and
+independent read and cleanup failures. The report retains those outcomes,
+the resolved reader features and the source invocation's digest.
 
 Both apps are installed from their archives with an explicit Cargo registry
 patch configuration. On a library-owned fixture, the installed
