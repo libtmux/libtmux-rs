@@ -6,6 +6,8 @@ Notable changes to `libtmux-tokio`.
 
 ### Added
 
+- `Error::PlanInterrupted` retains the results of earlier plan operations when a later operation fails. A caller can recover a created session, window or pane from those results. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - Run tmux operations with Tokio. `Server::new_session` returns the shared creation receipt. Use `Server::inspect_session` to read the session and `Server::capture` to capture the pane identified by either driver. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 ### Changed
