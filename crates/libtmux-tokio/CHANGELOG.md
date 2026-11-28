@@ -45,6 +45,16 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- `Pane::capture_with`, `Pane::capture_lines` and polling waits isolate pane
+  bytes from hooks, preserving capture options and pending NULs and
+  backslashes. Joined reads with an unqualified client and daemon pair
+  refuse configured capture hooks; use a matching client.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
+- One-shot control reads keep stdin open until the client exits, preventing
+  premature replies on tmux 3.3a.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - A control attach waiting for a blocking worker now checks its deadline
   and caller before spawning. Shutting down the server also stops queued
   attaches from launching a client.
