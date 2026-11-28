@@ -1227,6 +1227,19 @@ async fn wait_failure_is_typed_and_cleanup_reaps_the_child() {
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn a_version_probe_timeout_preserves_its_child_cleanup_outcome() {
+    check_probe_timeout("*' run-shell '*) ;;", 2).await;
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_binary_probe_timeout_preserves_its_child_cleanup_outcome() {
+    let cases =
+        r#"*' run-shell '*) echo 'no server running on /socket' >&2; exit 1 ;; *' -V '*) ;;"#;
+    check_probe_timeout(cases, 3).await;
+}
+
+#[cfg(feature = "test-support")]
+async fn check_probe_timeout(cases: &str, expected_probe: u64) {
     use crate::internal::core::{BuildContext, CoreConfiguration, SocketSelection};
     use crate::internal::support::versions::{VersionCache, dispatch};
 
@@ -1235,7 +1248,7 @@ async fn a_version_probe_timeout_preserves_its_child_cleanup_outcome() {
     let executable = directory.path().join("parked-tmux");
     let probe_pid = directory.path().join("probe.pid");
     let script = format!(
-        "#!/bin/sh\ncase \" $* \" in *' run-shell '*) ;; *) exit 2 ;; esac\nprintf '%s\\n' \"$$\" > '{}'\nexec sleep 30\n",
+        "#!/bin/sh\ncase \" $* \" in {cases} *) exit 2 ;; esac\nprintf '%s\\n' \"$$\" > '{}'\nexec sleep 30\n",
         probe_pid.display()
     );
     crate::test::install_executable(&executable, &script).unwrap();
@@ -1292,7 +1305,9 @@ async fn a_version_probe_timeout_preserves_its_child_cleanup_outcome() {
             ..
         }
     ));
-    assert!(matches!(*cleanup, Error::WaitChild { request_id: 2, .. }));
+    assert!(
+        matches!(*cleanup, Error::WaitChild { request_id, .. } if request_id == expected_probe)
+    );
 }
 
 #[cfg(feature = "test-support")]
