@@ -39,12 +39,10 @@ impl Terminal {
 
     fn wait_foreground(&self) -> Result<()> {
         while termios::tcgetpgrp(&self.fd).map_err(io::Error::from)? != self.owner {
-            rustix::process::kill_process_group(self.owner, rustix::process::Signal::TTIN)
+            // A second stop signal can reach the job after the shell resumes
+            // it in the foreground. SIGSTOP also works when SIGTTIN is ignored.
+            rustix::process::kill_process_group(self.owner, rustix::process::Signal::STOP)
                 .map_err(io::Error::from)?;
-            if termios::tcgetpgrp(&self.fd).map_err(io::Error::from)? != self.owner {
-                rustix::process::kill_process_group(self.owner, rustix::process::Signal::STOP)
-                    .map_err(io::Error::from)?;
-            }
         }
         Ok(())
     }
