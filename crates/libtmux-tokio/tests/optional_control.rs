@@ -78,13 +78,13 @@ fn delayed_server(guard: &TestServer, directory: &Path, delay: &str, timeout: Du
 import os,sys,pathlib,time
 root=pathlib.Path({root})
 binary={binary}
-if any(a.startswith('libtmux-version-') for a in sys.argv):
+if any(a.startswith('libtmux-control-challenge:') for a in sys.argv):
  counter=root/'probes'
  count=int(counter.read_text())+1 if counter.exists() else 1
  counter.write_text(str(count))
  (root/('probe-'+str(count)+'.pid')).write_text(str(os.getpid()))
  time.sleep({delay})
-if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv): (root/'control-started').touch()
+if '-C' in sys.argv and 'attach' in sys.argv: (root/'control-started').touch()
 os.execv(binary,[binary,*sys.argv[1:]])
 ",
         root = serde_json::to_string(directory).expect("root"),
@@ -147,10 +147,10 @@ async fn control_acquisition_rank(reported: &str, refused: bool) {
         r"#!/usr/bin/python3
 import os,sys,pathlib,subprocess
 binary={binary}
-if any(a.startswith('libtmux-version-') for a in sys.argv):
+if any(a.startswith('libtmux-control-challenge:') for a in sys.argv):
  result=subprocess.run([binary,*sys.argv[1:]],capture_output=True)
  text=result.stderr.decode()
- marker=[a for a in sys.argv if a.startswith('libtmux-version-')][0].split('#')[0]
+ marker=[a for a in sys.argv if a.startswith('libtmux-control-challenge:')][0].split('#')[0]
  lead='unknown command: '+marker
  if text.startswith(lead):
   fields=text.strip()[len(lead):].split(',')
@@ -159,7 +159,7 @@ if any(a.startswith('libtmux-version-') for a in sys.argv):
  sys.stdout.buffer.write(result.stdout)
  sys.stderr.buffer.write(text.encode())
  sys.exit(result.returncode)
-if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv): pathlib.Path({marker}).touch()
+if '-C' in sys.argv and 'attach' in sys.argv: pathlib.Path({marker}).touch()
 os.execv(binary,[binary,*sys.argv[1:]])
 ",
         binary = serde_json::to_string(&executable(&guard)).expect("binary"),
@@ -174,11 +174,16 @@ os.execv(binary,[binary,*sys.argv[1:]])
         .expect("client");
     let result = ControlMode::attach(&server, session.id()).await;
     let identified = marker.exists();
-    let rank_refused = matches!(
-        &result,
-        Err(Error::UnsupportedCapability { found, .. }) if found.raw() == reported
-    );
-    let any_refusal = matches!(&result, Err(Error::UnsupportedCapability { .. }));
+    let any_refusal = result.as_ref().err().is_some_and(|error| {
+        error.kind() == libtmux_tokio::ErrorKind::UnsupportedVersion
+            && error.minimum_version() == Some(&libtmux_tokio::since::CONTROL_ACQUISITION)
+    });
+    let rank_refused = any_refusal
+        && result
+            .as_ref()
+            .err()
+            .and_then(Error::found_version)
+            .is_some_and(|found| found.raw() == reported);
     let failure = result.as_ref().err().map(ToString::to_string);
     // A daemon that really is the reported build passes the version fence and
     // attaches, so close that connection before sampling what it leaves behind.
@@ -238,7 +243,7 @@ async fn real_tmux_compat_optional_control_refuses_3_3a_before_identification() 
     let marker = directory.path().join("control-started");
     let wrapper = directory.path().join("tmux");
     let script = format!(
-        "#!/usr/bin/python3\nimport os,sys,pathlib\nif '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv): pathlib.Path({}).touch()\nos.execv({},[{},*sys.argv[1:]])\n",
+        "#!/usr/bin/python3\nimport os,sys,pathlib\nif '-C' in sys.argv and 'attach' in sys.argv: pathlib.Path({}).touch()\nos.execv({},[{},*sys.argv[1:]])\n",
         serde_json::to_string(&marker).expect("path"),
         serde_json::to_string(&modern()).expect("binary"),
         serde_json::to_string(&modern()).expect("binary")
@@ -250,9 +255,15 @@ async fn real_tmux_compat_optional_control_refuses_3_3a_before_identification() 
         .build()
         .expect("client");
     let result = ControlMode::attach(&server, session.id()).await;
-    assert!(
-        matches!(result, Err(Error::UnsupportedCapability { .. })),
-        "old control must refuse"
+    let error = result.expect_err("old control must refuse");
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::UnsupportedVersion);
+    assert_eq!(
+        error.minimum_version(),
+        Some(&libtmux_tokio::since::CONTROL_ACQUISITION)
+    );
+    assert_eq!(
+        error.found_version().expect("checked daemon version").raw(),
+        "3.3a"
     );
     assert!(!marker.exists(), "no -C process was invoked");
     assert_eq!(server.sessions().await.expect("ordinary listing").len(), 1);
@@ -294,7 +305,7 @@ async fn real_tmux_compat_optional_control_owns_a_private_socket_carrier() {
     }
     assert!(
         control
-            .send(Command::new("list-sessions"))
+            .send(Command::new("list-sessions").arg("-F").arg("#{session_id}"))
             .await
             .expect("control read")
             .succeeded()
@@ -343,7 +354,7 @@ async fn real_tmux_compat_optional_scanner_a_long_native_socket_can_acquire_cont
         r"#!/usr/bin/python3
 import os,sys,pathlib,subprocess,json
 binary={binary}
-if any(a.startswith('libtmux-version-') for a in sys.argv):
+if any(a.startswith('libtmux-control-challenge:') for a in sys.argv):
  result=subprocess.run([binary,*sys.argv[1:]],capture_output=True)
  with pathlib.Path({probes}).open('a') as stream:
   stream.write(json.dumps({{'argv':sys.argv[1:],'status':result.returncode,'stderr':result.stderr.decode(errors='replace')}})+'\n')
@@ -535,12 +546,12 @@ fn delayed_opening_server(guard: &TestServer, directory: &Path, timeout: Duratio
 import os,sys,pathlib,time
 root=pathlib.Path({root})
 binary={binary}
-if any(a.startswith('libtmux-version-') for a in sys.argv):
+if any(a.startswith('libtmux-control-challenge:') for a in sys.argv):
  counter=root/'probes'
  count=int(counter.read_text())+1 if counter.exists() else 1
  counter.write_text(str(count))
  time.sleep(.15)
-if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv):
+if '-C' in sys.argv and 'attach' in sys.argv:
  (root/'control.pid').write_text(str(os.getpid()))
  if (root/'mode').read_text() == 'slow': time.sleep(.55)
 os.execv(binary,[binary,*sys.argv[1:]])
@@ -593,10 +604,28 @@ async fn real_tmux_compat_optional_control_opening_shares_the_acquisition_deadli
     let reusable = ControlMode::attach(&server, session.id())
         .await
         .expect("capacity is returned");
+    assert!(
+        guard
+            .server()
+            .cmd(
+                Command::new("set-hook")
+                    .arg("-g")
+                    .arg("after-display-message")
+                    .arg("run-shell 'sleep .5'"),
+            )
+            .await
+            .expect("delayed display hook configured")
+            .success()
+    );
+    let steady_started = std::time::Instant::now();
     let steady = reusable
-        .send(Command::new("run-shell").arg("sleep .5"))
+        .send(Command::new("display-message").arg("-p").arg("steady"))
         .await
         .expect("steady-state command keeps its own full timeout");
+    assert!(
+        steady_started.elapsed() >= Duration::from_millis(450),
+        "the hook consumed more than the remaining acquisition budget"
+    );
     reusable.shutdown().await.expect("reused client closes");
     let windows = session.windows().await.expect("ordinary topology");
     server.shutdown().await.expect("client closes");
