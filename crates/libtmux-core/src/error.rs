@@ -264,6 +264,11 @@ pub enum Error {
     /// An observation returned incomplete or ambiguous control framing.
     #[error("tmux returned an ambiguous or incomplete read frame")]
     FramedRead,
+    /// An ordinary joined capture shares stdout with a configured after-capture hook.
+    #[error(
+        "joined pane capture cannot isolate the configured after-capture-pane hook with this tmux client"
+    )]
+    JoinedCaptureHook,
     /// The requested pane was absent from an exact listing.
     #[error("tmux did not list pane {0}")]
     PaneNotFound(PaneId),
@@ -358,6 +363,7 @@ impl Error {
             | Self::LateObservation { .. }
             | Self::ObservationFailed { .. }
             | Self::FramedRead
+            | Self::JoinedCaptureHook
             | Self::InvalidKey
             | Self::PaneNotFound(_)
             | Self::StalePane

@@ -15,6 +15,7 @@ pub mod formats;
 mod framed;
 mod new_session;
 mod operand;
+mod ordinary_capture;
 mod ordinary_creation;
 mod ordinary_read;
 mod placement;
@@ -44,6 +45,8 @@ pub use error::{CommandKind, Effect, Error};
 pub use formats::FormatCodecError;
 pub use new_session::NewSession;
 pub use operand::{Operand, OperandKind, argv_operand};
+#[doc(hidden)]
+pub use ordinary_capture::OrdinaryCapturePrefix;
 pub use ordinary_creation::CreationNonce;
 pub use ordinary_read::{OrdinaryGenerationProbe, OrdinaryPaneObservation, OrdinaryPaneProbe};
 #[doc(hidden)]

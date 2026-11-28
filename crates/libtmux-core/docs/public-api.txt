@@ -1632,6 +1632,7 @@ variant libtmux_core::Error::CreationInterrupted
 variant libtmux_core::Error::Deadline
 variant libtmux_core::Error::FramedRead
 variant libtmux_core::Error::InvalidKey
+variant libtmux_core::Error::JoinedCaptureHook
 variant libtmux_core::Error::LateCreation
 variant libtmux_core::Error::LateObservation
 variant libtmux_core::Error::LostReply

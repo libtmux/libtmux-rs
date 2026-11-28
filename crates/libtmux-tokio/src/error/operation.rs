@@ -116,7 +116,9 @@ pub(super) fn core_kind(error: &libtmux_core::Error) -> ErrorKind {
             libtmux_core::VersionError::InvalidVersionOutput { .. } => ErrorKind::Decode,
             _ => ErrorKind::UnsupportedVersion,
         },
-        CoreError::Busy { .. } | CoreError::Command { .. } => ErrorKind::Refused,
+        CoreError::Busy { .. } | CoreError::Command { .. } | CoreError::JoinedCaptureHook => {
+            ErrorKind::Refused
+        }
         CoreError::BeforeSpawn
         | CoreError::Deadline
         | CoreError::LateObservation { .. }
