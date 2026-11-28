@@ -407,6 +407,30 @@ mod tests {
     }
 
     #[cfg(all(feature = "control-mode", feature = "test-support"))]
+    fn fixture_control_executor(
+        server: &crate::Server,
+        sender: crate::control::ControlSender,
+    ) -> std::sync::Arc<dyn crate::internal::executor::Executor> {
+        use std::sync::Arc;
+
+        use crate::internal::control_executor::ControlModeExecutor;
+
+        let native = server
+            .bound_to(sender.generation())
+            .expect("bound native source");
+        let ordinary = Arc::new(crate::internal::subprocess::SubprocessExecutor::new(
+            server.tmux_executable(),
+            server.default_timeout(),
+        ));
+        Arc::new(ControlModeExecutor::new(
+            sender,
+            crate::OutputLimits::default(),
+            ordinary,
+            native,
+        ))
+    }
+
+    #[cfg(all(feature = "control-mode", feature = "test-support"))]
     #[tokio::test]
     async fn a_control_gate_uses_its_challenged_version_after_native_cache_changes() {
         use std::sync::Arc;
@@ -414,10 +438,8 @@ mod tests {
         use super::{VersionCache, dispatch, format_version};
         use crate::command::{CommandRequest, RequestId};
         use crate::control::ControlMode;
-        use crate::internal::control_executor::ControlModeExecutor;
-        use crate::internal::executor::Executor;
         use crate::test::TestServer;
-        use crate::{Command, OutputLimits, ReleaseSuffix, ReleaseVersion, TmuxVersion};
+        use crate::{Command, ReleaseSuffix, ReleaseVersion, TmuxVersion};
 
         let fixture = TestServer::new().await.expect("private daemon starts");
         let server = fixture.server();
@@ -436,8 +458,7 @@ mod tests {
             .expect("qualified client")
             .split();
         let checked = sender.version().clone();
-        let executor: Arc<dyn Executor> =
-            Arc::new(ControlModeExecutor::new(sender, OutputLimits::default()));
+        let executor = fixture_control_executor(server, sender);
         let configuration = fixture_configuration(server, server.default_timeout());
         let versions = Arc::new(VersionCache::default());
         let stale =

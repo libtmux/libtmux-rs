@@ -15,20 +15,29 @@ use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, Shutdown
 pub(crate) struct ControlModeExecutor {
     sender: Arc<ControlSender>,
     output_limits: crate::OutputLimits,
+    ordinary: Arc<dyn Executor>,
+    native_server: crate::Server,
 }
 
 impl ControlModeExecutor {
-    pub(crate) fn new(sender: ControlSender, output_limits: crate::OutputLimits) -> Self {
+    pub(crate) fn new(
+        sender: ControlSender,
+        output_limits: crate::OutputLimits,
+        ordinary: Arc<dyn Executor>,
+        native_server: crate::Server,
+    ) -> Self {
         Self {
             sender: Arc::new(sender),
             output_limits,
+            ordinary,
+            native_server,
         }
     }
 }
 
 impl Executor for ControlModeExecutor {
     fn native_server(&self) -> Option<&crate::Server> {
-        Some(self.sender.native_server())
+        Some(&self.native_server)
     }
     fn control_line_limit(&self) -> Option<usize> {
         Some(self.sender.line_limit())
@@ -41,6 +50,7 @@ impl Executor for ControlModeExecutor {
             return DispatchFuture::new(async move { Err(error) });
         }
         let sender = Arc::clone(&self.sender);
+        let ordinary = Arc::clone(&self.ordinary);
         let limits = self.output_limits;
         let span = DispatchSpan::new(&request, "control");
         let request_id = request.request_id();
@@ -50,6 +60,9 @@ impl Executor for ControlModeExecutor {
         let line = request.into_control_line();
 
         span.run(async move {
+            if ordinary.is_closed() {
+                return Err(crate::Error::executor_shutdown(request_id.get(), summary));
+            }
             let Some(line) = line else {
                 return Err(crate::Error::control_mode_unrepresentable());
             };
@@ -94,10 +107,12 @@ impl Executor for ControlModeExecutor {
     }
 
     fn shutdown(&self) -> ShutdownFuture {
-        // The connection belongs to whoever attached it. Closing it from a
-        // routed handle would end a caller's event stream as a side effect of
-        // dropping a server object.
-        ShutdownFuture::new(async { Ok(()) })
+        // The borrowed connection keeps its event owner's lifetime.
+        self.ordinary.shutdown()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.ordinary.is_closed()
     }
 
     fn renders_control_line(&self) -> bool {

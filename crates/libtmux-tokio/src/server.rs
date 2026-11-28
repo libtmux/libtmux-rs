@@ -969,7 +969,10 @@ impl Server {
     /// Shutdown is idempotent and affects every clone of this server.
     /// It never stops the tmux daemon itself. Await it before dropping the
     /// Tokio runtime when deterministic reaping matters. With control mode
-    /// enabled, this also closes persistent control connections.
+    /// enabled, it also closes persistent control connections owned by this
+    /// server. Calling shutdown on a control-routed server drains the ordinary
+    /// subprocess pool it shares with its source and sibling routes. The
+    /// original sender and event receiver retain their borrowed connection.
     ///
     /// # Errors
     ///
@@ -2201,6 +2204,11 @@ impl Server {
     /// The daemon generation checked at attach applies on both routes. Standalone
     /// executable diagnostics such as `-V` run without contacting that daemon.
     ///
+    /// The source and its routed servers share ordinary request IDs, admission
+    /// and shutdown. Calling [`Server::shutdown`] on the routed server drains
+    /// that pool and ends dispatch through the view. The caller can still use
+    /// the independently held sender until the connection owner closes it.
+    ///
     /// The sender's [reply timeout] bounds control replies. The server's
     /// [default timeout] bounds ordinary dispatch. A slow event consumer can
     /// receive a gap while the connection continues processing command replies.
@@ -2267,7 +2275,7 @@ impl Server {
         let capabilities = self.core.capabilities().await?.clone();
 
         Ok(Self {
-            core: Arc::new(self.core.over_control_mode(sender.clone(), capabilities)),
+            core: Arc::new(self.core.over_control_mode(sender.clone(), capabilities)?),
         })
     }
 }

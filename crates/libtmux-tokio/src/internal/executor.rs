@@ -222,6 +222,11 @@ pub(crate) trait Executor: Send + Sync + 'static {
 
     fn shutdown(&self) -> ShutdownFuture;
 
+    #[cfg(feature = "control-mode")]
+    fn is_closed(&self) -> bool {
+        false
+    }
+
     /// Whether this executor dispatches a text line rather than an argv.
     ///
     /// Asked before a request is built, so the line is rendered only for the

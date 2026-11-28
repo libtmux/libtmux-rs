@@ -396,6 +396,11 @@ impl SubprocessExecutor {
 }
 
 impl Executor for SubprocessExecutor {
+    #[cfg(feature = "control-mode")]
+    fn is_closed(&self) -> bool {
+        !lock_lifecycle(&self.shared).accepting
+    }
+
     fn execute(&self, request: CommandRequest) -> DispatchFuture {
         DispatchSpan::new(&request, "subprocess").run(self.clone().run(request))
     }

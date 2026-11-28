@@ -398,7 +398,7 @@ struct DriverState {
     executor: Arc<dyn Executor>,
     ordinary_executor: Arc<dyn Executor>,
     capabilities: OnceCell<EngineCapabilities>,
-    next_request_id: AtomicU64,
+    next_request_id: Arc<AtomicU64>,
     server_version: Arc<crate::internal::support::versions::VersionCache>,
     /// The `wait-for` channels this handle has a client on, or a signal for.
     ///
@@ -443,7 +443,7 @@ impl Core {
             ordinary_executor: Arc::clone(&executor),
             executor,
             capabilities: OnceCell::new(),
-            next_request_id: AtomicU64::new(1),
+            next_request_id: Arc::new(AtomicU64::new(1)),
             server_version: Arc::default(),
             channel_waits: Arc::new(ChannelWaits::new(parked_limit)),
             #[cfg(feature = "control-mode")]
@@ -518,11 +518,17 @@ impl Core {
         &self,
         sender: crate::control::ControlSender,
         capabilities: EngineCapabilities,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let generation = sender.generation();
+        let native_server = match self.native_server() {
+            Some(native) => native.bound_to(generation)?,
+            None => crate::Server::from_core(Arc::new(self.bound_to(generation)?)),
+        };
         let executor = crate::internal::control_executor::ControlModeExecutor::new(
             sender,
             self.driver.configuration.output_limits,
+            Arc::clone(&self.driver.ordinary_executor),
+            native_server,
         );
 
         let driver = DriverState {
@@ -530,7 +536,7 @@ impl Core {
             configuration: self.driver.configuration.clone(),
             executor: Arc::new(executor),
             capabilities: OnceCell::new_with(Some(capabilities)),
-            next_request_id: AtomicU64::new(1),
+            next_request_id: Arc::clone(&self.driver.next_request_id),
             server_version: Arc::clone(&self.driver.server_version),
             channel_waits: Arc::clone(&self.driver.channel_waits),
             persistent_clients: PersistentClients::new(
@@ -540,12 +546,12 @@ impl Core {
             // the same process whichever handle dispatches through it.
             control_client_pids: Arc::clone(&self.driver.control_client_pids),
         };
-        Self {
+        Ok(Self {
             driver: Arc::new(driver),
             generation: Some(generation),
             #[cfg(test)]
             check_versions: true,
-        }
+        })
     }
 
     #[cfg(feature = "control-mode")]
@@ -887,6 +893,9 @@ impl Core {
             .arg("-t")
             .arg(session.to_string());
         let summary = command.summary();
+        if self.driver.ordinary_executor.is_closed() {
+            return Err(Error::executor_shutdown(request_id.get(), summary));
+        }
         let reservation = self
             .driver
             .persistent_clients
@@ -971,6 +980,9 @@ impl Core {
             self.driver.server_version.remember(version.clone());
             global_argv.push(OsString::from("-N"));
             global_argv.push(OsString::from("-C"));
+            if self.driver.ordinary_executor.is_closed() {
+                return Err(Error::executor_shutdown(request_id.get(), summary.clone()));
+            }
             // Opening an observer must not copy this process's environment
             // into the session it is inspecting.
             let request = CommandRequest::with_global_argv(request_id, &global_argv, command)
