@@ -18,7 +18,39 @@ assert!(operands.iter().any(|arg| arg.as_os_str() == "issue##185"));
 )]
 #![forbid(unsafe_code)]
 
-pub use libtmux_core::*;
+#[cfg(feature = "derive")]
+pub use libtmux_core::Filterable;
+#[cfg(feature = "plan")]
+pub use libtmux_core::plan;
+pub use libtmux_core::{
+    Availability, Capture, ClientSnapshot, Command, CommandChain, CommandKind, CommandSummary,
+    CreatedSession, Effect, Error, FormatCodecError, IdParseError, NewSession, ObjectKey,
+    ObservePane, Operand, OperandKind, OptionScope, PaneId, PaneKey, PaneProgressState,
+    PaneSnapshot, PaneTarget, ReleaseSuffix, ReleaseVersion, Reply, ServerGeneration,
+    ServerIdentity, SessionId, SessionKey, SessionName, SessionNameError, SessionSnapshot,
+    SessionTarget, Snapshot, SnapshotList, SplitDirection, TmuxArg, TmuxText, TmuxVersion,
+    VersionError, WindowId, WindowKey, WindowLinkSnapshot, WindowSnapshot, WindowTarget,
+    escape_format, since,
+};
+#[cfg(feature = "query")]
+pub use libtmux_core::{ClientFields, PaneFields, SessionFields, WindowFields, query};
+
+/// Command encoding and reply decoding for transport implementers.
+///
+/// Encode a literal operand before passing it to the tmux executable:
+///
+/// ```
+/// use libtmux::protocol::argv_operand;
+/// use std::ffi::OsStr;
+///
+/// assert_eq!(argv_operand(OsStr::new("done;")), OsStr::new(r"done\;"));
+/// ```
+pub mod protocol {
+    pub use libtmux_core::{
+        CreationNonce, OrdinaryGenerationProbe, OrdinaryPaneObservation, OrdinaryPaneProbe,
+        OrdinaryVersionProbe, argv_operand, control,
+    };
+}
 
 #[cfg(feature = "blocking")]
 #[doc(inline)]
@@ -39,6 +71,10 @@ pub use libtmux_tokio as tokio;
 ///
 /// ```compile_fail,E0432
 /// use libtmux::NewSessionOptions;
+/// ```
+///
+/// ```compile_fail,E0432
+/// use libtmux::CreationNonce;
 /// ```
 mod retired_imports {}
 

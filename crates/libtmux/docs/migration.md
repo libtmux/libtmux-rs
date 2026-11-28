@@ -27,6 +27,14 @@ The typed receipt covers session creation. A failing `after-new-window` or
 call or plan step can report failure without returning its ID. Inspect the
 bound daemon before issuing another creation request.
 
+## Shared types and transport APIs
+
+Application code can import shared types such as `NewSession`, `PaneKey` and
+`PaneSnapshot` directly from `libtmux`. Transport authors can import
+`CreationNonce`, the ordinary version and identity probes, and the control
+protocol from `libtmux::protocol`. The runtime-independent
+`libtmux-core` crate also exposes those facilities directly.
+
 ## Request limits
 
 | Ordinary subprocess default | Native blocking | Tokio |
