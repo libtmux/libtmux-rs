@@ -176,11 +176,12 @@ mod tests {
         ).unwrap();
 
         tokio::time::sleep_until(deadline).await;
+        let client_pids = Arc::new(Mutex::default());
         let result = PersistentChild::spawn(
             launch,
             request,
             reservation,
-            Arc::new(Mutex::default()),
+            Arc::clone(&client_pids),
             carrier.into_directory(),
             executable,
             identity,
@@ -193,8 +194,13 @@ mod tests {
                 ..
             })
         );
+        let registered = client_pids.lock().unwrap().clone();
         drop(result);
         clients.shutdown().await;
+        assert!(
+            registered.is_empty(),
+            "expired attach launched OS client {registered:?}"
+        );
         assert!(
             refused,
             "an expired reservation must refuse OS child startup"
