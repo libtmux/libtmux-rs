@@ -22,5 +22,24 @@ left behind. Use that receipt for inspection or cleanup. An unknown effect
 means the session may already exist, so replaying creation can duplicate
 the action. [Architecture decision](adr/0001-native-blocking-and-tokio.md)
 
+## Request limits
+
+| Ordinary subprocess default | Native blocking | Tokio |
+| --- | ---: | ---: |
+| Request timeout | 5 seconds | 30 seconds |
+| Maximum stdout | 1 MiB | 32 MiB |
+| Maximum stderr | 1 MiB | 1 MiB |
+
+A capture larger than one MiB can therefore succeed with the default Tokio
+client and exceed the blocking client's limit. For a blocking call, pass
+`RequestOptions` to `capture_with` and set `budget.deadline` and
+`budget.bytes_per_stream`. The byte limit applies separately to each pipe.
+For Tokio, configure `ServerBuilder::default_timeout` and
+`ServerBuilder::output_limits` when constructing the client.
+Both drivers give a failed child a separate one-second cleanup allowance.
+Call `blocking::Server::close_ordinary` to confirm ordinary subprocess
+cleanup across its clones. Persistent blocking control clients provide their
+own `shutdown` method.
+
 Earlier migrations accompany the source version they describe.
 [0.1.2 migration notes](https://github.com/libtmux/libtmux-rs/blob/1027012583abdc8b07ea0fd071e0c6cacb051278/crates/libtmux/docs/migration.md)
