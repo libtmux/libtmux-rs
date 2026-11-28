@@ -30,7 +30,7 @@ pub use libtmux_core::{
     ServerIdentity, SessionId, SessionKey, SessionName, SessionNameError, SessionSnapshot,
     SessionTarget, Snapshot, SnapshotList, SplitDirection, TmuxArg, TmuxText, TmuxVersion,
     VersionError, WindowId, WindowKey, WindowLinkSnapshot, WindowSnapshot, WindowTarget,
-    escape_format, since,
+    escape_format, options, since,
 };
 #[cfg(feature = "query")]
 pub use libtmux_core::{ClientFields, PaneFields, SessionFields, WindowFields, query};

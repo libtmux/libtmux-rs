@@ -30,7 +30,9 @@ bound daemon before issuing another creation request.
 ## Shared types and transport APIs
 
 Application code can import shared types such as `NewSession`, `PaneKey` and
-`PaneSnapshot` directly from `libtmux`. Transport authors can import
+`PaneSnapshot` directly from `libtmux`. To validate a known option without opening a server,
+look it up with `libtmux::options::option_schema` and call `check` on the
+returned schema. Transport authors can import
 `CreationNonce`, the ordinary version and identity probes, and the control
 protocol from `libtmux::protocol`. The runtime-independent
 `libtmux-core` crate also exposes those facilities directly.

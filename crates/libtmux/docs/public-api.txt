@@ -14,6 +14,7 @@ enum libtmux::WindowTarget = libtmux_core::target::WindowTarget
 function libtmux::escape_format = libtmux_core::target::escape_format
 function libtmux::protocol::argv_operand = libtmux_core::operand::argv_operand
 module libtmux::blocking = libtmux_blocking
+module libtmux::options = libtmux_core::options
 module libtmux::plan = libtmux_core::plan
 module libtmux::protocol
 module libtmux::protocol::control = libtmux_core::control
