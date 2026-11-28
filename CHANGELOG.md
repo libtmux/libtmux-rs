@@ -26,6 +26,10 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- `installed_clients.py` records a stdio witness for a saved MCP window link
+  after withdrawal. The archive-installed tools must refuse it while the
+  surviving link and session focus stay unchanged; only `select_window` is
+  enabled alongside `inspect`.
 - `cargo deny check` now accepts RUSTSEC-2026-0543, which marks `chrono`
   unmaintained, so `just check` passes again. Only `tmux-mcp` reaches `chrono`,
   through `rmcp`, and no `rmcp` release drops it yet. `deny.toml` names that one
