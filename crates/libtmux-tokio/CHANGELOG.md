@@ -12,6 +12,12 @@ Notable changes to `libtmux-tokio`.
 
 ### Changed
 
+- **Breaking.** The Tokio client no longer exposes `Error::ServerReplaced`.
+  An ordinary queue-guard failure returns the native result without claiming
+  that nothing ran. `Error::is_transient` no longer treats diagnostics about
+  an absent server as proof that a mutation can be repeated safely.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - `Server::kill` reports a refused shutdown when the daemon generation has changed. An endpoint already stopped at the initial check still succeeds. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 - **Breaking.** Select, move and swap an observed placement through `WindowLink::{select, move_to, swap_with}`. Obtain it with `window.link()`. Reindexed links are refused, and successful moves and swaps refresh the returned placement. `Window::kill` still kills the intrinsic window, and `Window::link_to` can link it after its discovery session has gone. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
