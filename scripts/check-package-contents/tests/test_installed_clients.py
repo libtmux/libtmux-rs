@@ -57,6 +57,29 @@ def test_native_dependency_identity_requires_the_selected_archive(tmp_path: Path
         clients.check_dependency_tree([row, "tokio v1.52.0"], staged, expect_tokio=False)
 
 
+def test_cargo_tree_output_survives_colored_ci_logs(tmp_path: Path, monkeypatch) -> None:
+    def crate(name, dependencies):
+        root = tmp_path / name
+        (root / "src").mkdir(parents=True)
+        (root / "src/lib.rs").touch()
+        (root / "Cargo.toml").write_text(
+            f'[package]\nname = "{name}"\nversion = "0.1.2"\nedition = "2021"\n'
+            + "[dependencies]\n"
+            + "".join(f'{dep} = {{ path = "../{dep}" }}\n' for dep in dependencies)
+        )
+        return root
+
+    crate("leaf", [])
+    core = crate("libtmux-core", ["leaf"])
+    crate("libtmux", ["libtmux-core"])
+    reader = crate("reader", ["libtmux", "libtmux-core"])
+    monkeypatch.setenv("CARGO_TERM_COLOR", "always")
+    rows = clients.Cargo(tmp_path).tree(reader, "--offline")
+    assert clients.check_dependency_tree(rows, {"libtmux-core": core}, expect_tokio=False) == [
+        f"libtmux-core v0.1.2 ({core})"
+    ]
+
+
 def test_exact_sibling_pins_cover_target_specific_edges() -> None:
     manifest = {
         "package": {"name": "reader"},

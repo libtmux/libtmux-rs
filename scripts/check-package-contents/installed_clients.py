@@ -211,7 +211,19 @@ class Cargo:
 
     def tree(self, cwd: Path, *arguments: str) -> list[str]:
         return (
-            self.run(cwd, "tree", *arguments, "-e", "normal", "--prefix", "none", "--format", "{p}")
+            self.run(
+                cwd,
+                "tree",
+                "--color",
+                "never",
+                *arguments,
+                "-e",
+                "normal",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}",
+            )
             .decode()
             .splitlines()
         )
