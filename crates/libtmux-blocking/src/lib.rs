@@ -14,7 +14,7 @@ use std::time::Instant;
 use libtmux_core::supervision::Budget;
 use libtmux_core::{
     CommandKind, CreatedSession, CreationNonce, Error, NewSession, OrdinaryPaneObservation,
-    OrdinaryPaneProbe, PaneId, PaneKey, Reply,
+    OrdinaryPaneProbe, OrdinaryVersionProbe, PaneId, PaneKey, Reply, TmuxVersion, VersionError,
 };
 
 mod supervisor;
@@ -164,9 +164,24 @@ impl Server {
         request: NewSession,
         options: RequestOptions,
     ) -> Result<CreatedSession, Error> {
+        let (version, allow_start) = self.creation_version(&options).map_err(before_submission)?;
+        self.create_qualified(request, options, &version, allow_start)
+    }
+
+    fn create_qualified(
+        &self,
+        request: NewSession,
+        options: RequestOptions,
+        version: &TmuxVersion,
+        allow_start: bool,
+    ) -> Result<CreatedSession, Error> {
         let nonce = fresh_nonce(&options)?;
-        let (output, late) =
-            self.output(request.ordinary_arguments(nonce), options, Some(nonce))?;
+        let mut arguments = request.ordinary_arguments(nonce);
+        if !allow_start {
+            arguments.insert(0, "-N".into());
+        }
+        let arguments = version.fence_ordinary_argv(arguments);
+        let (output, late) = self.output(arguments, options, Some(nonce))?;
         Reply::new(
             output.status.code(),
             output.stdout,
@@ -174,6 +189,31 @@ impl Server {
             late,
         )
         .ordinary_creation(request, &self.socket, nonce)
+    }
+
+    fn creation_version(&self, options: &RequestOptions) -> Result<(TmuxVersion, bool), Error> {
+        let probe = OrdinaryVersionProbe::new(fresh_nonce(options)?);
+        let (output, late) = self
+            .children
+            .dispatch_probe(self.command(probe.arguments()), options.clone())?;
+        if let Some(version) =
+            probe.decode(output.status.code(), &output.stdout, &output.stderr, late)?
+        {
+            return Ok((version, false));
+        }
+        let (output, late) = self.output(["-V"], options.clone(), None)?;
+        if late {
+            return Err(Error::Deadline);
+        }
+        if !output.status.success() {
+            return Err(VersionError::InvalidVersionOutput {
+                output_len: output.stdout.len(),
+            }
+            .into());
+        }
+        let version = TmuxVersion::parse_executable_output(&self.executable, &output.stdout)?;
+        version.ensure_supported()?;
+        Ok((version, true))
     }
 
     /// Observe an exact pane ID and bind it to its daemon generation.
@@ -254,6 +294,15 @@ impl Server {
         options: RequestOptions,
         creation_nonce: Option<CreationNonce>,
     ) -> Result<(Output, bool), Error> {
+        let command = self.command(args);
+        self.children.dispatch_ordinary(
+            command,
+            options,
+            creation_nonce.map(|nonce| (self.socket.clone(), nonce)),
+        )
+    }
+
+    fn command(&self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> std::process::Command {
         let mut command = std::process::Command::new(&self.executable);
         command
             .arg("-S")
@@ -263,11 +312,17 @@ impl Server {
             .env_remove("TMUX_PANE")
             .env_remove("LIBTMUX_SOCKET")
             .env_remove("LIBTMUX_SOCKET_PATH");
-        self.children.dispatch_ordinary(
-            command,
-            options,
-            creation_nonce.map(|nonce| (self.socket.clone(), nonce)),
-        )
+        command
+    }
+}
+
+fn before_submission(source: Error) -> Error {
+    if source.effect() == libtmux_core::Effect::NotSubmitted {
+        source
+    } else {
+        Error::AdmissionFailed {
+            source: Box::new(source),
+        }
     }
 }
 

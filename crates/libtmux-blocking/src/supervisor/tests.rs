@@ -32,6 +32,19 @@ fn drains_both_streams_before_waiting_for_exit() {
 }
 
 #[test]
+fn version_probes_discard_stdout_before_spawning_the_client() {
+    let fixture = fixture::Fixture::new();
+    let command = fixture.child("import os\nos.write(1,b'x'*131072)\nos.write(2,b'version')");
+    let (output, late) = Children::default()
+        .dispatch_probe(command, options(Duration::from_secs(3), 16))
+        .expect("stdout cannot retain or overflow a version probe");
+    assert!(output.status.success());
+    assert!(!late);
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"version");
+}
+
+#[test]
 fn rejects_a_request_before_spawning_after_its_deadline() {
     let fixture = fixture::Fixture::new();
     let command = fixture.child("import pathlib, sys; pathlib.Path(sys.argv[1], 'ran').touch()");

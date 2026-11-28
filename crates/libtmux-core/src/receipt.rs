@@ -170,6 +170,10 @@ pub struct ObservePane;
 impl ObservePane {
     /// Encode a non-starting one-shot client with an exact pane filter.
     #[must_use]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the encoded observation consumes its submitted pane ID"
+    )]
     pub fn arguments(pane: PaneId) -> [OsString; 8] {
         [
             "-N",
@@ -186,7 +190,7 @@ impl ObservePane {
 
     pub(crate) fn decode_frames(
         socket: &Path,
-        pane: PaneId,
+        pane: &PaneId,
         status: Option<i32>,
         stdout: &[u8],
     ) -> Result<PaneKey, Error> {
@@ -194,7 +198,7 @@ impl ObservePane {
             return Err(Error::FramedRead);
         }
         let (listing, _) = framed::first(stdout)?.take(None)?;
-        Self::decode_rows(socket, &pane, listing.success_bytes()?)
+        Self::decode_rows(socket, pane, listing.success_bytes()?)
     }
 
     pub(crate) fn decode_rows(

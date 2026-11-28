@@ -22,6 +22,12 @@ use crate::RequestOptions;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
+#[derive(Clone, Copy)]
+enum OutputMode {
+    Collect,
+    DiscardStdout,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Children {
     available: Arc<AtomicUsize>,
@@ -87,6 +93,7 @@ impl Children {
             command,
             options,
             creation_socket.map(CreationReceipt::Control),
+            OutputMode::Collect,
         )
     }
 
@@ -100,7 +107,16 @@ impl Children {
             command,
             options,
             creation.map(|(socket, nonce)| CreationReceipt::Ordinary { socket, nonce }),
+            OutputMode::Collect,
         )
+    }
+
+    pub(super) fn dispatch_probe(
+        &self,
+        command: Command,
+        options: RequestOptions,
+    ) -> Result<(Output, bool), Error> {
+        self.dispatch_inner(command, options, None, OutputMode::DiscardStdout)
     }
 
     fn dispatch_inner(
@@ -108,6 +124,7 @@ impl Children {
         command: Command,
         options: RequestOptions,
         creation: Option<CreationReceipt>,
+        output_mode: OutputMode,
     ) -> Result<(Output, bool), Error> {
         check_before_spawn(&options)?;
         let mut available = self.available.load(Ordering::Acquire);
@@ -135,8 +152,9 @@ impl Children {
             .spawn(move || {
                 supervise(
                     command,
-                    options,
+                    &options,
                     creation.as_ref(),
+                    output_mode,
                     permit,
                     &tx,
                     #[cfg(test)]
@@ -180,13 +198,14 @@ pub(super) fn check_before_spawn(options: &RequestOptions) -> Result<(), Error> 
 
 fn supervise(
     mut command: Command,
-    options: RequestOptions,
+    options: &RequestOptions,
     creation: Option<&CreationReceipt>,
+    output_mode: OutputMode,
     permit: Permit,
     tx: &mpsc::Sender<Event<(Output, bool)>>,
     #[cfg(test)] reject_pipe_setup: Option<&Path>,
 ) {
-    if let Err(error) = check_before_spawn(&options) {
+    if let Err(error) = check_before_spawn(options) {
         drop(permit);
         let _ = tx.send(Event::Done(Err(error)));
         return;
@@ -194,7 +213,10 @@ fn supervise(
     let spawned = command
         .process_group(0)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(match output_mode {
+            OutputMode::Collect => Stdio::piped(),
+            OutputMode::DiscardStdout => Stdio::null(),
+        })
         .stderr(Stdio::piped())
         .spawn();
     let child = match spawned {
@@ -210,9 +232,10 @@ fn supervise(
     let mut stderr = Vec::new();
     let drained = drain(
         &mut child,
-        &options,
+        options,
         &mut stdout,
         &mut stderr,
+        output_mode,
         #[cfg(test)]
         reject_pipe_setup,
     );
@@ -416,6 +439,7 @@ fn drain(
     options: &RequestOptions,
     stdout: &mut Vec<u8>,
     stderr: &mut Vec<u8>,
+    output_mode: OutputMode,
     #[cfg(test)] reject_pipe_setup: Option<&Path>,
 ) -> Result<(), Error> {
     #[cfg(test)]
@@ -433,7 +457,15 @@ fn drain(
         .ok_or_else(|| Error::LostReply(io::Error::other("subprocess is unavailable")))?;
     let missing_pipe =
         || Error::LostReply(io::Error::other("subprocess output pipe is unavailable"));
-    let mut out = Pipe::new(process.stdout.take().ok_or_else(missing_pipe)?, "stdout")?;
+    let mut out = match output_mode {
+        OutputMode::Collect => {
+            Pipe::new(process.stdout.take().ok_or_else(missing_pipe)?, "stdout")?
+        }
+        OutputMode::DiscardStdout => Pipe {
+            reader: None,
+            stream: "stdout",
+        },
+    };
     let mut err = Pipe::new(process.stderr.take().ok_or_else(missing_pipe)?, "stderr")?;
     loop {
         if options.cancellation.is_cancelled() {

@@ -9,6 +9,7 @@ pub struct Budget {
 }
 
 impl Budget {
+    #[must_use]
     pub fn starting_at(now: Instant) -> Self {
         Self {
             deadline: now + Duration::from_secs(5),
@@ -24,6 +25,7 @@ pub const MAX_IN_FLIGHT: usize = 16;
 pub const CLEANUP_ALLOWANCE: Duration = Duration::from_secs(1);
 
 impl Budget {
+    #[must_use]
     pub fn is_late(&self, observed: Instant) -> bool {
         observed >= self.deadline
     }
@@ -55,7 +57,7 @@ pub struct CleanupErrors {
 impl CleanupErrors {
     pub fn after(kill: std::io::Result<()>, reap: std::io::Result<()>) -> Result<(), Self> {
         match (kill, reap) {
-            (Ok(()), Ok(_)) => Ok(()),
+            (Ok(()), Ok(())) => Ok(()),
             (kill, reap) => Err(Self {
                 kill: kill.err(),
                 reap: reap.err(),

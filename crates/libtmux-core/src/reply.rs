@@ -62,7 +62,7 @@ impl Reply {
         }
         match NewSession::new("").decode(socket, action.bytes) {
             Ok(receipt) => Error::CreationInterrupted {
-                receipt,
+                receipt: Box::new(receipt),
                 source: Box::new(cause),
             },
             Err(_) => cause,
@@ -85,6 +85,10 @@ impl Reply {
     /// Returns an unconfirmed effect for ambiguous action framing, and a known
     /// creation with any readable receipt when hooks, exit or deadline fail
     /// after an acknowledged action. Malformed receipt payloads are discarded.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the reply consumes the submitted operation together with its result"
+    )]
     pub fn creation(self, request: NewSession, socket: &Path) -> Result<CreatedSession, Error> {
         let unconfirmed = || Error::UnconfirmedCreation {
             status: self.status,
@@ -107,14 +111,14 @@ impl Reply {
         }
         if !saw_exit || self.status != Some(0) || !rest.followups_succeeded(action.number) {
             return Err(Error::CreationFollowup {
-                receipt: receipt.ok(),
+                receipt: receipt.ok().map(Box::new),
                 status: self.status,
                 late: self.late,
             });
         }
         if self.late {
             return Err(Error::LateCreation {
-                receipt: receipt.ok(),
+                receipt: receipt.ok().map(Box::new),
             });
         }
         receipt
@@ -132,6 +136,10 @@ impl Reply {
     /// Returns an unconfirmed effect for absent, incomplete or ambiguous
     /// markers. A verified acknowledgement retains any typed receipt across
     /// process failure, a failed follow-up or a late reply.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the reply consumes the submitted operation together with its result"
+    )]
     pub fn ordinary_creation(
         self,
         request: NewSession,
@@ -147,14 +155,14 @@ impl Reply {
         let receipt = request.decode(socket, &row);
         if self.status != Some(0) {
             return Err(Error::CreationFollowup {
-                receipt: receipt.ok(),
+                receipt: receipt.ok().map(Box::new),
                 status: self.status,
                 late: self.late,
             });
         }
         if self.late {
             return Err(Error::LateCreation {
-                receipt: receipt.ok(),
+                receipt: receipt.ok().map(Box::new),
             });
         }
         receipt
@@ -177,7 +185,7 @@ impl Reply {
         };
         match NewSession::new("").decode(socket, &row) {
             Ok(receipt) => Error::CreationInterrupted {
-                receipt,
+                receipt: Box::new(receipt),
                 source: Box::new(cause),
             },
             Err(_) => cause,
@@ -190,8 +198,12 @@ impl Reply {
     ///
     /// Returns an observation error for failed framing, an absent or different
     /// pane, inconsistent duplicate rows, process failure or a late reply.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the reply consumes its submitted pane ID together with its result"
+    )]
     pub fn observe(self, socket: &Path, pane: PaneId) -> Result<PaneKey, Error> {
-        let result = ObservePane::decode_frames(socket, pane, self.status, &self.stdout);
+        let result = ObservePane::decode_frames(socket, &pane, self.status, &self.stdout);
         self.observation(CommandKind::ListPanes, result)
     }
 

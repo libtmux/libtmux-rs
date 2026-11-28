@@ -94,7 +94,26 @@ pub enum Error {
     UnsupportedVersion,
     /// A version report or feature check refused dispatch with its exact cause.
     #[error(transparent)]
-    Version(#[from] crate::VersionError),
+    Version(Box<crate::VersionError>),
+    /// A qualification probe failed before the requested operation was submitted.
+    #[error(
+        "tmux version probe failed (status {status:?}, {diagnostic_len} diagnostic bytes, late={late})"
+    )]
+    VersionProbeFailed {
+        /// The probe client exit status, if one was observed.
+        status: Option<i32>,
+        /// The diagnostic byte count, without its contents.
+        diagnostic_len: usize,
+        /// Whether the probe completed after the request deadline.
+        late: bool,
+    },
+    /// Preflight failed before the requested operation was submitted.
+    #[error("tmux request admission failed before submission: {source}")]
+    AdmissionFailed {
+        /// The original preflight failure, including cleanup evidence.
+        #[source]
+        source: Box<Error>,
+    },
     /// The deadline elapsed after dispatch; a mutation may have run.
     #[error("deadline elapsed; a dispatched tmux command may have run")]
     Deadline,
@@ -102,13 +121,13 @@ pub enum Error {
     #[error("tmux acknowledged session creation after the deadline")]
     LateCreation {
         /// Object identities, when the receipt was readable.
-        receipt: Option<CreatedSession>,
+        receipt: Option<Box<CreatedSession>>,
     },
     /// Creation succeeded before a hook, client exit or trailing frame failed.
     #[error("session created; follow-up failed or was incomplete (status {status:?}, late={late})")]
     CreationFollowup {
         /// Object identities, when the receipt was readable.
-        receipt: Option<CreatedSession>,
+        receipt: Option<Box<CreatedSession>>,
         /// The client exit status, if one was observed.
         status: Option<i32>,
         /// Whether completion was observed after the deadline.
@@ -118,7 +137,7 @@ pub enum Error {
     #[error("tmux acknowledged session creation before the client was interrupted: {source}")]
     CreationInterrupted {
         /// Identities from the unique, complete initial action frame.
-        receipt: CreatedSession,
+        receipt: Box<CreatedSession>,
         /// The original failure, including any cleanup failure.
         #[source]
         source: Box<Error>,
@@ -237,6 +256,8 @@ impl Error {
             | Self::CancelledBeforeSpawn
             | Self::UnsupportedVersion
             | Self::Version(_)
+            | Self::VersionProbeFailed { .. }
+            | Self::AdmissionFailed { .. }
             | Self::Spawn(_)
             | Self::WrongEndpoint => Effect::NotSubmitted,
             Self::AfterCreate
@@ -262,5 +283,11 @@ impl Error {
             | Self::Cancelled
             | Self::LostReply(_) => Effect::Unknown,
         }
+    }
+}
+
+impl From<crate::VersionError> for Error {
+    fn from(error: crate::VersionError) -> Self {
+        Self::Version(Box::new(error))
     }
 }

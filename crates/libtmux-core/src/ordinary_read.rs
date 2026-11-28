@@ -57,7 +57,7 @@ impl OrdinaryPaneProbe {
             "run-shell",
             "-C",
             "-t",
-            &self.pane.to_string(),
+            self.pane.as_ref(),
             &format!(
                 "{}#{{pid}},#{{start_time}},#{{pane_id}},#{{pane_height}},#{{version}}",
                 self.marker
@@ -329,9 +329,7 @@ mod tests {
                 diagnostic,
                 false
             ),
-            Err(Error::Version(
-                crate::VersionError::UnsupportedTmuxVersion { .. }
-            ))
+            Err(Error::Version(error)) if matches!(*error, crate::VersionError::UnsupportedTmuxVersion { .. })
         ));
     }
 

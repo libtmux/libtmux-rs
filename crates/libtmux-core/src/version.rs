@@ -477,6 +477,31 @@ impl TmuxVersion {
         })
     }
 
+    /// Parse the configured executable's native version output.
+    ///
+    /// tmux 3.3a prints its configured basename where newer releases print
+    /// `tmux`. The framing and version grammar otherwise match the shared
+    /// report decoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns the shared invalid-output or unrecognised-version failure.
+    pub fn parse_executable_output(
+        executable: &std::ffi::OsStr,
+        output: &[u8],
+    ) -> Result<Self, VersionError> {
+        let configured = std::path::Path::new(executable)
+            .file_name()
+            .and_then(|program| output.strip_prefix(program.as_encoded_bytes()))
+            .and_then(|rest| rest.strip_prefix(b" "));
+        let version = configured
+            .or_else(|| output.strip_prefix(b"tmux "))
+            .ok_or_else(|| VersionError::from_invalid_version_output(output.len()))?;
+        let mut canonical = b"tmux ".to_vec();
+        canonical.extend_from_slice(version);
+        Self::parse_report(&canonical, output.len())
+    }
+
     /// Read the version a daemon or `tmux -V` reported, for the version check.
     ///
     /// Strict like [`TmuxVersion::parse_output`], except that a well-framed
@@ -700,6 +725,31 @@ impl TmuxVersion {
                 .is_some_and(|release| release >= since::CONTROL_ACQUISITION)
     }
 
+    /// Prepend a same-queue version guard to already lowered ordinary argv.
+    ///
+    /// The unparseable refusal branch stops the queue before the operation.
+    /// A driver must still decode the operation's own acknowledgement; a
+    /// diagnostic alone does not prove that a mutation was never submitted.
+    /// This is shared implementation support for the native drivers.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn fence_ordinary_argv(
+        &self,
+        mut arguments: Vec<std::ffi::OsString>,
+    ) -> Vec<std::ffi::OsString> {
+        let leading = usize::from(arguments.first().is_some_and(|argument| argument == "-N"));
+        let mut guarded: Vec<_> = arguments.drain(..leading).collect();
+        crate::Command::new("if-shell")
+            .arg("-F")
+            .arg(format!("#{{==:#{{version}},{}}}", self.raw()))
+            .arg("")
+            .arg("}")
+            .extend_argv(&mut guarded);
+        guarded.push(";".into());
+        guarded.extend(arguments);
+        guarded
+    }
+
     /// Refuse a capability this release is too old for.
     ///
     /// tmux usually accepts an unknown flag and ignores it, so without this
@@ -873,6 +923,130 @@ fn parse_output_frame(output: &[u8]) -> Option<&str> {
         return None;
     }
     str::from_utf8(version).ok()
+}
+
+/// A nonce-bound, hook-free ordinary daemon version probe.
+///
+/// The probe uses `run-shell -C` as an ordinary command, without acquiring a
+/// control client. The native driver supplies fresh entropy for every probe.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux_core::{CreationNonce, OrdinaryVersionProbe};
+///
+/// # let fresh_os_random_bytes = [0x42; 16];
+/// let probe = OrdinaryVersionProbe::new(CreationNonce::from_bytes(fresh_os_random_bytes));
+/// assert_eq!(probe.arguments()[1], "run-shell");
+/// ```
+pub struct OrdinaryVersionProbe {
+    marker: String,
+}
+
+impl fmt::Debug for OrdinaryVersionProbe {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OrdinaryVersionProbe(<redacted>)")
+    }
+}
+
+impl OrdinaryVersionProbe {
+    /// Bind one metadata report to fresh driver-supplied entropy.
+    #[must_use]
+    pub fn new(nonce: crate::CreationNonce) -> Self {
+        Self {
+            marker: format!("libtmux-version-{}-", nonce.encoded()),
+        }
+    }
+
+    /// Encode a non-starting ordinary command whose report arrives on stderr.
+    ///
+    /// Drivers may discard stdout to contain older daemons that keep that
+    /// stream open after their client exits.
+    #[must_use]
+    pub fn arguments(&self) -> Vec<std::ffi::OsString> {
+        [
+            "-N",
+            "run-shell",
+            "-C",
+            &format!("{}#{{version}}", self.marker),
+        ]
+        .map(std::ffi::OsString::from)
+        .into()
+    }
+
+    /// Qualify a daemon report or distinguish an explicitly absent endpoint.
+    ///
+    /// `Ok(None)` means only a recognised cold-endpoint diagnostic. A driver
+    /// may then qualify its configured executable before starting a daemon.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unsupported, unknown or malformed reports, late probes and
+    /// unrelated failures, including permission and native protocol errors.
+    /// No process-output payload is retained by the error.
+    pub fn decode(
+        &self,
+        status: Option<i32>,
+        stdout: &[u8],
+        stderr: &[u8],
+        late: bool,
+    ) -> Result<Option<TmuxVersion>, crate::Error> {
+        let failed = || crate::Error::VersionProbeFailed {
+            status,
+            diagnostic_len: stdout.len().saturating_add(stderr.len()),
+            late,
+        };
+        if late || status != Some(1) || !stdout.is_empty() {
+            return Err(failed());
+        }
+        let reason = stderr.trim_ascii();
+        if cold_diagnostic(reason) {
+            return Ok(None);
+        }
+        if reason.starts_with(b"usage: run-shell ")
+            || reason.starts_with(b"server version is too old for client")
+            || reason.starts_with(b"usage: tmux ")
+            || reason.starts_with(b"tmux: unknown option")
+        {
+            return Err(VersionError::UnsupportedTmuxVersion {
+                found: TmuxVersion::older_than_probe(),
+                minimum: TmuxVersion::MIN_SUPPORTED,
+            }
+            .into());
+        }
+        let report = reason
+            .strip_prefix(b"unknown command: ")
+            .and_then(|report| report.strip_prefix(self.marker.as_bytes()))
+            .ok_or_else(failed)?;
+        let mut canonical = b"tmux ".to_vec();
+        canonical.extend_from_slice(report);
+        canonical.push(b'\n');
+        let version = TmuxVersion::parse_report(&canonical, stderr.len())?;
+        version.ensure_supported()?;
+        Ok(Some(version))
+    }
+}
+
+fn cold_diagnostic(reason: &[u8]) -> bool {
+    if reason.contains(&b'\n') || reason.contains(&b'\r') {
+        return false;
+    }
+    if let Some(path) = reason.strip_prefix(b"no server running on ") {
+        return !path.is_empty();
+    }
+    let Some(rest) = reason.strip_prefix(b"error connecting to ") else {
+        return false;
+    };
+    [
+        b" (No such file or directory)".as_slice(),
+        b" (Connection refused)",
+        b" (Socket operation on non-socket)",
+    ]
+    .iter()
+    .any(|suffix| {
+        rest.strip_suffix(*suffix)
+            .is_some_and(|path| !path.is_empty())
+    })
 }
 
 /// The tmux release each version-gated capability arrived in.

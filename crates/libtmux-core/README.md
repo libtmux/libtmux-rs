@@ -27,6 +27,12 @@ assert!(operands.iter().any(|arg| arg.kind() == OperandKind::Sensitive));
 produces process argv for a one-shot control client, including `-C`, and
 escapes trailing semicolons so a value cannot become a command boundary.
 
+`ordinary_arguments` uses a fresh driver-supplied `CreationNonce` to request a
+receipt without `-C`. Only the first complete stamped record is accepted;
+prefaced or duplicate-stamped output leaves creation unconfirmed. The
+[ordinary receipt contract](docs/ordinary-creation.md) records its provenance
+and the daemon trust boundary.
+
 ## Keep creation evidence
 
 A creation receipt binds the session, first window and first pane IDs to the

@@ -34,6 +34,7 @@ impl IdParseError {
     ///
     /// This is shared implementation support for the driver crates.
     #[doc(hidden)]
+    #[must_use]
     pub const fn new(expected_sigil: char) -> Self {
         Self { expected_sigil }
     }

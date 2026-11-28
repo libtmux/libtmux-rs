@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::DirBuilder;
-use std::os::unix::fs::DirBuilderExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -17,6 +17,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        let fixture = Self::empty();
+        fixture.start();
+        fixture.checked(["set-option", "-g", "status", "off"]);
+        fixture
+    }
+
+    fn empty() -> Self {
         let fixture_root = Path::new("/tmp/libtmux-rs-test");
         DirBuilder::new()
             .recursive(true)
@@ -31,14 +38,11 @@ impl Fixture {
         let server = Server::at(root.path().join("s"))
             .unwrap()
             .with_executable(executable.clone());
-        let fixture = Self {
+        Self {
             root,
             executable,
             server,
-        };
-        fixture.start();
-        fixture.checked(["set-option", "-g", "status", "off"]);
-        fixture
+        }
     }
 
     fn command(&self) -> Command {
@@ -108,6 +112,23 @@ impl Fixture {
             std::thread::sleep(Duration::from_millis(5));
         }
         key
+    }
+
+    fn isolated_client(&self, reported_version: Option<&str>) -> OsString {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let executable = self.root.path().join("ordinary-client");
+        std::fs::write(
+            self.root.path().join("tmux-path"),
+            self.executable.as_bytes(),
+        )
+        .unwrap();
+        if let Some(version) = reported_version {
+            std::fs::write(self.root.path().join("version"), version).unwrap();
+        }
+        std::fs::write(&executable, b"#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\nroot=Path(__file__).parent\nif '-V' in sys.argv[1:] and (root/'version').exists():\n print('tmux '+(root/'version').read_text()); sys.exit(0)\nprogram=os.fsdecode((root/'tmux-path').read_bytes())\nos.execvp(program,[program,'-f','/dev/null',*sys.argv[1:]])\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        executable.into_os_string()
     }
 }
 
@@ -225,4 +246,116 @@ fn a_replacement_daemon_cannot_reuse_an_observed_pane_key() {
         fixture.server.capture(&key),
         Err(Error::StalePane)
     ));
+}
+
+#[test]
+fn a_cold_endpoint_uses_only_a_supported_executable_and_a_version_fence() {
+    let fixture = Fixture::empty();
+    let server = fixture
+        .server
+        .clone()
+        .with_executable(fixture.isolated_client(None));
+    let created = server
+        .new_session(NewSession::new("cold").command("exec sleep 30"))
+        .unwrap();
+    assert_eq!(created.session().to_string(), "$0");
+    assert_eq!(
+        server.observe_pane(created.pane().id()).unwrap(),
+        *created.pane()
+    );
+}
+
+#[test]
+fn a_pre_floor_executable_report_is_refused_before_creation() {
+    let fixture = Fixture::empty();
+    let server = fixture
+        .server
+        .clone()
+        .with_executable(fixture.isolated_client(Some("3.3")));
+    let error = server
+        .new_session(NewSession::new("must-not-exist"))
+        .unwrap_err();
+    assert_eq!(error.effect(), libtmux_core::Effect::NotSubmitted);
+    assert!(matches!(error, Error::Version(_)));
+    assert!(!fixture.root.path().join("s").exists());
+}
+
+#[test]
+fn a_probe_error_is_not_permission_to_start_a_new_daemon() {
+    let fixture = Fixture::empty();
+    let component = fixture.root.path().join("ordinary-file");
+    std::fs::write(&component, b"not a directory").unwrap();
+    let server = Server::at(component.join("socket"))
+        .unwrap()
+        .with_executable(fixture.executable.clone());
+    let error = server
+        .new_session(NewSession::new("must-not-exist"))
+        .unwrap_err();
+    assert_eq!(error.effect(), libtmux_core::Effect::NotSubmitted);
+    assert!(!matches!(error, Error::UnconfirmedCreation { .. }));
+}
+
+#[test]
+fn a_stale_version_witness_cannot_create_on_the_replacement_version() {
+    let fixture = Fixture::new();
+    let actual = fixture.checked(["-V"]);
+    let actual =
+        libtmux_core::TmuxVersion::parse_executable_output(&fixture.executable, &actual.stdout)
+            .unwrap();
+    let floor = libtmux_core::TmuxVersion::parse_output(b"tmux 3.3a\n").unwrap();
+    let expected = if actual == floor {
+        libtmux_core::TmuxVersion::parse_output(b"tmux 3.8\n").unwrap()
+    } else {
+        floor
+    };
+    let error = fixture
+        .server
+        .create_qualified(
+            NewSession::new("must-not-exist").command("exec sleep 30"),
+            RequestOptions::default(),
+            &expected,
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(error.effect(), libtmux_core::Effect::Unknown);
+    assert!(matches!(error, Error::UnconfirmedCreation { .. }));
+    assert_eq!(
+        fixture
+            .checked(["list-sessions", "-F", "#{session_name}"])
+            .stdout,
+        b"fixture\n"
+    );
+}
+
+#[test]
+fn a_parked_creation_hook_preserves_the_real_ordinary_receipt() {
+    let fixture = Fixture::new();
+    fixture.checked([
+        "set-hook",
+        "-g",
+        "after-new-session",
+        "wait-for ordinary-receipt-gate",
+    ]);
+    let options = RequestOptions {
+        budget: libtmux_core::supervision::Budget {
+            deadline: Instant::now() + Duration::from_millis(500),
+            bytes_per_stream: 65_536,
+        },
+        cancellation: crate::CancellationToken::default(),
+    };
+    let result = fixture.server.new_session_with(
+        NewSession::new("created-before-timeout").command("exec sleep 30"),
+        options,
+    );
+    fixture.checked(["wait-for", "-S", "ordinary-receipt-gate"]);
+    let error = result.unwrap_err();
+    assert_eq!(error.effect(), libtmux_core::Effect::Created);
+    let Error::CreationInterrupted { receipt, source } = error else {
+        panic!("{error}")
+    };
+    assert!(matches!(*source, Error::Deadline));
+    assert_eq!(
+        fixture.server.observe_pane(receipt.pane().id()).unwrap(),
+        *receipt.pane()
+    );
 }
