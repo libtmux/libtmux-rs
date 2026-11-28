@@ -18,6 +18,19 @@ LIBRARIES = ("libtmux-core", "libtmux-blocking", "libtmux-tokio", "libtmux-macro
 ROOT = Path(__file__).resolve().parents[2]
 
 
+BLOCKING_PROGRAM = """\
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let socket = std::env::args_os().nth(1).ok_or("missing private socket")?;
+    let client = libtmux::blocking::Server::at(socket)?;
+    let receipt = client.new_session(libtmux::NewSession::new("reader").command("sleep 30"))?;
+    let observed = client.observe_pane(receipt.pane().id());
+    client.kill_created_session(&receipt)?;
+    assert_eq!(&observed?, receipt.pane());
+    Ok(())
+}
+"""
+
+
 def check_consumers(directory: Path) -> None:
     """Check dependency identity and execute a program in each feature configuration."""
     env = {**os.environ, "CARGO_TARGET_DIR": str(directory / "target")}
@@ -63,8 +76,9 @@ def check_consumers(directory: Path) -> None:
             "blocking",
             "libtmux",
             [],
-            'let _ = libtmux::blocking::Server::at("/example/socket").unwrap();',
+            BLOCKING_PROGRAM,
         ),
+        ("blocking-control", "libtmux", ["blocking", "control-mode"], BLOCKING_PROGRAM),
         ("tokio", "libtmux", ["tokio"], "let _ = libtmux::tokio::Server::builder();"),
         ("mixed", "libtmux", mixed["libtmux"]["features"], ""),
     ]
@@ -81,6 +95,8 @@ def check_consumers(directory: Path) -> None:
         source = (
             (facade / "examples/api_mixed.rs").read_text()
             if lane == "mixed"
+            else body
+            if lane.startswith("blocking")
             else f"fn main() {{ {body} }}\n"
         )
         (project / "src/main.rs").write_text(source)
@@ -95,7 +111,13 @@ def check_consumers(directory: Path) -> None:
         has_tokio = any(line.startswith("tokio v") for line in tree)
         if has_tokio != (lane in {"tokio", "mixed"}):
             raise RuntimeError(f"unexpected Tokio dependency in {lane}: {has_tokio}")
-        actual = cargo(project, "run", "--locked", "--quiet")
+        if lane.startswith("blocking"):
+            fixtures = Path("/tmp/libtmux-rs-test")
+            fixtures.mkdir(mode=0o700, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="installed-", dir=fixtures) as fixture:
+                actual = cargo(project, "run", "--locked", "--quiet", "--", f"{fixture}/s")
+        else:
+            actual = cargo(project, "run", "--locked", "--quiet")
         if actual != (b"mixed runtime\n" if lane == "mixed" else b""):
             raise RuntimeError(f"unexpected stdout for {lane} ({len(actual)} bytes)")
         print(f"{lane} consumer passed")

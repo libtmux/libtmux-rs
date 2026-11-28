@@ -29,7 +29,7 @@ include = [
 default = ["blocking"]
 blocking = ["dep:libtmux-blocking"]
 tokio = ["dep:libtmux-tokio"]
-control-mode = ["tokio", "libtmux-tokio/control-mode"]
+control-mode = ["libtmux-blocking?/control-mode", "libtmux-tokio?/control-mode"]
 derive = ["libtmux-core/derive", "query", "libtmux-tokio?/derive"]
 plan = ["libtmux-core/plan", "libtmux-tokio?/plan"]
 query = ["libtmux-core/query", "libtmux-tokio?/query"]
@@ -37,7 +37,7 @@ schema = ["serde", "libtmux-core/schema", "libtmux-tokio?/schema"]
 serde = ["libtmux-core/serde", "libtmux-tokio?/serde"]
 test-support = ["tokio", "libtmux-tokio/test-support"]
 tracing = ["libtmux-tokio?/tracing"]
-full = ["blocking", "control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
+full = ["blocking", "tokio", "control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
 
 [dependencies]
 libtmux-blocking = { workspace = true, optional = true }
