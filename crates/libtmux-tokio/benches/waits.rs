@@ -102,6 +102,7 @@ async fn streamed(pane: &Pane, output: &mut PaneOutput) -> Duration {
 
     let mut seen = Vec::new();
     while let Some(chunk) = output.next_chunk().await {
+        let chunk = chunk.expect("pane output retains continuity");
         seen.extend_from_slice(&chunk);
         if contains(&seen, needle.as_bytes()) {
             return started.elapsed();
@@ -158,6 +159,7 @@ async fn flooded_stream(pane: &Pane, output: &mut PaneOutput, lines: u64) -> Dur
     // catches it however tmux splits the chunks.
     let mut tail = Vec::new();
     while let Some(chunk) = output.next_chunk().await {
+        let chunk = chunk.expect("pane output retains continuity");
         tail.extend_from_slice(&chunk);
         if contains(&tail, needle.as_bytes()) {
             return started.elapsed();

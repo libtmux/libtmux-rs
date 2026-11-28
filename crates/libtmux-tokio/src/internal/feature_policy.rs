@@ -160,15 +160,22 @@ pub(crate) fn refuse_interval(
     Ok(())
 }
 
-fn native(name: &[u8], full: &[u8], alias: &[u8], shortest: usize) -> bool {
+pub(crate) fn native(name: &[u8], full: &[u8], alias: &[u8], shortest: usize) -> bool {
     name == alias || (name.len() >= shortest && full.starts_with(name))
 }
 
 // Inspect only native argv flags. Positionals, including tmux command strings
 // nested in another command (`if-shell`, `run-shell -C`, brace blocks),
 // retain tmux's parser; their contents never become policy input.
-fn flags<'a>(arguments: &'a [impl AsRef<OsStr>], valued: &[u8]) -> Vec<(u8, Option<&'a [u8]>)> {
+pub(crate) fn flags<'a>(
+    arguments: &'a [impl AsRef<OsStr>],
+    valued: &[u8],
+) -> Vec<(u8, Option<&'a [u8]>)> {
     scan(arguments, valued).flags
+}
+
+pub(crate) fn positionals<'a, T: AsRef<OsStr>>(arguments: &'a [T], valued: &[u8]) -> &'a [T] {
+    scan(arguments, valued).positional
 }
 
 fn scan<'a, T: AsRef<OsStr>>(arguments: &'a [T], valued: &[u8]) -> Arguments<'a, T> {

@@ -65,6 +65,22 @@ impl Error {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
+            #[cfg(feature = "control-mode")]
+            Self::ControlGap { .. } => ErrorKind::Transport,
+            #[cfg(feature = "control-mode")]
+            Self::ControlProtocol { fault } => match fault {
+                libtmux_core::control::ControlFault::Busy { .. } => ErrorKind::Refused,
+                libtmux_core::control::ControlFault::Deadline => ErrorKind::Timeout,
+                libtmux_core::control::ControlFault::Closed
+                | libtmux_core::control::ControlFault::Disconnected
+                | libtmux_core::control::ControlFault::Cancelled => ErrorKind::Transport,
+                _ => ErrorKind::Decode,
+            },
+            #[cfg(feature = "control-mode")]
+            Self::PaneOutputEnded { cause } => match cause {
+                crate::control::PaneOutputEnd::PaneGone => ErrorKind::ObjectGone,
+                crate::control::PaneOutputEnd::ConnectionEnded => ErrorKind::Transport,
+            },
             Self::CoreOperation { source } => super::operation::core_kind(source),
             Self::OperationFailure {
                 effect: libtmux_core::Effect::Created,
@@ -168,6 +184,10 @@ impl Error {
     #[must_use]
     pub fn is_transient(&self) -> bool {
         match self {
+            #[cfg(feature = "control-mode")]
+            Self::ControlGap { .. }
+            | Self::ControlProtocol { .. }
+            | Self::PaneOutputEnded { .. } => false,
             Self::OperationFailure { effect, source, .. } => {
                 matches!(
                     effect,

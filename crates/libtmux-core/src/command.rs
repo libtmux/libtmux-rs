@@ -230,15 +230,37 @@ impl Command {
 
     /// Render this command as one control-mode line.
     ///
-    /// Returns `None` when a token is not valid UTF-8, because control mode
-    /// is a text protocol and no escaping in it can carry those bytes.
+    /// Returns `None` for non-UTF-8 tokens or tokens containing NUL, CR or LF.
+    /// Control input must remain one complete protocol record.
     #[doc(hidden)]
     #[must_use]
     pub fn control_mode_line(&self) -> Option<String> {
+        self.control_mode_line_bounded(usize::MAX)
+    }
+
+    /// Render one control record while bounding the allocation before quoting.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn control_mode_line_bounded(&self, limit: usize) -> Option<String> {
+        let raw = self.logical_words().try_fold(0usize, |bytes, word| {
+            bytes
+                .checked_add(word.as_encoded_bytes().len())?
+                .checked_add(1)
+        })?;
+        if raw.saturating_sub(1) > limit {
+            return None;
+        }
         let mut line = render_control_mode_token(&self.subcommand.value)?;
+        if line.len() > limit {
+            return None;
+        }
         for argument in &self.arguments {
+            let rendered = render_control_mode_token(&argument.value)?;
+            if line.len().checked_add(1)?.checked_add(rendered.len())? > limit {
+                return None;
+            }
             line.push(' ');
-            line.push_str(&render_control_mode_token(&argument.value)?);
+            line.push_str(&rendered);
         }
 
         Some(line)
@@ -483,10 +505,30 @@ impl CommandChain {
     #[doc(hidden)]
     #[must_use]
     pub fn control_mode_line(&self) -> Option<String> {
-        let mut line = self.first.control_mode_line()?;
+        self.control_mode_line_bounded(usize::MAX)
+    }
+
+    /// Render a command chain within one bounded control input record.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn control_mode_line_bounded(&self, limit: usize) -> Option<String> {
+        let raw =
+            self.commands()
+                .flat_map(Command::logical_words)
+                .try_fold(0usize, |bytes, word| {
+                    bytes
+                        .checked_add(word.as_encoded_bytes().len())?
+                        .checked_add(1)
+                })?;
+        if raw.saturating_sub(1) > limit {
+            return None;
+        }
+        let mut line = self.first.control_mode_line_bounded(limit)?;
         for command in &self.rest {
+            let remaining = limit.checked_sub(line.len().checked_add(3)?)?;
+            let rendered = command.control_mode_line_bounded(remaining)?;
             line.push_str(" ; ");
-            line.push_str(&command.control_mode_line()?);
+            line.push_str(&rendered);
         }
 
         Some(line)
@@ -530,6 +572,9 @@ impl fmt::Debug for CommandChain {
 /// protocol at all, so this reports that rather than corrupting it.
 fn render_control_mode_token(value: &OsStr) -> Option<String> {
     let text = value.to_str()?;
+    if text.bytes().any(|byte| matches!(byte, 0 | b'\r' | b'\n')) {
+        return None;
+    }
     let safe = !text.is_empty()
         && text
             .bytes()

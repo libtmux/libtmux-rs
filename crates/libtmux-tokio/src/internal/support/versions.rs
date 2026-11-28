@@ -45,6 +45,11 @@ impl VersionCache {
     clippy::await_holding_invalid_type,
     reason = "serializes the first probe; executor dispatch never reacquires this guard"
 )]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "version admission and operation dispatch share one absolute deadline"
+)]
 pub(crate) fn dispatch(
     executor: Arc<dyn Executor>,
     configuration: CoreConfiguration,

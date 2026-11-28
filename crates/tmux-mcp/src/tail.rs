@@ -221,7 +221,7 @@ impl Tails {
             let ring = hold(&tail.ring);
             let (from, stale) = resume_at(&ring, cursor, owner, epoch);
             let read = ring.snapshot_from(from);
-            let missed = read.missed || stale;
+            let missed = read.missed || stale || ring.lost;
             (read, missed, ring.closed, ring.end())
         };
 

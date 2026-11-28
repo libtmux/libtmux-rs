@@ -407,6 +407,7 @@ impl Executor for SubprocessExecutor {
 
 #[allow(
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "startup transfers the existing registry, admission and result owner together"
 )]
 async fn spawn_and_supervise(
@@ -518,7 +519,7 @@ async fn spawn_and_supervise(
                 #[cfg(test)]
                 configuration.hooks.clone(),
             )
-            .await
+            .await;
         }
         Ok(Err(error)) => {
             trace_failed(&context, &error);
@@ -540,7 +541,7 @@ async fn await_result(
     mut cancellation: CancellationGuard,
     context: RequestContext,
 ) -> Result<CommandResult, Error> {
-    let received = if let Some(deadline) = context
+    let completion = if let Some(deadline) = context
         .operation
         .as_ref()
         .and_then(OperationContext::deadline)
@@ -548,23 +549,22 @@ async fn await_result(
         let latest = deadline
             .checked_add(libtmux_core::supervision::CLEANUP_ALLOWANCE)
             .unwrap_or(deadline);
-        match tokio::time::timeout_at(latest, receiver).await {
-            Ok(received) => received,
-            Err(_) => {
-                let source = context.interrupted(Error::timeout(
-                    context.request_id(),
-                    context.command.clone(),
-                    context.timeout,
-                ));
-                return Err(Error::OperationCleanupPending {
-                    source: Box::new(source),
-                });
-            }
+        if let Ok(completion) = tokio::time::timeout_at(latest, receiver).await {
+            completion
+        } else {
+            let source = context.interrupted(Error::timeout(
+                context.request_id(),
+                context.command.clone(),
+                context.timeout,
+            ));
+            return Err(Error::OperationCleanupPending {
+                source: Box::new(source),
+            });
         }
     } else {
         receiver.await
     };
-    match received {
+    match completion {
         Ok(result) => {
             cancellation.disarm();
             result
@@ -576,6 +576,10 @@ async fn await_result(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "child ownership must cover pipe registration and startup cleanup"
+)]
 fn start_native_child(
     mut process: tokio::process::Command,
     stdout_discarded: bool,
@@ -637,7 +641,7 @@ fn start_native_child(
         child: Some(child),
         changed,
         reaper,
-        reservation: Some(reservation),
+        reservation: Some(Box::new(reservation)),
         reaped: false,
     };
     // Locals drop in reverse order; signal the group before a fallback reaper
@@ -766,34 +770,56 @@ impl SupervisedChild {
     }
 }
 
-struct NativeChild {
+pub(crate) struct NativeChild {
     child: Option<StdChild>,
     changed: Signal,
     reaper: mpsc::Sender<NativeReap>,
-    reservation: Option<Reservation>,
+    reservation: Option<Box<dyn Any + Send>>,
     reaped: bool,
 }
 
 impl NativeChild {
-    #[cfg(test)]
-    fn id(&self) -> Option<u32> {
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn spawn(
+        command: &mut std::process::Command,
+        reservation: Box<dyn Any + Send>,
+    ) -> io::Result<Self> {
+        let reaper = native_reaper()?;
+        let changed = signal(SignalKind::child())?;
+        let child = command.spawn()?;
+        Ok(Self {
+            child: Some(child),
+            changed,
+            reaper,
+            reservation: Some(reservation),
+            reaped: false,
+        })
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn retain(&mut self, owner: impl Any + Send) {
+        self.reservation = Some(Box::new((self.reservation.take(), owner)));
+    }
+
+    #[cfg(any(test, feature = "control-mode"))]
+    pub(crate) fn id(&self) -> Option<u32> {
         self.child.as_ref().map(StdChild::id)
     }
 
-    fn child_mut(&mut self) -> io::Result<&mut StdChild> {
+    pub(crate) fn child_mut(&mut self) -> io::Result<&mut StdChild> {
         self.child
             .as_mut()
             .ok_or_else(|| io::ErrorKind::BrokenPipe.into())
     }
 
-    fn start_kill(&mut self) -> io::Result<()> {
+    pub(crate) fn start_kill(&mut self) -> io::Result<()> {
         if self.reaped {
             return Ok(());
         }
         self.child_mut()?.kill()
     }
 
-    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+    pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         let result = self.child_mut()?.try_wait();
         self.reaped |= result.as_ref().is_ok_and(Option::is_some)
             || result
@@ -802,7 +828,7 @@ impl NativeChild {
         result
     }
 
-    async fn wait(&mut self) -> io::Result<ExitStatus> {
+    pub(crate) async fn wait(&mut self) -> io::Result<ExitStatus> {
         loop {
             if let Some(status) = self.try_wait()? {
                 return Ok(status);
@@ -814,7 +840,7 @@ impl NativeChild {
         }
     }
 
-    fn wait_blocking(&mut self) -> io::Result<ExitStatus> {
+    pub(crate) fn wait_blocking(&mut self) -> io::Result<ExitStatus> {
         let result = loop {
             match self.child_mut()?.wait() {
                 Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
@@ -849,7 +875,7 @@ impl Drop for NativeChild {
 
 struct NativeReap {
     child: StdChild,
-    _reservation: Option<Reservation>,
+    _reservation: Option<Box<dyn Any + Send>>,
 }
 
 fn native_reaper() -> io::Result<mpsc::Sender<NativeReap>> {

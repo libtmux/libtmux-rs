@@ -104,6 +104,14 @@ impl CommandRequest {
         )
     }
 
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn require_shared_control(&self) -> Result<(), crate::Error> {
+        for command in self.argv[self.logical_subcommand_index..].split(|word| word == ";") {
+            crate::control::policy::require_shared(command)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn live_only(mut self) -> Self {
         if self.argv[..self.client_flags_end]
             .last()
@@ -119,7 +127,7 @@ impl CommandRequest {
 
     pub(crate) fn for_generation(self, generation: Option<crate::ServerGeneration>) -> Self {
         match generation {
-            Some(generation) => self.live_only().prepend_guard(generation.queue_guard()),
+            Some(generation) => self.live_only().prepend_guard(&generation.queue_guard()),
             None => self,
         }
     }
@@ -130,10 +138,10 @@ impl CommandRequest {
             .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
             .arg("")
             .arg("libtmux-core-version-changed");
-        self.prepend_guard(guard)
+        self.prepend_guard(&guard)
     }
 
-    fn prepend_guard(mut self, guard: Command) -> Self {
+    fn prepend_guard(mut self, guard: &Command) -> Self {
         #[cfg(feature = "control-mode")]
         {
             self.control_line = self.control_line.and_then(|line| {
@@ -168,6 +176,10 @@ impl CommandRequest {
         Self::with_global_argv(request_id, &[], command)
     }
 
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "request construction consumes the command at the dispatch boundary"
+    )]
     pub(crate) fn with_global_argv(
         request_id: RequestId,
         global_argv: &[OsString],

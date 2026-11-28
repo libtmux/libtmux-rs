@@ -22,12 +22,9 @@ impl Pane {
     /// them in whatever sized chunks it has, so a caller wanting lines has to
     /// buffer.
     ///
-    /// Keep reading, or the pane stops. Events are handed over with
-    /// backpressure rather than dropped, so a stream left unread stops the
-    /// connection reading from tmux, and tmux stops the pane that is filling
-    /// it. A caller who wants to stop watching calls
-    /// [`PaneOutput::shutdown`](crate::control::PaneOutput::shutdown) rather
-    /// than leaving the handle idle.
+    /// A slow reader can miss bytes. The stream returns a gap error when its
+    /// queue overflows or tmux pauses the pane. A fresh capture shows the
+    /// current grid. Bytes that scrolled off during the gap cannot be recovered.
     ///
     /// tmux discards what a pane has buffered when the pane exits, so a
     /// command that writes and returns immediately may be reported as nothing
@@ -51,7 +48,7 @@ impl Pane {
     /// let mut output = pane.stream_output().await?;
     ///
     /// while let Some(chunk) = output.next_chunk().await {
-    ///     println!("{} bytes", chunk.len());
+    ///     println!("{} bytes", chunk?.len());
     /// }
     ///
     /// output.shutdown().await
@@ -89,7 +86,12 @@ impl Pane {
             kind: crate::ObjectKind::Pane,
             id: self.id().to_string(),
         })?;
-        let server = crate::Server::from_core(Arc::clone(&self.core));
+        let key = crate::PaneKey::new(
+            window.key().server_identity().clone(),
+            window.key().generation(),
+            self.id().clone(),
+        );
+        let server = crate::Server::from_core(Arc::clone(&self.core)).bound_to(key.generation())?;
         let (sender, events) =
             crate::control::ControlMode::attach_with_limits(&server, window.session_id(), limits)
                 .await?
@@ -102,11 +104,10 @@ impl Pane {
             return Err(events.shutdown_after_error(error).await);
         }
 
-        Ok(crate::control::PaneOutput::new(
-            self.id().clone(),
-            events,
-            sender,
-        ))
+        Ok(
+            crate::control::PaneOutput::new(self.id().clone(), events, sender)
+                .with_capture(server, key),
+        )
     }
 
     /// Capture the pane's visible contents, one entry per line.

@@ -14,19 +14,31 @@ use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, Shutdown
 /// Runs commands over a connection someone else opened.
 pub(crate) struct ControlModeExecutor {
     sender: Arc<ControlSender>,
+    output_limits: crate::OutputLimits,
 }
 
 impl ControlModeExecutor {
-    pub(crate) fn new(sender: ControlSender) -> Self {
+    pub(crate) fn new(sender: ControlSender, output_limits: crate::OutputLimits) -> Self {
         Self {
             sender: Arc::new(sender),
+            output_limits,
         }
     }
 }
 
 impl Executor for ControlModeExecutor {
+    fn native_server(&self) -> Option<&crate::Server> {
+        Some(self.sender.native_server())
+    }
+    fn control_line_limit(&self) -> Option<usize> {
+        Some(self.sender.line_limit())
+    }
     fn execute(&self, request: CommandRequest) -> DispatchFuture {
+        if let Err(error) = request.require_shared_control() {
+            return DispatchFuture::new(async move { Err(error) });
+        }
         let sender = Arc::clone(&self.sender);
+        let limits = self.output_limits;
         let span = DispatchSpan::new(&request, "control");
         let request_id = request.request_id();
         let summary = request.summary().clone();
@@ -38,34 +50,42 @@ impl Executor for ControlModeExecutor {
             let Some(line) = line else {
                 return Err(crate::Error::control_mode_unrepresentable());
             };
-            let block = sender.send_line(line, sensitive_input, commands).await?;
+            let block = sender
+                .send_line(line, sensitive_input, commands, limits)
+                .await?;
 
-            // tmux prints a command's output inside the block, one line at a
-            // time, with the trailing newline that separated them removed.
-            // Putting it back is what makes the bytes identical to the
-            // stdout a process would have written, which every parser above
-            // this already reads.
-            let bytes = |lines: &[crate::TmuxText]| {
-                let mut bytes = Vec::new();
-                for line in lines {
-                    bytes.extend_from_slice(line.as_bytes());
-                    bytes.push(b'\n');
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            for input in block.blocks() {
+                if input.succeeded() {
+                    if input.output().len() > limits.max_stdout_bytes.saturating_sub(stdout.len()) {
+                        return Err(crate::Error::OutputLimitExceeded {
+                            request_id: request_id.get(),
+                            command: summary,
+                            stream: "stdout",
+                            limit: limits.max_stdout_bytes,
+                        });
+                    }
+                    stdout.extend_from_slice(input.output());
+                } else {
+                    if input.output().len() > limits.max_stderr_bytes.saturating_sub(stderr.len()) {
+                        return Err(crate::Error::OutputLimitExceeded {
+                            request_id: request_id.get(),
+                            command: summary,
+                            stream: "stderr",
+                            limit: limits.max_stderr_bytes,
+                        });
+                    }
+                    stderr.extend_from_slice(input.output());
                 }
-                bytes
-            };
-
-            // A refused command prints its reason where a process would have
-            // put it: an `%error` block is stderr, not stdout, and error
-            // classification reads stderr. What a chain printed before it is
-            // stdout, as it would be from a process.
-            let (stdout, stderr) = block.split_by_outcome();
+            }
 
             Ok(CommandResult::new(
                 request_id,
                 summary,
                 ProcessStatus::from_block_outcome(block.succeeded()),
-                bytes(stdout),
-                bytes(stderr),
+                stdout,
+                stderr,
             ))
         })
     }

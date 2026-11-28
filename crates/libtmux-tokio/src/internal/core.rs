@@ -488,13 +488,17 @@ impl Core {
         sender: crate::control::ControlSender,
         capabilities: EngineCapabilities,
     ) -> Self {
+        let generation = sender.generation();
         // A version cannot be asked over the connection without a hook:
         // `run-shell -C` reports its answer outside any block. The attach
         // already checked the daemon this connection reaches, so carry that.
         self.driver
             .server_version
             .remember(sender.version().clone());
-        let executor = crate::internal::control_executor::ControlModeExecutor::new(sender);
+        let executor = crate::internal::control_executor::ControlModeExecutor::new(
+            sender,
+            self.driver.configuration.output_limits,
+        );
 
         let driver = DriverState {
             ordinary_executor: Arc::clone(&self.driver.ordinary_executor),
@@ -513,10 +517,15 @@ impl Core {
         };
         Self {
             driver: Arc::new(driver),
-            generation: self.generation,
+            generation: Some(generation),
             #[cfg(test)]
             check_versions: true,
         }
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn native_server(&self) -> Option<&crate::Server> {
+        self.driver.executor.native_server()
     }
 
     #[cfg(test)]
@@ -551,11 +560,14 @@ impl Core {
         // Rendered before the command is consumed, and only for the transport
         // that reads a line. A subprocess dispatch pays nothing for it.
         #[cfg(feature = "control-mode")]
-        let control_line = self
-            .driver
-            .executor
-            .renders_control_line()
-            .then(|| command.control_mode_line());
+        let control_line = self.driver.executor.renders_control_line().then(|| {
+            command.control_mode_line_bounded(
+                self.driver
+                    .executor
+                    .control_line_limit()
+                    .unwrap_or(usize::MAX),
+            )
+        });
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
             &self.driver.configuration.global_argv,
@@ -629,11 +641,14 @@ impl Core {
         command: Command,
     ) -> (RequestId, crate::internal::executor::DispatchFuture) {
         #[cfg(feature = "control-mode")]
-        let control_line = self
-            .driver
-            .executor
-            .renders_control_line()
-            .then(|| command.control_mode_line());
+        let control_line = self.driver.executor.renders_control_line().then(|| {
+            command.control_mode_line_bounded(
+                self.driver
+                    .executor
+                    .control_line_limit()
+                    .unwrap_or(usize::MAX),
+            )
+        });
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
             &self.driver.configuration.global_argv,
@@ -663,11 +678,14 @@ impl Core {
 
     pub(crate) async fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
         #[cfg(feature = "control-mode")]
-        let control_line = self
-            .driver
-            .executor
-            .renders_control_line()
-            .then(|| chain.control_mode_line());
+        let control_line = self.driver.executor.renders_control_line().then(|| {
+            chain.control_mode_line_bounded(
+                self.driver
+                    .executor
+                    .control_line_limit()
+                    .unwrap_or(usize::MAX),
+            )
+        });
         let request = CommandRequest::chain_with_global_argv(
             self.next_request_id(),
             &self.driver.configuration.global_argv,
@@ -750,11 +768,14 @@ impl Core {
     pub(crate) async fn kill_server(&self) -> Result<CommandResult, Error> {
         let command = Command::new("kill-server");
         #[cfg(feature = "control-mode")]
-        let control_line = self
-            .driver
-            .executor
-            .renders_control_line()
-            .then(|| command.control_mode_line());
+        let control_line = self.driver.executor.renders_control_line().then(|| {
+            command.control_mode_line_bounded(
+                self.driver
+                    .executor
+                    .control_line_limit()
+                    .unwrap_or(usize::MAX),
+            )
+        });
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
             &self.driver.configuration.global_argv,
@@ -798,6 +819,10 @@ impl Core {
     }
 
     #[cfg(feature = "control-mode")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "pinning and both identity probes share the attach deadline and reservation"
+    )]
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
@@ -824,34 +849,75 @@ impl Core {
             .with_output_limits(self.driver.configuration.output_limits)
             .with_dispatch_limits(self.driver.configuration.dispatch_limits);
             let identity = self
-                .control_identity(&native, self.driver.configuration.global_argv())
+                .control_identity(&native, self.driver.configuration.global_argv(), session)
                 .await?;
-            let carrier = super::control_socket::PinnedSocket::new(
-                self.driver.configuration.identity.socket_path(),
-            )?;
+            if let Some(expected) = self.expected_generation() {
+                if identity.generation() != expected {
+                    return Err(Error::ServerGenerationChanged {
+                        expected,
+                        found: identity.generation(),
+                    });
+                }
+            }
+            let launch = self.driver.configuration.launch.clone();
+            let socket = self.driver.configuration.identity.socket_path().to_owned();
+            let (reservation, carrier, executable) = tokio::task::spawn_blocking(move || {
+                let carrier = super::control_socket::PinnedSocket::new(&socket)?;
+                let executable = carrier.pin_executable(&launch)?;
+                Ok::<_, Error>((reservation, carrier, executable))
+            })
+            .await
+            .map_err(|_| Error::control_mode_closed())??;
+            let launch = self
+                .driver
+                .configuration
+                .launch
+                .clone()
+                .with_executable(executable.path());
+            let pinned_native =
+                SubprocessExecutor::new(executable.path(), self.driver.configuration.timeout)
+                    .with_launch_context(launch.clone())
+                    .with_output_limits(self.driver.configuration.output_limits)
+                    .with_dispatch_limits(self.driver.configuration.dispatch_limits);
+            let binary = pinned_native
+                .execute(CommandRequest::new(
+                    self.next_request_id(),
+                    Command::new("-V"),
+                ))
+                .await?;
+            if !binary.success() {
+                return Err(Error::control_mode_closed());
+            }
+            TmuxVersion::parse_executable_output(executable.path(), binary.stdout())?
+                .ensure_supported()?;
             let mut global_argv = carrier.arguments(self.driver.configuration.global_argv());
-            let pinned = self.control_identity(&native, &global_argv).await?;
+            let pinned = self
+                .control_identity(&pinned_native, &global_argv, session)
+                .await?;
             if pinned != identity {
                 return Err(Error::control_mode(std::io::Error::other(
                     "control daemon changed while pinning",
                 )));
             }
-            let version = TmuxVersion::parse_output(&identity.0)?;
+            let version = pinned.version().clone();
             self.driver.server_version.remember(version.clone());
             global_argv.push(OsString::from("-N"));
             global_argv.push(OsString::from("-C"));
             // Opening an observer must not copy this process's environment
             // into the session it is inspecting.
             let request = CommandRequest::with_global_argv(request_id, &global_argv, command)
-                .fence_version(&version);
+                .fence_ordinary_version(&version)
+                .for_generation(Some(pinned.generation()));
             PersistentChild::spawn(
-                &self.driver.configuration.launch,
-                &request,
+                launch,
+                request,
                 reservation,
                 Arc::clone(&self.driver.control_client_pids),
                 carrier.into_directory(),
-                version,
+                executable,
+                pinned,
             )
+            .await
         };
         let acquisition = async {
             tokio::select! {
@@ -878,54 +944,20 @@ impl Core {
         &self,
         native: &SubprocessExecutor,
         global: &[OsString],
-    ) -> Result<(Vec<u8>, u64, u64), Error> {
-        let mut arguments = global.to_vec();
-        arguments.push(OsString::from("-N"));
-        // `run-shell -C` runs no user hook; `display-message` would fire
-        // `after-display-message` before this client has decided to attach.
-        // tmux reports only the first word it fails to parse as a command, so
-        // the fields are joined with commas rather than spaces.
-        let probe = crate::layout::VersionProbe::new();
-        let request = CommandRequest::with_global_argv(
+        session: &SessionId,
+    ) -> Result<libtmux_core::control::ControlIdentity, Error> {
+        let probe =
+            libtmux_core::control::ControlProbe::new(session.clone(), super::operation::nonce()?);
+        let request = CommandRequest::native_argv(
             self.next_request_id(),
-            &arguments,
-            probe.command_for("#{version},#{pid},#{start_time}"),
+            global,
+            probe.arguments(),
+            Command::new("run-shell").summary(),
         );
         let result = native.execute(request).await?;
-        if result.success() {
-            return Err(Error::control_mode(std::io::Error::other(
-                "invalid control daemon identity",
-            )));
-        }
-        let Some(fields) = probe.report(result.stderr()) else {
-            return Err(Error::control_mode_closed());
-        };
-        let parts: Vec<_> = fields.split(|byte| *byte == b',').collect();
-        if parts.len() != 3 {
-            return Err(Error::control_mode(std::io::Error::other(
-                "invalid control daemon identity",
-            )));
-        }
-        let mut report = b"tmux ".to_vec();
-        report.extend_from_slice(parts[0]);
-        report.push(b'\n');
-        let version = TmuxVersion::parse_output(&report)?;
-        version.ensure_supported()?;
-        version.require(
-            "managed control acquisition",
-            crate::since::CONTROL_ACQUISITION,
-        )?;
-        let number = |bytes: &[u8]| {
-            std::str::from_utf8(bytes)
-                .ok()
-                .and_then(|text| text.parse::<u64>().ok())
-        };
-        let (Some(pid), Some(start)) = (number(parts[1]), number(parts[2])) else {
-            return Err(Error::control_mode(std::io::Error::other(
-                "invalid control daemon generation",
-            )));
-        };
-        Ok((report, pid, start))
+        probe
+            .decode_ordinary(result.exit_code(), result.stdout(), result.stderr(), false)
+            .map_err(Error::from)
     }
 
     /// Report whether this process itself spawned the control client with

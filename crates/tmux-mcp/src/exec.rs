@@ -66,6 +66,8 @@ pub enum RunOutcome {
     Deadline,
     /// The pane stopped writing for good.
     PaneClosed,
+    /// The output stream lost continuity while the command may still run.
+    StreamLost,
     /// The client withdrew the request while the run was still going.
     Cancelled,
     /// The pane never acknowledged the command.
@@ -611,7 +613,7 @@ async fn wait_on_output(
             chunk = tokio::time::timeout_at(deadline, output.next_chunk()) => chunk,
         };
         match chunk {
-            Ok(Some(chunk)) => {
+            Ok(Some(Ok(chunk))) => {
                 bytes = bytes.saturating_add(chunk.len());
                 filter.push(&chunk, &mut text);
 
@@ -651,7 +653,17 @@ async fn wait_on_output(
                     text.drain(..excess);
                 }
             }
-            Ok(None) => {
+            Ok(Some(Err(Error::ControlGap { .. }))) => {
+                outcome = WaitOutcome::StreamLost;
+                break;
+            }
+            Ok(Some(Err(Error::PaneOutputEnded {
+                cause: libtmux_tokio::control::PaneOutputEnd::PaneGone,
+            }))) => {
+                outcome = WaitOutcome::PaneClosed;
+                break;
+            }
+            Ok(Some(Err(Error::PaneOutputEnded { .. }))) | Ok(None) => {
                 // The stream ending says the wait can no longer see the pane,
                 // not that the pane stopped: a detached control client ends
                 // it too. Only a pane that cannot be read, or one tmux holds
@@ -662,6 +674,15 @@ async fn wait_on_output(
                     WaitOutcome::PaneClosed
                 };
                 break;
+            }
+            Ok(Some(Err(primary))) => {
+                return Err(match output.shutdown().await {
+                    Ok(()) => primary,
+                    Err(cleanup) => Error::OperationAndCleanup {
+                        primary: Box::new(primary),
+                        cleanup: Box::new(cleanup),
+                    },
+                });
             }
             Err(_) => break,
         }

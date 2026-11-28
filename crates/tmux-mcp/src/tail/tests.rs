@@ -1,4 +1,18 @@
 use super::*;
+
+#[test]
+fn subscriber_gaps_reset_filter_state_and_invalidate_older_cursors() {
+    let mut ring = Ring::new();
+    ring.push(b"\x1b[31");
+    let before = ring.end();
+    ring.gap();
+    ring.push(b"OK\n");
+    let read = ring.snapshot_from(before);
+    assert!(read.missed);
+    assert_eq!(read.text(), "OK\n");
+    assert!(!ring.snapshot_from(ring.end()).missed);
+    assert!(!ring.closed);
+}
 use std::time::{Duration, Instant};
 
 use super::registry::{SnapshotRequest, TailSnapshot, next_live_snapshot};

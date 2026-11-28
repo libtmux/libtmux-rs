@@ -148,6 +148,7 @@ impl fmt::Debug for StepOutcome {
             .field("outcomes", &self.outcomes)
             .field("attribution", &self.attribution)
             .field("command", &self.command)
+            .field("creation", &self.creation)
             .field("sensitive_input", &self.sensitive_input)
             .field("stdout_len", &self.stdout.len())
             .field("stderr_len", &self.stderr.len())
@@ -837,6 +838,10 @@ impl Execution<'_> {
     ///
     /// The effect can be partial, as for [`Self::run`]: steps already sent
     /// stay done, and the result naming them is lost with the future.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "creation, isolated capture and control replies retain distinct evidence"
+    )]
     async fn run_over_control_mode(
         &self,
         sender: &crate::control::ControlSender,
@@ -852,6 +857,17 @@ impl Execution<'_> {
         let mut effect_seen = false;
 
         for (index, op) in self.steps().iter().enumerate() {
+            if let Op::NewSession(request) = op {
+                let receipt = sender
+                    .create_session(request.clone())
+                    .await
+                    .map_err(|error| after_plan_effect(error, effect_seen))?;
+                reported.push(StepOutcome::created_session(index, receipt, &mut bound));
+                outcomes[index] = Outcome::Complete;
+                effect_seen = true;
+                dispatches += 1;
+                continue;
+            }
             let resolve = |slot: usize, part: Part| bound.get(&(slot, part)).cloned();
             let command = op
                 .render(&resolve)
@@ -864,6 +880,38 @@ impl Execution<'_> {
                     ),
                 })
                 .map_err(|error| after_plan_effect(error, effect_seen))?;
+
+            if matches!(op, Op::CapturePane(_)) {
+                let pane = command
+                    .target()
+                    .and_then(|target| target.to_str())
+                    .and_then(|target| target.parse::<PaneId>().ok())
+                    .ok_or_else(|| Error::invalid_command_input(0, "plan capture target"))?;
+                let escapes = command.logical_words().any(|word| word == "-e");
+                let key = libtmux_core::PaneKey::new(
+                    sender.identity().clone(),
+                    sender.generation(),
+                    pane,
+                );
+                let bytes = sender
+                    .native_server()
+                    .capture_grid(&key, escapes)
+                    .await
+                    .map_err(|error| after_plan_effect(error, effect_seen))?;
+                outcomes[index] = Outcome::Complete;
+                reported.push(StepOutcome {
+                    creation: None,
+                    step: Step::single(index),
+                    command: op.name(),
+                    sensitive_input: true,
+                    outcomes: vec![Outcome::Complete],
+                    attribution: Attribution::PerCommand,
+                    stdout: bytes,
+                    stderr: Vec::new(),
+                });
+                dispatches += 1;
+                continue;
+            }
 
             let sensitive_input = command.summary().sensitive_argument_count() > 0;
             let block = sender
@@ -890,24 +938,6 @@ impl Execution<'_> {
                     bytes
                 })
                 .collect::<Vec<u8>>();
-            if let Op::NewSession(request) = op {
-                if !succeeded {
-                    return Err(after_plan_effect(
-                        libtmux_core::Error::UnconfirmedCreation {
-                            status: None,
-                            late: false,
-                        }
-                        .into(),
-                        effect_seen,
-                    ));
-                }
-                let receipt = request
-                    .decode(sender.identity().socket_path(), &output)
-                    .map_err(|cause| after_plan_effect(cause.into(), effect_seen))?;
-                reported.push(StepOutcome::created_session(index, receipt, &mut bound));
-                effect_seen = true;
-                continue;
-            }
             let (stdout, stderr) = if succeeded {
                 (output, Vec::new())
             } else {

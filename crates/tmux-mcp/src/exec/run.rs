@@ -867,7 +867,18 @@ impl Run {
         generation: ServerGeneration,
         mut publish: impl FnMut(RunProgress<'_>),
     ) -> RunCollection {
+        let mut ended = RunOutcome::StreamLost;
         while let Some(chunk) = self.output.next_chunk().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(Error::PaneOutputEnded {
+                    cause: libtmux_tokio::control::PaneOutputEnd::PaneGone,
+                }) => {
+                    ended = RunOutcome::PaneClosed;
+                    break;
+                }
+                Err(_) => break,
+            };
             let finished = self.scanner.push(&chunk);
             publish(self.scanner.progress());
 
@@ -878,9 +889,7 @@ impl Run {
             }
         }
 
-        let view = self
-            .scanner
-            .unfinished(RunOutcome::PaneClosed, self.pane.id().to_string());
+        let view = self.scanner.unfinished(ended, self.pane.id().to_string());
         let proof = RunProof {
             pane: self.pane,
             server,

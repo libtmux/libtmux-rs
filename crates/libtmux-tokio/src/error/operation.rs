@@ -75,8 +75,8 @@ pub(super) fn core_version(error: &libtmux_core::Error) -> Option<&libtmux_core:
         CoreError::Cleanup { primary, .. } | CoreError::CleanupPending(primary) => {
             core_version(primary)
         }
-        CoreError::AdmissionFailed { source } => core_version(source),
-        CoreError::ObservationFailed { source, .. }
+        CoreError::AdmissionFailed { source }
+        | CoreError::ObservationFailed { source, .. }
         | CoreError::CreationInterrupted { source, .. } => core_version(source),
         _ => None,
     }
@@ -104,8 +104,9 @@ pub(super) fn core_kind(error: &libtmux_core::Error) -> ErrorKind {
         | CoreError::UnconfirmedCreation { .. } => ErrorKind::Decode,
         CoreError::WrongEndpoint => ErrorKind::InvalidInput,
         CoreError::PaneNotFound(_) | CoreError::StalePane => ErrorKind::ObjectGone,
-        CoreError::ObservationFailed { source, .. } => core_kind(source),
-        CoreError::AdmissionFailed { source } => core_kind(source),
+        CoreError::ObservationFailed { source, .. } | CoreError::AdmissionFailed { source } => {
+            core_kind(source)
+        }
         CoreError::Cleanup { primary, .. } | CoreError::CleanupPending(primary) => {
             core_kind(primary)
         }

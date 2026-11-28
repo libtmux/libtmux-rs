@@ -557,6 +557,11 @@ impl Server {
     }
 
     #[cfg(feature = "control-mode")]
+    pub(crate) fn native_source(&self) -> &Self {
+        self.core.native_server().unwrap_or(self)
+    }
+
+    #[cfg(feature = "control-mode")]
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
@@ -1186,12 +1191,21 @@ impl Server {
     /// reads, failed hooks and incomplete viewport output. Failed reads never
     /// expose a partial screen through their error.
     pub async fn capture(&self, key: &libtmux_core::PaneKey) -> Result<Vec<u8>, Error> {
+        self.capture_grid(key, false).await
+    }
+
+    pub(crate) async fn capture_grid(
+        &self,
+        key: &libtmux_core::PaneKey,
+        escapes: bool,
+    ) -> Result<Vec<u8>, Error> {
         if key.server_identity() != self.identity() {
             return Err(libtmux_core::Error::WrongEndpoint.into());
         }
         let deadline = self.core.operation_deadline();
         let observed = self.observe_pane_until(key.id(), deadline).await?;
-        let arguments = observed.capture_arguments(self.socket_path(), key)?;
+        let arguments =
+            observed.capture_arguments_with_escapes(self.socket_path(), key, escapes)?;
         let (result, late) = self
             .core
             .execute_operation(
@@ -2170,6 +2184,14 @@ impl Server {
     ) -> Result<Self, Error> {
         self.core
             .require_same_server(sender.identity(), "over_control_mode")?;
+        if let Some(expected) = self.core.expected_generation() {
+            if expected != sender.generation() {
+                return Err(Error::ServerGenerationChanged {
+                    expected,
+                    found: sender.generation(),
+                });
+            }
+        }
         let capabilities = self.core.capabilities().await?.clone();
 
         Ok(Self {

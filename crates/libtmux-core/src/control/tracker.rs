@@ -21,6 +21,7 @@ struct Request {
     input_blocks: usize,
     last_empty_success: bool,
     succeeded: bool,
+    hook_failures: usize,
     challenge: Option<Challenge>,
 }
 
@@ -149,6 +150,7 @@ impl Tracker {
             input_blocks: 0,
             last_empty_success: false,
             succeeded: true,
+            hook_failures: 0,
             challenge: None,
         });
         Ok(())
@@ -200,6 +202,16 @@ impl Tracker {
             }
             break;
         }
+    }
+
+    /// Borrow a complete initial input block before a cancellation discards it.
+    #[must_use]
+    pub fn first_input_block(&self, token: u64) -> Option<&ControlBlock> {
+        self.pending
+            .iter()
+            .find(|request| request.token == token)?
+            .blocks
+            .first()
     }
 
     /// Consume arbitrary read chunks without exceeding a record budget.
@@ -282,6 +294,7 @@ impl Tracker {
                 Completion::Lost {
                     token: request.token,
                     fault,
+                    first_block: request.blocks.into_iter().next(),
                 }
             });
         }
@@ -476,6 +489,10 @@ impl Tracker {
                 }
                 self.opening_block = true;
                 self.open_if_ready();
+            } else if !succeeded {
+                if let Some(request) = self.pending.front_mut() {
+                    request.hook_failures = request.hook_failures.saturating_add(1);
+                }
             }
             return Ok(());
         }
@@ -537,6 +554,7 @@ impl Tracker {
                 token: request.token,
                 reply: ControlReply {
                     blocks: request.blocks,
+                    hook_failures: request.hook_failures,
                 },
             }
         });

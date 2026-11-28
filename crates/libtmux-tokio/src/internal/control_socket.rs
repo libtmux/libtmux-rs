@@ -1,8 +1,11 @@
 use std::ffi::OsString;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read as _, Seek as _};
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 use std::os::unix::net::SocketAddr;
 use std::path::Path;
+
+use super::process::LaunchContext;
 
 use crate::Error;
 
@@ -10,7 +13,56 @@ pub(crate) struct PinnedSocket {
     directory: tempfile::TempDir,
 }
 
+pub(crate) struct PinnedExecutable {
+    path: OsString,
+    _source: File,
+}
+
+impl PinnedExecutable {
+    pub(crate) fn path(&self) -> &std::ffi::OsStr {
+        &self.path
+    }
+}
+
 impl PinnedSocket {
+    pub(crate) fn pin_executable(&self, launch: &LaunchContext) -> Result<PinnedExecutable, Error> {
+        let path = launch
+            .resolved_executable()
+            .ok_or_else(|| Error::control_mode(io::ErrorKind::NotFound.into()))?;
+        let mut source = File::open(path).map_err(Error::control_mode)?;
+        let mut magic = [0; 4];
+        let read = source.read(&mut magic).map_err(Error::control_mode)?;
+        source.rewind().map_err(Error::control_mode)?;
+        #[cfg(target_os = "linux")]
+        if read == magic.len() && magic == *b"\x7fELF" {
+            use std::os::fd::AsRawFd as _;
+            return Ok(PinnedExecutable {
+                path: format!("/proc/self/fd/{}", source.as_raw_fd()).into(),
+                _source: source,
+            });
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = read;
+        let copy = self.directory.path().join("client");
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o500)
+                .open(&copy)
+                .map_err(Error::control_mode)?;
+            io::copy(&mut source, &mut output).map_err(Error::control_mode)?;
+            output.sync_all().map_err(Error::control_mode)?;
+            output
+                .set_permissions(std::fs::Permissions::from_mode(0o500))
+                .map_err(Error::control_mode)?;
+        }
+        Ok(PinnedExecutable {
+            path: copy.into_os_string(),
+            _source: source,
+        })
+    }
     pub(crate) fn new(socket: &Path) -> Result<Self, Error> {
         let socket = socket.canonicalize().map_err(Error::control_mode)?;
         let metadata = std::fs::symlink_metadata(&socket).map_err(Error::control_mode)?;

@@ -17,6 +17,7 @@ pub(super) struct Ring {
     /// Filter state immediately before `bytes[0]`.
     pub(super) checkpoint: TextFilter,
     pub(super) closed: bool,
+    pub(super) lost: bool,
 }
 
 #[derive(Debug)]
@@ -40,11 +41,18 @@ impl Ring {
             start: 0,
             checkpoint: TextFilter::new(),
             closed: false,
+            lost: false,
         }
     }
 
     pub(super) fn end(&self) -> u64 {
         self.start + self.bytes.len() as u64
+    }
+
+    pub(super) fn gap(&mut self) {
+        self.start = self.end().saturating_add(1);
+        self.bytes.clear();
+        self.checkpoint = TextFilter::new();
     }
 
     pub(super) fn push(&mut self, chunk: &[u8]) {

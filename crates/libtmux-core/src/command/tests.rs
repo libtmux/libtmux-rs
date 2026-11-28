@@ -176,3 +176,36 @@ fn a_percent_token_is_quoted_unless_tmux_reads_it_as_a_pane_id() {
         "display-message x%1:off",
     );
 }
+
+#[test]
+fn control_records_refuse_embedded_delimiters_and_bound_quoting_before_rendering() {
+    for value in ["line\nnext", "line\rnext", "nul\0tail"] {
+        assert!(
+            Command::new("display-message")
+                .arg(value)
+                .control_mode_line()
+                .is_none()
+        );
+        assert!(Command::new(value).control_mode_line().is_none());
+    }
+    let command = Command::new("display-message").arg("a\"b");
+    let line = command.control_mode_line().unwrap();
+    assert_eq!(
+        command.control_mode_line_bounded(line.len()).as_deref(),
+        Some(line.as_str())
+    );
+    assert!(command.control_mode_line_bounded(line.len() - 1).is_none());
+    assert!(
+        Command::new("display-message")
+            .arg("x".repeat(4096))
+            .control_mode_line_bounded(64)
+            .is_none()
+    );
+    let chain = CommandChain::new(Command::new("one")).then(Command::new("two").arg("space here"));
+    let line = chain.control_mode_line().unwrap();
+    assert_eq!(
+        chain.control_mode_line_bounded(line.len()).as_deref(),
+        Some(line.as_str())
+    );
+    assert!(chain.control_mode_line_bounded(line.len() - 1).is_none());
+}

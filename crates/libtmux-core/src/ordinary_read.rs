@@ -192,6 +192,25 @@ impl OrdinaryPaneObservation {
         .into())
     }
 
+    /// Encode the same checked viewport read, optionally retaining ANSI escapes.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the endpoint and generation mismatches checked by `capture_arguments`.
+    #[doc(hidden)]
+    pub fn capture_arguments_with_escapes(
+        &self,
+        socket: &Path,
+        key: &PaneKey,
+        escapes: bool,
+    ) -> Result<Vec<OsString>, Error> {
+        let mut arguments = self.capture_arguments(socket, key)?;
+        if escapes {
+            arguments.push(OsString::from("-e"));
+        }
+        Ok(arguments)
+    }
+
     /// Return the viewport bytes only after a successful, timely collection.
     ///
     /// # Errors

@@ -229,9 +229,15 @@ impl fmt::Debug for ControlBlock {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlReply {
     pub(super) blocks: Vec<ControlBlock>,
+    pub(super) hook_failures: usize,
 }
 
 impl ControlReply {
+    /// The number of failed hook blocks drained without retaining their payloads.
+    #[must_use]
+    pub const fn hook_failures(&self) -> usize {
+        self.hook_failures
+    }
     /// The acknowledged input blocks, in daemon order.
     #[must_use]
     pub fn blocks(&self) -> &[ControlBlock] {
@@ -244,10 +250,12 @@ impl ControlReply {
         self.blocks
     }
 
-    /// Whether every input block succeeded.
+    /// Whether every input and hook block in this drain succeeded.
     #[must_use]
     pub fn succeeded(&self) -> bool {
-        !self.blocks.is_empty() && self.blocks.iter().all(ControlBlock::succeeded)
+        !self.blocks.is_empty()
+            && self.hook_failures == 0
+            && self.blocks.iter().all(ControlBlock::succeeded)
     }
 }
 
@@ -311,6 +319,8 @@ pub enum Completion {
         token: u64,
         /// The terminal protocol fault.
         fault: ControlFault,
+        /// The first complete input block, if it preceded the failure.
+        first_block: Option<ControlBlock>,
     },
 }
 

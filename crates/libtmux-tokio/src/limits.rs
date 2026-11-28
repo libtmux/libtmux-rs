@@ -248,6 +248,11 @@ impl Default for ControlClientLimits {
 pub struct ControlLimits {
     pub(crate) max_line_bytes: usize,
     pub(crate) max_block_bytes: usize,
+    pub(crate) max_reply_blocks: usize,
+    pub(crate) max_pending_requests: usize,
+    pub(crate) max_events: usize,
+    pub(crate) max_event_bytes: usize,
+    pub(crate) drain_timeout: Duration,
 }
 
 #[cfg(feature = "control-mode")]
@@ -279,6 +284,53 @@ impl ControlLimits {
         }
     }
 
+    /// Set the number of input and hook blocks allowed before a request fence.
+    #[must_use]
+    pub const fn max_reply_blocks(mut self, blocks: usize) -> Self {
+        self.max_reply_blocks = blocks;
+        self
+    }
+
+    /// Set the total number of queued, active and draining requests.
+    #[must_use]
+    pub const fn max_pending_requests(mut self, requests: usize) -> Self {
+        self.max_pending_requests = requests;
+        self
+    }
+
+    /// Set the number of notices retained while the subscriber is idle.
+    #[must_use]
+    pub const fn max_events(mut self, events: usize) -> Self {
+        self.max_events = events;
+        self
+    }
+
+    /// Set the wire-byte budget represented by retained notices.
+    #[must_use]
+    pub const fn max_event_bytes(mut self, bytes: usize) -> Self {
+        self.max_event_bytes = bytes;
+        self
+    }
+
+    /// Set how long a cancelled request may drain before the connection closes.
+    #[must_use]
+    pub const fn drain_timeout(mut self, timeout: Duration) -> Self {
+        self.drain_timeout = timeout;
+        self
+    }
+
+    pub(crate) const fn shared(self) -> libtmux_core::control::ControlLimits {
+        libtmux_core::control::ControlLimits {
+            max_line_bytes: self.max_line_bytes,
+            max_reply_bytes: self.max_block_bytes,
+            max_reply_blocks: self.max_reply_blocks,
+            max_pending_requests: self.max_pending_requests,
+            max_events: self.max_events,
+            max_event_bytes: self.max_event_bytes,
+            drain_timeout: self.drain_timeout,
+        }
+    }
+
     /// The budget for a single protocol line.
     #[must_use]
     pub const fn line_bytes(self) -> usize {
@@ -298,6 +350,11 @@ impl Default for ControlLimits {
         Self {
             max_line_bytes: Self::DEFAULT_LINE_BYTES,
             max_block_bytes: Self::DEFAULT_BLOCK_BYTES,
+            max_reply_blocks: 256,
+            max_pending_requests: 16,
+            max_events: 256,
+            max_event_bytes: 4 * 1024 * 1024,
+            drain_timeout: Duration::from_secs(1),
         }
     }
 }

@@ -136,33 +136,20 @@ pub enum ControlModeErrorKind {
     /// writing, tmux may execute it. The connection ends rather than reuse a
     /// possibly partial line, so this does not prove a mutation is safe to retry.
     TimedOut,
-    /// The caller stopped reading events, so the connection could not reach
-    /// this command's reply.
+    /// A retained error kind from an earlier subscriber backpressure policy.
     ///
-    /// A reply arrives on the connection the events arrive on. The connection
-    /// holds what a caller has not taken and keeps reading while a reply is
-    /// outstanding, but not without limit, and past that limit it stops rather
-    /// than growing. The events remain held and the connection carries on once
-    /// they are taken.
-    ///
-    /// A new request can be refused before it is written, but an already-live
-    /// request gets the same error after crossing the write boundary. This
-    /// kind therefore does not prove that a mutation is safe to replay. Drain
-    /// the events before sending more work, or watch from a task of its own so
-    /// the two never contend.
+    /// Bounded subscribers now report [`Error::ControlGap`] while replies progress.
     Unread,
-    /// The command contains an argument no control-mode line can carry.
+    /// The command cannot be represented safely on a shared control connection.
     ///
     /// Control mode is a text protocol, so an argument that is not UTF-8
-    /// cannot be sent over it even though the same command would run fine as
-    /// a subprocess.
+    /// cannot be sent over it. Arbitrary text projections and scripts also
+    /// need an ordinary native client because they can imitate frame records.
     UnrepresentableCommand,
-    /// A subscription name was empty, or contained a colon.
+    /// A subscription label or target cannot be represented safely.
     ///
-    /// tmux splits the subscription argument on its first colon, so a name
-    /// carrying one names something other than what was asked for and takes
-    /// the rest of the request with it. Refused here rather than sent,
-    /// because tmux accepts the result and reports no error.
+    /// Names are ASCII tokens and targets are typed IDs or explicit scopes.
+    /// Other labels can change the meaning of tmux's unescaped event records.
     InvalidSubscriptionName,
     /// The command would hold the connection's one command queue.
     ///
@@ -377,6 +364,32 @@ pub use libtmux_core::IdParseError;
 #[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A bounded subscriber missed notifications while command reads continued.
+    #[cfg(feature = "control-mode")]
+    #[error("control subscriber missed {dropped} notifications (pause included: {included_pause})")]
+    ControlGap {
+        /// The number of discarded notices.
+        dropped: usize,
+        /// Whether a discarded notice marked a pause boundary.
+        included_pause: bool,
+    },
+
+    /// The persistent control protocol could not complete a verified drain.
+    #[cfg(feature = "control-mode")]
+    #[error("{fault}")]
+    ControlProtocol {
+        /// Framing or admission metadata without payload bytes.
+        fault: libtmux_core::control::ControlFault,
+    },
+
+    /// A pane stream ended with an observed terminal cause.
+    #[cfg(feature = "control-mode")]
+    #[error("pane output ended ({cause:?})")]
+    PaneOutputEnded {
+        /// The observed end condition.
+        cause: crate::control::PaneOutputEnd,
+    },
+
     /// A shared operation's typed reply or version failure.
     #[error("{source}")]
     CoreOperation {
@@ -1204,15 +1217,6 @@ impl Error {
         Self::ControlModeFrameTooLarge { frame, limit }
     }
 
-    /// Nobody took the events, so the reply could not be reached.
-    #[cfg(feature = "control-mode")]
-    pub(crate) const fn control_mode_unread() -> Self {
-        Self::ControlMode {
-            kind: ControlModeErrorKind::Unread,
-            source: None,
-        }
-    }
-
     /// A subscription name tmux would read as something else.
     #[cfg(feature = "control-mode")]
     pub(crate) const fn control_mode_invalid_subscription() -> Self {
@@ -1508,6 +1512,25 @@ impl fmt::Debug for Error {
     )]
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "control-mode")]
+            Self::ControlGap {
+                dropped,
+                included_pause,
+            } => formatter
+                .debug_struct("ControlGap")
+                .field("dropped", dropped)
+                .field("included_pause", included_pause)
+                .finish(),
+            #[cfg(feature = "control-mode")]
+            Self::ControlProtocol { fault } => formatter
+                .debug_tuple("ControlProtocol")
+                .field(fault)
+                .finish(),
+            #[cfg(feature = "control-mode")]
+            Self::PaneOutputEnded { cause } => formatter
+                .debug_tuple("PaneOutputEnded")
+                .field(cause)
+                .finish(),
             Self::CoreOperation { source } => formatter
                 .debug_tuple("CoreOperation")
                 .field(source)

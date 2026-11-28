@@ -73,10 +73,15 @@ async fn settle_stream(
         .await
         .expect("a settle command is sent");
     loop {
-        let chunk = tokio::time::timeout(Duration::from_secs(5), output.next_chunk())
+        let chunk = match tokio::time::timeout(Duration::from_secs(5), output.next_chunk())
             .await
             .expect("settle output arrives")
-            .expect("the stream is alive");
+            .expect("the stream is alive")
+        {
+            Ok(chunk) => chunk,
+            Err(libtmux_tokio::Error::ControlGap { .. }) => continue,
+            Err(error) => panic!("settle stream failed: {error}"),
+        };
         if String::from_utf8_lossy(&chunk).contains(marker) {
             break;
         }
@@ -104,7 +109,7 @@ async fn commands_travel_down_one_connection() {
 
     // No process spawn per command: these go down the connection already open.
     let listed = control
-        .send(Command::new("list-windows").arg("-F").arg("#{window_name}"))
+        .send(Command::new("list-windows").arg("-F").arg("#{window_id}"))
         .await
         .expect("the command is answered");
     assert!(listed.succeeded());
@@ -243,7 +248,7 @@ async fn the_server_reports_changes_as_they_happen() {
     // Acting on what arrived is the reason the halves are separate: this send
     // happens while the event stream is still borrowed by the loop above.
     let listed = commands
-        .send(Command::new("list-windows").arg("-F").arg("#{window_name}"))
+        .send(Command::new("list-windows").arg("-F").arg("#{window_id}"))
         .await
         .expect("a command sent in reaction to an event is answered");
     assert!(listed.succeeded());
@@ -468,7 +473,7 @@ async fn either_half_keeps_the_connection_alive_on_its_own() {
     drop(events);
     assert!(
         commands
-            .send(Command::new("list-windows"))
+            .send(Command::new("list-windows").arg("-F").arg("#{window_id}"))
             .await
             .expect("the connection outlives the events handle")
             .succeeded(),
@@ -501,7 +506,10 @@ async fn shutting_down_does_not_wait_for_a_sender_that_is_still_alive() {
     // The sender outlives it and reports the connection as gone rather than
     // waiting for an answer that is not coming.
     assert!(
-        commands.send(Command::new("list-windows")).await.is_err(),
+        commands
+            .send(Command::new("list-windows").arg("-F").arg("#{window_id}"))
+            .await
+            .is_err(),
         "a command sent after shutdown fails rather than hangs",
     );
 
@@ -552,7 +560,8 @@ async fn one_pane_can_be_watched_without_the_protocol_showing() {
         let chunk = tokio::time::timeout(Duration::from_secs(10), output.next_chunk())
             .await
             .expect("the pane keeps writing")
-            .expect("the pane is still open");
+            .expect("the pane is still open")
+            .expect("output retains continuity");
         collected.extend_from_slice(&chunk);
     }
 
@@ -647,7 +656,7 @@ async fn a_command_that_cannot_be_a_line_is_refused_before_it_is_sent() {
     // The connection is untouched: nothing was written.
     assert!(
         control
-            .send(Command::new("list-windows"))
+            .send(Command::new("list-windows").arg("-F").arg("#{window_id}"))
             .await
             .expect("the connection still works")
             .succeeded(),
@@ -898,7 +907,8 @@ async fn a_pane_created_after_narrowing_is_muted_too() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut seen = Vec::new();
     while !String::from_utf8_lossy(&seen).contains("still-mine") {
-        let Ok(Some(chunk)) = tokio::time::timeout_at(deadline, output.next_chunk()).await else {
+        let Ok(Some(Ok(chunk))) = tokio::time::timeout_at(deadline, output.next_chunk()).await
+        else {
             panic!("the watched pane's marker never arrived");
         };
         seen.extend_from_slice(&chunk);
@@ -1068,26 +1078,19 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
 
     // `events` is held and never polled, which is what a caller awaiting a
     // reply does for as long as the await lasts.
-    // Either answer is fine and the point is that one arrives. A caller who
-    // will not read has asked for something the connection cannot always give
-    // -- a reply travels the way the events do -- so past what it can hold it
-    // says so rather than waiting to be rescued by the caller who is waiting
-    // for it. What it must never do is neither.
+    // Bounded notices can be dropped, but a reply still makes progress.
     let outcome = tokio::time::timeout(
         Duration::from_secs(10),
-        commands.send(Command::new("list-windows")),
+        commands.send(Command::new("list-windows").arg("-F").arg("#{window_id}")),
     )
     .await
     .expect("an answer arrives rather than a wait that never ends");
 
-    match outcome {
-        Ok(answered) => assert!(answered.succeeded()),
-        Err(refused) => assert_eq!(
-            refused.kind(),
-            libtmux_tokio::ErrorKind::Refused,
-            "the connection says why rather than stalling: {refused:?}",
-        ),
-    }
+    assert!(
+        outcome
+            .expect("subscriber idleness does not refuse commands")
+            .succeeded()
+    );
     assert!(
         !commands.is_closed(),
         "the connection is not closed either way"
@@ -1144,93 +1147,60 @@ async fn replies_arrive_when_a_caller_only_ever_sends() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A slow reader of one pane's output must not be given gaps.
-///
-/// `Pane::stream_output` documents itself as the bytes that pane produced, in
-/// order. Today the connection parking on a full event queue is what makes
-/// that true: the reader stops, tmux stops writing, and nothing is lost. Any
-/// change that keeps the reader moving under backpressure threatens it, and a
-/// gap here is invisible without a counted sequence to check against.
+/// A slow subscriber cannot stop replies and must be told what it lost.
 #[tokio::test]
-async fn a_slow_reader_of_one_pane_is_given_every_byte() {
-    use libtmux_tokio::{SplitDirection, SplitOptions};
-
-    const LAST: u32 = 50_000;
-
+async fn a_slow_reader_receives_a_gap_while_replies_keep_progressing() {
+    use libtmux_tokio::{ControlLimits, Error, SplitDirection, SplitOptions};
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let Some(guard) = versions::control_fixture(guard).await else {
         return;
     };
     let session = guard.session("counted").await.expect("session");
-    let window = session
-        .windows()
-        .await
-        .expect("windows")
-        .into_iter()
-        .next()
-        .expect("one window");
-
-    // The pane waits before it counts and stays alive after, so the stream is
-    // attached for the whole sequence: a pane that has already finished has
-    // nothing left to send, and one that exits takes its window with it.
+    let window = session.windows().await.expect("windows").remove(0);
     let counted = window
-        .split(
-            SplitOptions::new(SplitDirection::Below)
-                .command(format!("sh -c 'sleep 2; seq 1 {LAST}; sleep 60'")),
-        )
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 2; seq 1 50000; sleep 60"))
         .await
-        .expect("pane is created");
-
-    let mut output = counted.stream_output().await.expect("the pane streams");
-
-    // Reading slower than the pane writes is the whole condition: a reader
-    // that keeps up never fills the queue and never exercises the policy.
-    let mut received = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
-    while tokio::time::Instant::now() < deadline {
-        let Ok(chunk) = tokio::time::timeout(Duration::from_secs(5), output.next_chunk()).await
-        else {
-            break;
-        };
-        let Some(chunk) = chunk else { break };
-        received.extend_from_slice(&chunk);
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        if received_reaches(&received, LAST) {
-            break;
+        .expect("counted pane");
+    let mut output = counted
+        .stream_output_with_limits(ControlLimits::default().max_events(2).max_event_bytes(1024))
+        .await
+        .expect("bounded stream");
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let reply = tokio::time::timeout(
+        Duration::from_secs(5),
+        output.sender().send(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("reply-after-idle"),
+        ),
+    )
+    .await
+    .expect("idle subscriber cannot stop replies")
+    .expect("reply drains");
+    assert!(reply.succeeded());
+    let gap = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match output.next_chunk().await {
+                Some(Ok(_)) => {}
+                Some(Err(Error::ControlGap { dropped, .. })) => break dropped,
+                other => panic!("expected explicit subscriber gap: {other:?}"),
+            }
         }
-    }
-
-    // tmux wraps pane output at the pane width, so the bytes carry the
-    // sequence with line endings the terminal chose rather than the ones
-    // `seq` wrote. Checking that every number appears in order tolerates that
-    // without tolerating a missing number.
-    let text = String::from_utf8_lossy(&received);
-    let mut expected = 1u32;
-    for number in text
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|s| !s.is_empty())
-    {
-        if number.parse::<u32>() == Ok(expected) {
-            expected += 1;
-        }
-    }
-    assert_eq!(
-        expected - 1,
-        LAST,
-        "the stream skipped from {} onward; {} bytes arrived",
-        expected,
-        received.len(),
+    })
+    .await
+    .expect("bounded retained notices precede their gap");
+    assert!(gap > 0);
+    let snapshot = output
+        .snapshot(|_| {})
+        .await
+        .expect("independent generation-bound grid capture");
+    assert!(
+        snapshot
+            .iter()
+            .any(|line| line.to_string_lossy().contains("50000"))
     );
-
-    output.shutdown().await.expect("the connection shuts down");
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-/// Whether the counted sequence has been seen through to its last number.
-fn received_reaches(received: &[u8], last: u32) -> bool {
-    let text = String::from_utf8_lossy(received);
-    text.split(|c: char| !c.is_ascii_digit())
-        .any(|piece| piece.parse::<u32>() == Ok(last))
+    output.shutdown().await.expect("connection closes");
+    guard.shutdown().await.expect("fixture closes");
 }
 
 #[tokio::test]
@@ -1320,10 +1290,14 @@ async fn observed_pane_death_ends_the_stream_via_layout_change() {
     watched.kill().await.expect("the watched pane is killed");
 
     let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
-    assert_eq!(
-        ended,
-        Ok(None),
-        "next_chunk must end, not hang, once the watched pane is confirmed gone",
+    assert!(
+        matches!(
+            ended,
+            Ok(Some(Err(libtmux_tokio::Error::PaneOutputEnded {
+                cause: libtmux_tokio::control::PaneOutputEnd::PaneGone
+            })))
+        ),
+        "a checked pane end must carry its cause: {ended:?}",
     );
 
     let _ = survivor;
@@ -1377,10 +1351,14 @@ async fn observed_pane_death_ends_the_stream_via_window_close() {
     watched.kill().await.expect("the watched pane is killed");
 
     let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
-    assert_eq!(
-        ended,
-        Ok(None),
-        "next_chunk must end, not hang, once the watched pane's window closes under it",
+    assert!(
+        matches!(
+            ended,
+            Ok(Some(Err(libtmux_tokio::Error::PaneOutputEnded {
+                cause: libtmux_tokio::control::PaneOutputEnd::PaneGone
+            })))
+        ),
+        "a checked pane end must carry its cause: {ended:?}",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -1430,10 +1408,14 @@ async fn observed_pane_death_in_a_never_active_window_ends_the_stream() {
     watched.kill().await.expect("the watched pane is killed");
 
     let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
-    assert_eq!(
-        ended,
-        Ok(None),
-        "next_chunk must end, not hang, once a never-active window closes under it",
+    assert!(
+        matches!(
+            ended,
+            Ok(Some(Err(libtmux_tokio::Error::PaneOutputEnded {
+                cause: libtmux_tokio::control::PaneOutputEnd::PaneGone
+            })))
+        ),
+        "a checked pane end must carry its cause: {ended:?}",
     );
 
     assert!(
@@ -1485,9 +1467,16 @@ async fn pane_output_sender_reaches_the_streams_own_connection() {
         .await
         .expect("the muted marker is sent");
 
-    // Nothing should arrive while muted; a short, bounded wait is the proof,
-    // not a hang -- the deadline running out is the expected outcome here.
-    let muted = tokio::time::timeout(Duration::from_millis(500), output.next_chunk()).await;
+    // A pause boundary is explicit; no pane bytes may follow while muted.
+    let muted = tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            match output.next_chunk().await {
+                Some(Err(libtmux_tokio::Error::ControlGap { .. })) => {}
+                item => return item,
+            }
+        }
+    })
+    .await;
     assert!(
         muted.is_err(),
         "no chunk should arrive on a stream muted through its own sender: {muted:?}",
@@ -1504,7 +1493,11 @@ async fn pane_output_sender_reaches_the_streams_own_connection() {
 
     let resumed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let chunk = output.next_chunk().await.expect("the stream is still open");
+            let chunk = match output.next_chunk().await.expect("the stream is still open") {
+                Ok(chunk) => chunk,
+                Err(libtmux_tokio::Error::ControlGap { .. }) => continue,
+                Err(error) => panic!("stream failed: {error}"),
+            };
             if String::from_utf8_lossy(&chunk).contains("unmuted-via-sender") {
                 return;
             }
@@ -1673,24 +1666,29 @@ async fn a_subscription_reports_a_change_under_its_own_name() {
         .split();
 
     commands
-        .subscribe("title", &Subscription::Session, "#{session_name}")
+        .subscribe("count", &Subscription::Session, "#{session_windows}")
         .await
         .expect("the subscription is accepted");
 
     assert_eq!(
-        next_report(&mut events, "title", Duration::from_secs(15)).await,
-        Some("watched".to_owned()),
+        next_report(&mut events, "count", Duration::from_secs(15)).await,
+        Some("1".to_owned()),
         "the first report carries the value as it already is"
     );
 
     commands
-        .send(Command::new("rename-session").arg("renamed"))
+        .send(
+            Command::new("new-window")
+                .arg("-d")
+                .arg("-t")
+                .arg(format!("{}:", session.id())),
+        )
         .await
-        .expect("the session is renamed");
+        .expect("a second window is created");
 
     assert_eq!(
-        next_report(&mut events, "title", Duration::from_secs(15)).await,
-        Some("renamed".to_owned()),
+        next_report(&mut events, "count", Duration::from_secs(15)).await,
+        Some("2".to_owned()),
         "a change is reported under the same name"
     );
 
@@ -1719,29 +1717,34 @@ async fn unsubscribing_stops_the_reports() {
         .split();
 
     commands
-        .subscribe("title", &Subscription::Session, "#{session_name}")
+        .subscribe("count", &Subscription::Session, "#{session_windows}")
         .await
         .expect("the subscription is accepted");
     assert!(
-        next_report(&mut events, "title", Duration::from_secs(15))
+        next_report(&mut events, "count", Duration::from_secs(15))
             .await
             .is_some(),
         "the subscription reports before it is removed"
     );
 
     commands
-        .unsubscribe("title")
+        .unsubscribe("count")
         .await
         .expect("the subscription is removed");
     commands
-        .send(Command::new("rename-session").arg("renamed"))
+        .send(
+            Command::new("new-window")
+                .arg("-d")
+                .arg("-t")
+                .arg(format!("{}:", session.id())),
+        )
         .await
-        .expect("the session is renamed");
+        .expect("a second window is created");
 
     // Three times the interval tmux coalesces to, so a report that was merely
     // slow would have arrived.
     assert_eq!(
-        next_report(&mut events, "title", Duration::from_secs(3)).await,
+        next_report(&mut events, "count", Duration::from_secs(3)).await,
         None,
         "nothing is reported once the subscription is gone"
     );
@@ -1774,7 +1777,7 @@ async fn a_subscription_format_may_contain_colons() {
         .subscribe(
             "pair",
             &Subscription::Session,
-            "#{session_name}:#{session_windows}",
+            "#{session_id}:#{session_windows}",
         )
         .await
         .expect("the subscription is accepted");
@@ -1783,7 +1786,8 @@ async fn a_subscription_format_may_contain_colons() {
         .await
         .expect("the subscription reports");
     assert_eq!(
-        reported, "colonised:1",
+        reported,
+        format!("{}:1", session.id()),
         "both halves of the format arrive, colon and all"
     );
 
@@ -1810,9 +1814,9 @@ async fn a_subscription_name_tmux_would_misread_is_refused() {
         .expect("control mode attaches")
         .split();
 
-    for name in ["with:colon", ""] {
+    for name in ["with:colon", "", "with space", "with\nnewline", "%exit"] {
         let refused = commands
-            .subscribe(name, &Subscription::Session, "#{session_name}")
+            .subscribe(name, &Subscription::Session, "#{session_windows}")
             .await
             .expect_err("a name tmux would misread is refused");
         assert_eq!(refused.kind(), libtmux_tokio::ErrorKind::InvalidInput);
@@ -2063,7 +2067,8 @@ async fn a_pane_is_watched_wherever_it_now_lives() {
     let chunk = tokio::time::timeout(Duration::from_secs(10), output.next_chunk())
         .await
         .expect("a relocated pane still reports its output")
-        .expect("the pane is still open");
+        .expect("the pane is still open")
+        .expect("output retains continuity");
     assert!(!chunk.is_empty(), "the relocated pane wrote something");
 
     output.shutdown().await.expect("the stream shuts down");

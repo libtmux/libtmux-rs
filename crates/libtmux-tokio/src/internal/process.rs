@@ -17,7 +17,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 #[cfg(feature = "control-mode")]
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{ChildStdin, ChildStdout};
 #[cfg(feature = "control-mode")]
 use tokio::sync::{Notify, watch};
 
@@ -44,6 +44,12 @@ impl LaunchContext {
 
     pub(crate) fn with_current_dir(mut self, current_dir: impl Into<PathBuf>) -> Self {
         self.current_dir = Some(current_dir.into());
+        self
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn with_executable(mut self, executable: impl Into<OsString>) -> Self {
+        self.executable = executable.into();
         self
     }
 
@@ -434,117 +440,157 @@ impl Drop for ControlClientPidGuard {
 
 #[cfg(feature = "control-mode")]
 pub(crate) struct PersistentChild {
-    // The group guard must drop while the unreaped leader still anchors its PGID.
     process_group: ProcessGroupGuard,
-    child: Child,
+    child: super::subprocess::NativeChild,
+    stdin: Option<ChildStdin>,
+    stdout: Option<ChildStdout>,
     stopped: watch::Receiver<bool>,
     request_id: RequestId,
     command: CommandSummary,
-    // Admission remains active until process cleanup has finished.
-    _registration: PersistentRegistration,
-    // Removes this pid from the owned set once dropped; its ordering
-    // relative to the other fields does not matter, since nothing here reads
-    // it back.
-    _pid_guard: Option<ControlClientPidGuard>,
-    _socket_carrier: tempfile::TempDir,
-    version: crate::TmuxVersion,
+    identity: libtmux_core::control::ControlIdentity,
 }
 
 #[cfg(feature = "control-mode")]
 impl PersistentChild {
-    pub(crate) fn spawn(
-        launch: &LaunchContext,
-        request: &CommandRequest,
+    pub(crate) async fn spawn(
+        launch: LaunchContext,
+        request: CommandRequest,
         reservation: PersistentReservation,
         control_client_pids: Arc<Mutex<std::collections::HashSet<u32>>>,
         socket_carrier: tempfile::TempDir,
-        version: crate::TmuxVersion,
+        executable: super::control_socket::PinnedExecutable,
+        identity: libtmux_core::control::ControlIdentity,
     ) -> Result<Self, Error> {
-        validate_request(launch, request)?;
-        let mut command = launch.command(request.argv());
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let child = command.spawn().map_err(|source| {
-            // The same test the subprocess path applies, so a missing tmux is
-            // `ExecutableNotFound` whichever path meets it first. Anything else
-            // stays a control-mode failure.
-            let executable_not_found = (source.kind() == io::ErrorKind::NotFound
-                && launch.current_dir().is_none_or(Path::is_dir))
-                || launch.executable_missing_from_path();
-            if executable_not_found {
-                Error::spawn(
-                    request.request_id().get(),
-                    request.summary().clone(),
-                    source,
-                    true,
-                )
-            } else {
-                Error::control_mode(source)
+        tokio::task::spawn_blocking(move || {
+            validate_request(&launch, &request)?;
+            let mut command = launch.command(request.argv());
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            let mut child = super::subprocess::NativeChild::spawn(
+                command.as_std_mut(),
+                Box::new(reservation.registration),
+            )
+            .map_err(Error::control_mode)?;
+            // Drop the group guard before the child can enter its fallback reaper.
+            let mut process_group = ProcessGroupGuard::new(child.id());
+            if let Some(pid) = child.id() {
+                control_client_pids
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(pid);
+                child.retain(ControlClientPidGuard {
+                    pids: control_client_pids,
+                    pid,
+                });
             }
-        })?;
-        let process_group = ProcessGroupGuard::new(child.id());
-        // `child.id()` is `None` only once the child has already been
-        // reaped, which cannot be true immediately after `spawn` returns.
-        let pid_guard = child.id().map(|pid| {
-            control_client_pids
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(pid);
-            ControlClientPidGuard {
-                pids: control_client_pids,
-                pid,
-            }
-        });
-
-        Ok(Self {
-            process_group,
-            child,
-            stopped: reservation.stopped,
-            request_id: request.request_id(),
-            command: request.summary().clone(),
-            _registration: reservation.registration,
-            _pid_guard: pid_guard,
-            _socket_carrier: socket_carrier,
-            version,
+            let pipes = (|| {
+                let native = child.child_mut()?;
+                let stdin = native.stdin.take().map(ChildStdin::from_std).transpose()?;
+                let stdout = native
+                    .stdout
+                    .take()
+                    .map(ChildStdout::from_std)
+                    .transpose()?;
+                Ok::<_, io::Error>((stdin, stdout))
+            })();
+            let (stdin, stdout) = match pipes {
+                Ok(pipes) => pipes,
+                Err(source) => {
+                    let primary = Error::control_mode(io::Error::from(source.kind()));
+                    let group = process_group.signal_checked();
+                    let kill = child.start_kill();
+                    let waited = child.wait_blocking();
+                    if waited.is_ok()
+                        || waited.as_ref().is_err_and(|source| {
+                            source.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error())
+                        })
+                    {
+                        process_group.disarm();
+                    }
+                    if let Err(cleanup) = control_cleanup(group, kill, waited) {
+                        return Err(Error::OperationAndCleanup {
+                            primary: Box::new(primary),
+                            cleanup: Box::new(cleanup),
+                        });
+                    }
+                    return Err(primary);
+                }
+            };
+            child.retain((socket_carrier, executable));
+            Ok(Self {
+                process_group,
+                child,
+                stdin,
+                stdout,
+                stopped: reservation.stopped,
+                request_id: request.request_id(),
+                command: request.summary().clone(),
+                identity,
+            })
         })
+        .await
+        .map_err(|_| Error::control_mode_closed())?
     }
 
-    pub(crate) const fn version(&self) -> &crate::TmuxVersion {
-        &self.version
+    pub(crate) fn version(&self) -> &crate::TmuxVersion {
+        self.identity.version()
     }
-
+    pub(crate) const fn identity(&self) -> &libtmux_core::control::ControlIdentity {
+        &self.identity
+    }
     pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
+        self.stdin.take()
     }
-
     pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.child.stdout.take()
+        self.stdout.take()
     }
-
     pub(crate) fn stopped(&self) -> watch::Receiver<bool> {
         self.stopped.clone()
     }
-
     pub(crate) fn shutdown_error(&self) -> Error {
         Error::executor_shutdown(self.request_id.get(), self.command.clone())
     }
 
     pub(crate) async fn terminate(&mut self) -> Result<(), Error> {
-        self.process_group.signal();
-        let _ = self.child.start_kill();
-        loop {
+        let group = self.process_group.signal_checked();
+        let kill = self.child.start_kill();
+        let waited = loop {
             match self.child.wait().await {
-                Ok(_) => {
-                    self.process_group.disarm();
-                    return Ok(());
-                }
                 Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-                Err(source) => return Err(Error::control_mode(source)),
+                result => break result,
+            }
+        };
+        if waited.is_ok()
+            || waited.as_ref().is_err_and(|source| {
+                source.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error())
+            })
+        {
+            self.process_group.disarm();
+        }
+        control_cleanup(group, kill, waited)
+    }
+}
+
+#[cfg(feature = "control-mode")]
+fn control_cleanup(
+    group: io::Result<()>,
+    kill: io::Result<()>,
+    waited: io::Result<std::process::ExitStatus>,
+) -> Result<(), Error> {
+    for (stage, result) in [
+        ("signal process group", group),
+        ("kill child", kill),
+        ("wait child", waited.map(|_| ())),
+    ] {
+        if let Err(source) = result {
+            if source.raw_os_error() != Some(rustix::io::Errno::CHILD.raw_os_error()) {
+                return Err(Error::control_mode(io::Error::new(source.kind(), stage)));
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(feature = "control-mode")]

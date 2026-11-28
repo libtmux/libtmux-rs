@@ -96,6 +96,51 @@ fn nested_input_blocks_and_hook_blocks_do_not_change_request_ownership() {
 }
 
 #[test]
+fn failed_hook_blocks_retain_only_outcome_metadata() {
+    let mut tracker = opened(ControlLimits::default());
+    tracker.register(1, FIRST, RequestKind::Ordinary).unwrap();
+    tracker.feed(b"%begin 0 2 1\ncreated\n%end 0 2 1\n%begin 0 3 0\nprivate-hook-failure\n%error 0 3 0\n").unwrap();
+    tracker.feed(first_fence()).unwrap();
+    let Some(Completion::Reply { reply, .. }) = tracker.next_completion() else {
+        panic!("reply");
+    };
+    assert!(!reply.succeeded());
+    assert_eq!(reply.hook_failures(), 1);
+    assert_eq!(reply.blocks().len(), 1);
+    assert_eq!(reply.blocks()[0].output(), b"created\n");
+    assert!(!format!("{reply:?}").contains("private-hook-failure"));
+}
+
+#[test]
+fn a_later_frame_failure_keeps_the_complete_initial_input_block() {
+    let mut tracker = opened(ControlLimits::default());
+    tracker.register(1, FIRST, RequestKind::Ordinary).unwrap();
+    assert_eq!(
+        tracker.feed(b"%begin 0 2 1\ncreated\n%end 0 2 1\n%begin 0 3 1\n%end 1 3 1\n"),
+        Err(ControlFault::WrongTerminator)
+    );
+    let Some(Completion::Lost {
+        first_block: Some(first),
+        ..
+    }) = tracker.next_completion()
+    else {
+        panic!("initial block is retained");
+    };
+    assert_eq!(first.output(), b"created\n");
+    let mut tracker = opened(ControlLimits::default());
+    tracker.register(1, FIRST, RequestKind::Ordinary).unwrap();
+    tracker.feed(b"%begin 0 2 1\npartial").unwrap();
+    assert!(tracker.eof().is_err());
+    assert!(matches!(
+        tracker.next_completion(),
+        Some(Completion::Lost {
+            first_block: None,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn deferred_fence_is_not_a_failed_user_block() {
     let mut tracker = opened(ControlLimits::default());
     tracker.register(1, FIRST, RequestKind::Ordinary).unwrap();
@@ -136,7 +181,7 @@ fn cancellation_does_not_disable_line_reply_or_block_budgets() {
     tracker.register(1, FIRST, RequestKind::Ordinary).unwrap();
     tracker.cancel(1);
     assert_eq!(
-        tracker.feed(&vec![b'x'; 129]),
+        tracker.feed(&[b'x'; 129]),
         Err(ControlFault::LineLimit { limit: 128 })
     );
 
@@ -194,7 +239,7 @@ fn reply_bytes_are_bounded_before_a_partial_record_finishes() {
     tracker.cancel(1);
     tracker.feed(b"%begin 0 2 1\n").unwrap();
     assert_eq!(
-        tracker.feed(&vec![b'x'; 129]),
+        tracker.feed(&[b'x'; 129]),
         Err(ControlFault::ReplyLimit { limit: 128 })
     );
 }
@@ -289,7 +334,8 @@ fn eof_fails_only_outstanding_live_requests() {
         tracker.next_completion(),
         Some(Completion::Lost {
             token: 2,
-            fault: ControlFault::Disconnected
+            fault: ControlFault::Disconnected,
+            ..
         })
     ));
     assert!(tracker.next_completion().is_none());

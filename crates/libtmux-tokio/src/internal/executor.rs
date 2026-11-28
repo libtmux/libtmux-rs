@@ -146,6 +146,14 @@ impl Future for ShutdownFuture {
 /// `DispatchFuture`. The consequence: opening a connection always forks tmux,
 /// including the connection that a `ControlModeExecutor` then dispatches over.
 pub(crate) trait Executor: Send + Sync + 'static {
+    #[cfg(feature = "control-mode")]
+    fn native_server(&self) -> Option<&crate::Server> {
+        None
+    }
+    #[cfg(feature = "control-mode")]
+    fn control_line_limit(&self) -> Option<usize> {
+        None
+    }
     fn execute(&self, request: CommandRequest) -> DispatchFuture;
 
     fn execute_operation(
