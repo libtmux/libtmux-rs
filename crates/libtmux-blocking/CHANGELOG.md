@@ -10,6 +10,13 @@ Notable changes to `libtmux-blocking`.
 
 ### Fixed
 
+- `Server::snapshots` preserves non-ASCII names when the caller uses the C
+  locale.
+- `ControlMode::attach` preserves session environment variables selected by
+  `update-environment`.
+- `ControlMode::attach` retries a pinned client's `-V` probe when a concurrent
+  fork temporarily retains its writable executable handle. The attachment's
+  deadline and cancellation still bound qualification.
 - **Breaking.** `ControlMode::send` and `ControlSender::send` refuse scripts,
   unqualified waits and arbitrary output before submission. Inspect
   `ControlError::policy_refusal` for the reason. Use `Server::capture` for
