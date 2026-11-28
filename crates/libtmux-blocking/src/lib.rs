@@ -64,9 +64,13 @@ impl CancellationToken {
 /// # Examples
 ///
 /// ```
+/// use std::time::{Duration, Instant};
 /// use libtmux_blocking::RequestOptions;
 ///
-/// let request = RequestOptions::default();
+/// let mut request = RequestOptions::default();
+/// assert_eq!(request.budget.bytes_per_stream, 1024 * 1024);
+/// request.budget.deadline = Instant::now() + Duration::from_secs(2);
+/// request.budget.bytes_per_stream = 64 * 1024;
 /// request.cancellation.cancel();
 /// assert!(request.cancellation.is_cancelled());
 /// ```

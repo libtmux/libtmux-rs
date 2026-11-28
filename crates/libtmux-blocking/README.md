@@ -3,6 +3,10 @@
 Drive tmux synchronously against an explicit Unix socket. The client uses
 native pipes and deadlines. Its normal dependency graph contains no Tokio.
 
+A request defaults to a five-second deadline and one MiB each for stdout and
+stderr. Set the deadline and byte limit on [`RequestOptions`] before passing
+it to a method such as [`Server::capture_with`].
+
 ## Create and clean a session
 
 From a binary project next to this checkout, add the client and shared types:

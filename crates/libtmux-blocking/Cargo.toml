@@ -24,5 +24,8 @@ tempfile = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
