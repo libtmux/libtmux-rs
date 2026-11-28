@@ -2,7 +2,7 @@ use std::io;
 
 #[cfg(feature = "control-mode")]
 use super::ControlModeErrorKind;
-use super::{Error, ErrorKind, ServerGoneKind};
+use super::{Error, ErrorKind};
 
 impl Error {
     /// Mark this failure as following an effect that tmux accepted.
@@ -106,7 +106,6 @@ impl Error {
             Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
             | Self::NoEffect { .. }
-            | Self::ServerReplaced { .. }
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
             | Self::SessionExists { .. }
@@ -175,7 +174,10 @@ impl Error {
     /// `true` means this error proves that the requested mutation did not run,
     /// or came from an operation that only reads state. The condition may need
     /// to clear first: capacity can become available, a client can resume, a
-    /// resource-limited spawn can be retried, or a server can answer again.
+    /// resource-limited spawn can be retried.
+    ///
+    /// Ordinary diagnostic text cannot establish this proof. A report that a
+    /// server is absent can follow earlier effects and does not make a retry safe.
     ///
     /// `false` does not mean that the handle is unusable. A subprocess timeout,
     /// output-reader failure, child-wait failure, or lost supervisor can leave
@@ -201,7 +203,6 @@ impl Error {
             | Self::OperationCleanupPending { .. } => false,
             Self::Overloaded { .. }
             | Self::ClientSuspended { .. }
-            | Self::ServerReplaced { .. }
             | Self::Timeout {
                 before_dispatch: true,
                 ..
@@ -214,10 +215,6 @@ impl Error {
                     | io::ErrorKind::ResourceBusy
                     | io::ErrorKind::ExecutableFileBusy
             ),
-            Self::ServerGone {
-                kind: ServerGoneKind::NotRunning | ServerGoneKind::Unreachable,
-                ..
-            } => true,
             Self::AfterEffect { .. }
             | Self::InvalidLayout { .. }
             | Self::InvalidServerConfiguration { .. }
@@ -250,10 +247,7 @@ impl Error {
             | Self::LinkGone { .. }
             | Self::UnrecognizedLayout
             | Self::AmbiguousLayout { .. }
-            | Self::ServerGone {
-                kind: ServerGoneKind::Lost | ServerGoneKind::Stopped,
-                ..
-            }
+            | Self::ServerGone { .. }
             | Self::CommandFailed { .. }
             | Self::NoEffect { .. }
             | Self::DecodeListing { .. }

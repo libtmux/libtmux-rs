@@ -1324,8 +1324,6 @@ struct_field libtmux_tokio::Error::ServerGenerationChanged::found: libtmux_tokio
 struct_field libtmux_tokio::Error::ServerGone::command: &'static str
 struct_field libtmux_tokio::Error::ServerGone::kind: libtmux_tokio::ServerGoneKind
 struct_field libtmux_tokio::Error::ServerMismatch::operation: &'static str
-struct_field libtmux_tokio::Error::ServerReplaced::command: libtmux_tokio::CommandSummary
-struct_field libtmux_tokio::Error::ServerReplaced::request_id: u64
 struct_field libtmux_tokio::Error::SessionExists::name: String
 struct_field libtmux_tokio::Error::Spawn::command: libtmux_tokio::CommandSummary
 struct_field libtmux_tokio::Error::Spawn::request_id: u64
@@ -1446,7 +1444,6 @@ variant libtmux_tokio::Error::ReadOutput
 variant libtmux_tokio::Error::ServerGenerationChanged
 variant libtmux_tokio::Error::ServerGone
 variant libtmux_tokio::Error::ServerMismatch
-variant libtmux_tokio::Error::ServerReplaced
 variant libtmux_tokio::Error::SessionExists
 variant libtmux_tokio::Error::Spawn
 variant libtmux_tokio::Error::SupervisorLost

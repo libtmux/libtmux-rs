@@ -472,7 +472,7 @@ if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.ar
  guard_received=False
  while time.monotonic()<end:
   logs=''.join(path.read_text(errors='replace') for path in pathlib.Path(witness).parent.glob('tmux-server-*.log'))
-  guard_received='libtmux-core-version-changed' in logs
+  guard_received='if-shell' in logs
   if guard_received or child.poll() is not None: break
   time.sleep(.005)
  child.terminate()

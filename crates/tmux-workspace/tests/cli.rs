@@ -5334,7 +5334,7 @@ async fn the_attach_handoff_refuses_daemon_replacement() {
     assert!(!attached, "the old daemon received an attach effect");
     assert!(!output.status.success(), "{output:?}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("libtmux-core-version-changed"),
+        String::from_utf8_lossy(&output.stderr).contains("syntax error"),
         "{output:?}"
     );
     assert!(!started, "handoff did not source a new daemon's config");

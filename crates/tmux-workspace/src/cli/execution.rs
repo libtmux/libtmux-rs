@@ -1665,16 +1665,7 @@ fn handoff_command(
     if server.colors() == Some(256) {
         command.arg("-2");
     }
-    command
-        .arg("if-shell")
-        .arg("-F")
-        .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
-        .arg("")
-        .arg("libtmux-core-version-changed")
-        .arg(";")
-        .arg(action)
-        .arg("-t")
-        .arg(session);
+    command.args(version.fence_ordinary_argv(vec![action.into(), "-t".into(), session.into()]));
     command
 }
 
@@ -1685,7 +1676,7 @@ mod handoff_tests {
     #[test]
     fn the_handoff_never_lets_the_client_start_a_daemon() {
         let server = libtmux_tokio::Server::builder()
-            .socket_path("/tmp/libtmux-handoff-test")
+            .socket_path("/tmp/libtmux-rs-test/handoff")
             .tmux_executable("tmux")
             .build()
             .expect("client configured");
@@ -1697,10 +1688,8 @@ mod handoff_tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args.first().map(String::as_str), Some("-N"), "{args:?}");
-        assert!(
-            args.iter().any(|arg| arg == "libtmux-core-version-changed"),
-            "{args:?}"
-        );
+        assert!(args.iter().any(|arg| arg == "}"), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == "libtmux-core-version-changed"));
         assert!(args.iter().any(|arg| arg == "attach-session"), "{args:?}");
     }
 }

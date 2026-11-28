@@ -14,19 +14,17 @@ use crate::command::{CommandResult, ProcessStatus, RequestId};
 /// asserted against the classifier rather than against tmux.
 #[test]
 fn a_server_that_is_not_there_is_not_a_refusal() {
-    for (stderr, expected, retryable) in [
+    for (stderr, expected) in [
         (
             "no server running on /tmp/libtmux-rs-dev/absent",
             ServerGoneKind::NotRunning,
-            true,
         ),
         (
             "error connecting to /tmp/libtmux-rs-dev/absent (Connection refused)",
             ServerGoneKind::Unreachable,
-            true,
         ),
-        ("server exited unexpectedly", ServerGoneKind::Lost, false),
-        ("server exited", ServerGoneKind::Stopped, false),
+        ("server exited unexpectedly", ServerGoneKind::Lost),
+        ("server exited", ServerGoneKind::Stopped),
     ] {
         let error = Error::refused("list-sessions", Some(1), stderr.to_owned(), None);
         assert_eq!(error.kind(), ErrorKind::ServerGone, "{stderr}");
@@ -35,10 +33,9 @@ fn a_server_that_is_not_there_is_not_a_refusal() {
             "{stderr} should be {expected:?}, got {error:?}",
         );
         assert!(!error.is_object_gone(), "{stderr}");
-        assert_eq!(
-            error.is_transient(),
-            retryable,
-            "only a failure before connecting proves replay safe: {stderr}",
+        assert!(
+            !error.is_transient(),
+            "diagnostic text cannot establish submission provenance: {stderr}",
         );
     }
 }

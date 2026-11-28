@@ -220,11 +220,10 @@ pub enum OptionErrorKind {
     BadValue,
 }
 
-/// Which way a tmux server was not there.
+/// Which absence or connection loss a command reported.
 ///
-/// The four are one decision -- there is no server -- and four different
-/// stories about how, which is the difference between a socket nobody has
-/// started and a server that died under the command being run.
+/// These diagnostics distinguish an unused socket from a connection lost while
+/// running a command. The wording alone does not establish which effects ran.
 ///
 /// # Examples
 ///
@@ -586,23 +585,6 @@ pub enum Error {
         expected: crate::ServerGeneration,
         /// The daemon answering now.
         found: crate::ServerGeneration,
-    },
-
-    /// The daemon was replaced between its version check and the request.
-    ///
-    /// Nothing ran: the request is fenced on the version that was checked,
-    /// and the replacement did not match it. Repeating the call checks the
-    /// daemon that is there now.
-    #[non_exhaustive]
-    #[error(
-        "the tmux server was replaced after the version check of request {request_id} \
-         ({command}); nothing was sent. Repeat the call to check the new server"
-    )]
-    ServerReplaced {
-        /// The Core-scoped dispatch-request identity.
-        request_id: u64,
-        /// The sanitized logical command.
-        command: CommandSummary,
     },
 
     /// tmux produced more output than the dispatch was allowed to read.
@@ -1001,12 +983,13 @@ pub enum Error {
         source: Option<io::Error>,
     },
 
-    /// The tmux server the command needed was not there.
+    /// The command reported an absent or lost tmux server.
     ///
     /// tmux exits 1 for this and for a command it refused, and separates them
     /// only in stderr, so this is read from the message rather than the
     /// status. [`ServerGoneKind`] says which way it was missing; the raw
     /// stderr remains available only through [`crate::Server::cmd`].
+    /// The report does not prove that earlier effects did not run.
     #[error("tmux found no server for {command}: {kind}")]
     ServerGone {
         /// The tmux command that found no server.
@@ -1285,13 +1268,6 @@ impl Error {
             command,
             exit_code,
             signal,
-        }
-    }
-
-    pub(crate) fn server_replaced(request_id: u64, command: CommandSummary) -> Self {
-        Self::ServerReplaced {
-            request_id,
-            command,
         }
     }
 
@@ -1655,14 +1631,6 @@ impl fmt::Debug for Error {
                 .field("request_id", request_id)
                 .field("command", command)
                 .field("in_flight", in_flight)
-                .finish(),
-            Self::ServerReplaced {
-                request_id,
-                command,
-            } => formatter
-                .debug_struct("ServerReplaced")
-                .field("request_id", request_id)
-                .field("command", command)
                 .finish(),
             Self::ServerGenerationChanged { expected, found } => formatter
                 .debug_struct("ServerGenerationChanged")

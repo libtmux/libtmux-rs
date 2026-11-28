@@ -132,15 +132,6 @@ impl CommandRequest {
         }
     }
 
-    pub(crate) fn fence_version(self, version: &crate::TmuxVersion) -> Self {
-        let guard = Command::new("if-shell")
-            .arg("-F")
-            .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
-            .arg("")
-            .arg("libtmux-core-version-changed");
-        self.prepend_guard(&guard)
-    }
-
     fn prepend_guard(mut self, guard: &Command) -> Self {
         #[cfg(feature = "control-mode")]
         {

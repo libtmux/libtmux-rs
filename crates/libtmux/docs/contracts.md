@@ -14,8 +14,13 @@ the operation.
 
 The version probe shares the command's timeout, and a queue guard refuses a
 daemon replacement with a different version. The daemon's version is cached.
-Every dispatch checks it in tmux's queue, and a mismatch invalidates the cache
-for a fresh probe on the next operation.
+Every dispatch checks it in tmux's queue. A failed result consistent with a
+stale guard invalidates the cache for a fresh probe on the next operation.
+
+An ordinary failed result remains available to the caller. Diagnostic text may
+come from the requested commands or hooks, so it cannot prove that a mutation
+did not run. No automatic retry follows a guard failure; inspect effects before
+repeating a mutation.
 
 A refusal prevents the requested operation from being dispatched. Version
 probes and queue guards may still reach the daemon:
@@ -28,8 +33,6 @@ probes and queue guards may still reach the daemon:
   version report is [`Error::InvalidVersionOutput`].
 - A deadline that passes during the check is [`Error::Timeout`] with
   `before_dispatch` set.
-- A daemon replaced between the check and the request fails with
-  [`Error::ServerReplaced`], and nothing ran.
 
 To fix any of them, upgrade tmux and restart the server, or pin the previous
 release of libtmux.
@@ -188,7 +191,6 @@ matters.
 [`Error::VersionProbeFailed`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-versionprobefailed/
 [`Error::InvalidVersionOutput`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-invalidversionoutput/
 [`Error::Timeout`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-timeout/
-[`Error::ServerReplaced`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-error-serverreplaced/
 [`Server`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server/
 [`Server::capabilities`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-capabilities/
 [`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/libtmux_tokio-server-cmd/

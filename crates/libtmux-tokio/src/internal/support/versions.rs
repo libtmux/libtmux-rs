@@ -123,7 +123,6 @@ pub(crate) fn dispatch(
             request.live_only()
         };
         // Native clients put their version check and effects on the same queue.
-        let typed = operation.is_some();
         let result = if let Some(operation) = operation {
             match executor
                 .execute_operation(request.fence_ordinary_version(&version), operation)
@@ -141,10 +140,10 @@ pub(crate) fn dispatch(
             let request = if executor.renders_control_line() {
                 request
             } else {
-                request.fence_version(&version)
+                request.fence_ordinary_version(&version)
             };
             #[cfg(not(feature = "control-mode"))]
-            let request = request.fence_version(&version);
+            let request = request.fence_ordinary_version(&version);
             within(
                 executor.execute(request),
                 if unbounded { None } else { deadline },
@@ -155,43 +154,10 @@ pub(crate) fn dispatch(
             )
             .await?
         };
-        if typed && !result.success() && result.stderr().trim_ascii() == b"syntax error" {
+        if !result.success() && result.stderr().trim_ascii() == b"syntax error" {
             // The ordinary guard has no private response block. Invalidating
             // this observation does not establish whether the action ran.
             versions.forget(&version);
-        }
-        if !result.success()
-            && result.stderr().trim_ascii() == b"unknown command: libtmux-core-version-changed"
-        {
-            if typed {
-                versions.forget(&version);
-                return Ok(result);
-            }
-            // Ask the replacement what it is, so a caller that stops after one
-            // failure still learns the floor. The probe shares the caller's
-            // remaining deadline; nothing was sent, so it times out as such.
-            let replacement = within(
-                live_version(&executor, &configuration, endpoint_probe),
-                deadline,
-                request_id,
-                &summary,
-                configuration.timeout(),
-                true,
-            )
-            .await;
-            versions.forget(&version);
-            return Err(match replacement {
-                Ok(Some(replacement)) => match replacement.ensure_supported() {
-                    Ok(()) => Error::server_replaced(request_id.get(), summary.clone()),
-                    Err(unsupported) => unsupported.into(),
-                },
-                Err(
-                    error @ (Error::Timeout { .. }
-                    | Error::UnsupportedTmuxVersion { .. }
-                    | Error::UnrecognizedTmuxVersion { .. }),
-                ) => error,
-                Ok(None) | Err(_) => Error::server_replaced(request_id.get(), summary.clone()),
-            });
         }
         if (absent_cleanup && result.success()) || (!result.success() && is_cold(result.stderr())) {
             versions.forget(&version);
