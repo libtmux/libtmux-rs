@@ -190,6 +190,68 @@ fn notification_shaped_hook_payload_is_not_a_flow_notification() {
 }
 
 #[test]
+fn normal_remote_exit_is_the_last_notice() {
+    let Some((fixture, mode)) = managed() else {
+        return;
+    };
+    let (_sender, mut events) = mode.split();
+    fixture.checked(["detach-client", "-s", "$0"]);
+    let mut saw_exit = false;
+    while let Some(notice) = events.next_event().unwrap() {
+        assert!(!saw_exit, "a notice arrived after %exit");
+        saw_exit = matches!(notice, ControlNotice::Event(Event::Exit { .. }));
+    }
+    assert!(saw_exit);
+    assert!(events.next_event().unwrap().is_none());
+    events.shutdown().unwrap();
+}
+
+#[test]
+fn buffered_output_precedes_a_remote_exit_after_the_child_exits() {
+    let fixture = ProtocolFixture::new("buffered-exit");
+    let (_sender, mut events) = fixture.attach(ControlLimits::default()).split();
+    std::fs::write(fixture.root.path().join("release"), b"go").unwrap();
+    let mut bytes = Vec::new();
+    let mut saw_exit = false;
+    while let Some(notice) = events.next_event().unwrap() {
+        match notice {
+            ControlNotice::Event(Event::Output { bytes: chunk, .. }) => bytes.extend(chunk),
+            ControlNotice::Event(Event::Exit { .. }) => saw_exit = true,
+            _ => {}
+        }
+    }
+    assert_eq!(bytes, vec![b'x'; 32 * 1024]);
+    assert!(saw_exit);
+}
+
+#[test]
+fn an_idle_eof_yields_one_terminal_error() {
+    let fixture = ProtocolFixture::new("ordinary");
+    let mode = fixture.attach(ControlLimits::default());
+    let (_sender, mut events) = mode.split();
+    let pid: i32 = std::fs::read_to_string(fixture.root.path().join("pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    rustix::process::kill_process(
+        rustix::process::Pid::from_raw(pid).unwrap(),
+        rustix::process::Signal::KILL,
+    )
+    .unwrap();
+    loop {
+        match events.next_event() {
+            Ok(Some(_)) => {}
+            Err(error) => {
+                assert_eq!(error.fault(), Some(ControlFault::Disconnected));
+                break;
+            }
+            Ok(None) => panic!("unexpected EOF needs a terminal error"),
+        }
+    }
+    assert!(events.next_event().unwrap().is_none());
+}
+
+#[test]
 fn cancellation_drains_its_place_before_later_submission() {
     let Some((fixture, mode)) = managed() else {
         return;
@@ -699,6 +761,11 @@ for line in sys.stdin:
     elif fence:
         block()
         os.write(1, f'unknown command: libtmux-control-fence:{fence.group(1)}\n'.encode())
+        if challenged and scenario == 'buffered-exit':
+            while not (root / 'release').exists():
+                time.sleep(0.002)
+            os.write(1, b'%output %3 ' + b'x' * 32768 + b'\n%exit done\n')
+            sys.exit(0)
         if challenged and scenario == 'stall-writes':
             sys.stdin.read(1)
             (root / 'started').touch()

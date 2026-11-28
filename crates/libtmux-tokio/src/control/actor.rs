@@ -516,7 +516,8 @@ impl Connection {
             match step {
                 Step::Read(Ok(0)) => {
                     self.shared.tracker().eof().map_err(protocol_error)?;
-                    return Ok(());
+                    // A normal %exit is handled as soon as its notice is read.
+                    return Err(Error::control_mode_closed());
                 }
                 Step::Read(Ok(read)) => {
                     self.shared

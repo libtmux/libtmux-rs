@@ -21,7 +21,6 @@ use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
 use super::ControlMode;
-#[cfg(feature = "test-support")]
 use crate::ControlModeErrorKind;
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
 use crate::{Command, Error, ErrorKind, Server, SessionId};
@@ -502,6 +501,36 @@ async fn a_cancelled_reply_drains_its_nonce_before_the_next_input() {
         .unwrap();
     assert_eq!(reply.blocks().len(), 1);
     assert_eq!(reply.blocks()[0].output(), b"second\n");
+    events.shutdown().await.unwrap();
+    fixture.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_idle_eof_yields_one_terminal_error() {
+    let fixture = Fixture::new("quiet", "3.8", TEST_TIMEOUT);
+    let (_sender, mut events) = fixture.attach().await.unwrap().split();
+    let descendant = wait_pid(&fixture.path("descendant")).await;
+    kill_process(pid(descendant), Signal::KILL).unwrap();
+    kill_process(pid(fixture.child().await), Signal::KILL).unwrap();
+    let error = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            match events.next_notice().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("unexpected EOF needs a terminal error"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
+    assert!(events.next_notice().await.is_none());
     events.shutdown().await.unwrap();
     fixture.server.shutdown().await.unwrap();
 }

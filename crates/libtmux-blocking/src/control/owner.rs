@@ -115,7 +115,7 @@ fn drive(
     active: &mut Option<Active>,
 ) -> Result<(), ControlError> {
     let mut stderr_bytes = 0usize;
-    let mut stdout_eof = false;
+    let mut exited_at = None;
     let mut stderr_eof = false;
     loop {
         if shared.stop.load(Ordering::Acquire) {
@@ -141,7 +141,7 @@ fn drive(
             }
         }
         progress(active, shared, pipes)?;
-        read_output(pipes, shared, &mut stdout_eof)?;
+        let read = read_output(pipes, shared)?;
         read_error(
             pipes,
             options.budget.bytes_per_stream,
@@ -152,7 +152,11 @@ fn drive(
             shared.lock().tracker.discard_notices();
         }
         completions(shared, options, active, ready)?;
-        if stdout_eof {
+        if ready && shared.lock().tracker.is_closed() {
+            // feed recognised %exit. Pending commands have separate completions.
+            return Ok(());
+        }
+        if read == Some(0) {
             shared
                 .lock()
                 .tracker
@@ -164,6 +168,12 @@ fn drive(
             .has_exited()
             .map_err(|error| ControlError::native(error, ready))?
         {
+            // A child may exit with more than one read left in the pipe.
+            // A descendant inheriting stdout cannot extend this drain forever.
+            let since = exited_at.get_or_insert_with(Instant::now);
+            if read.is_some() && since.elapsed() < libtmux_core::supervision::CLEANUP_ALLOWANCE {
+                continue;
+            }
             return Err(ControlError::protocol(ControlFault::Disconnected, ready));
         }
         let writing = active
@@ -342,13 +352,16 @@ fn fail_request(request: Request, error: ControlError) {
     let _ = tx.try_send(Err(error));
 }
 
-fn read_output(pipes: &mut Pipes, shared: &Shared, eof: &mut bool) -> Result<(), ControlError> {
-    if *eof {
-        return Ok(());
-    }
+fn read_output(pipes: &mut Pipes, shared: &Shared) -> Result<Option<usize>, ControlError> {
     let mut bytes = [0; 8192];
-    match pipes.output.read(&mut bytes) {
-        Ok(0) => *eof = true,
+    let read = loop {
+        match pipes.output.read(&mut bytes) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            result => break result,
+        }
+    };
+    match read {
+        Ok(0) => Ok(Some(0)),
         Ok(count) => {
             shared
                 .lock()
@@ -356,15 +369,11 @@ fn read_output(pipes: &mut Pipes, shared: &Shared, eof: &mut bool) -> Result<(),
                 .feed(&bytes[..count])
                 .map_err(|fault| ControlError::protocol(fault, true))?;
             shared.changed.notify_all();
+            Ok(Some(count))
         }
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
-            ) => {}
-        Err(error) => return Err(ControlError::native(error, true)),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        Err(error) => Err(ControlError::native(error, true)),
     }
-    Ok(())
 }
 
 fn read_error(

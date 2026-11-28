@@ -159,7 +159,10 @@ impl ControlMode {
                 shared: Arc::clone(&shared),
                 tx,
             },
-            events: ControlEvents { shared },
+            events: ControlEvents {
+                shared,
+                finished: false,
+            },
         };
         mode.sender
             .shared
@@ -412,6 +415,7 @@ impl Drop for ControlSender {
 /// ```
 pub struct ControlEvents {
     shared: Arc<Shared>,
+    finished: bool,
 }
 
 impl std::fmt::Debug for ControlSender {
@@ -437,18 +441,20 @@ impl ControlEvents {
     ///
     /// # Errors
     ///
-    /// Returns the retained connection cause after all queued notices.
+    /// Returns the terminal connection or cleanup error once, after queued
+    /// notices. Subsequent calls return `Ok(None)`.
     pub fn next_event(&mut self) -> Result<Option<ControlNotice>, ControlError> {
+        if self.finished {
+            return Ok(None);
+        }
         loop {
             let mut state = self.shared.lock();
             if let Some(notice) = state.tracker.next_notice() {
                 return Ok(Some(notice));
             }
-            if let Some(error) = &state.terminal {
-                return Err(error.clone());
-            }
-            if state.cleanup.is_some() {
-                return Ok(None);
+            if let Some(result) = &state.cleanup {
+                self.finished = true;
+                return result.clone().map(|()| None);
             }
             drop(state);
             self.shared.wait(INTERVAL);

@@ -1505,9 +1505,15 @@ impl PaneOutput {
         let cause = self.ending.unwrap_or(PaneOutputEnd::ConnectionEnded);
         Poll::Ready(Some(Err(match error {
             None
-            | Some(Error::ControlProtocol {
-                fault: libtmux_core::control::ControlFault::Disconnected,
-            }) => Error::PaneOutputEnded { cause },
+            | Some(
+                Error::ControlProtocol {
+                    fault: libtmux_core::control::ControlFault::Disconnected,
+                }
+                | Error::ControlMode {
+                    kind: crate::ControlModeErrorKind::Closed,
+                    ..
+                },
+            ) => Error::PaneOutputEnded { cause },
             Some(error) => error,
         })))
     }
