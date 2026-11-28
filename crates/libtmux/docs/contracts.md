@@ -82,6 +82,23 @@ connection to an exact 3.7 daemon. Native 3.6 and 3.7d clients can. The older cl
 changing the daemon, including on a plain native attachment. Use a compatible
 client for control; this does not raise the 3.3a subprocess baseline.
 
+## Pane capture and polling waits
+
+A viewport capture returns the grid bytes and their native trailing newline.
+`Pane::capture_with` splits the selected range into lines. A text wait matches
+those lines. A message printed by an `after-capture-pane` hook cannot satisfy
+the wait. The hook can still change tmux state.
+
+For a fixed row range, the ordinary client checks the pane identity and
+extent in the same queue as the capture. Pending escape sequences use tmux's
+octal encoding so a NUL byte survives the client pipe. Joined rows have no
+fixed count. A qualified one-shot control client can distinguish the capture
+reply from later hook replies. On an unqualified client and daemon pairing,
+the ordinary client checks the global and session hook settings in the capture
+queue. A configured capture hook yields `Error::JoinedCaptureHook` from
+`libtmux-core`. Using a matching tmux executable allows joined capture with
+that hook. A failed observation returns no pane bytes.
+
 ## Commands nested in another command
 
 The guard reads the command it is given and nothing nested in it. A refused
