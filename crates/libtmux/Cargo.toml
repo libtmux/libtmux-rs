@@ -18,6 +18,7 @@ include = [
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
     "/README.md",
+    "/docs/adr/0001-native-blocking-and-tokio.md",
     "/docs/design.md",
     "/docs/findings.md",
     "/docs/format-catalog.md",
