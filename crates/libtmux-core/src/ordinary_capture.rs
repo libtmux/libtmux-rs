@@ -97,13 +97,12 @@ impl OrdinaryCapturePrefix {
 
 pub(crate) fn check_capture_status(
     status: Option<i32>,
-    stdout: &[u8],
+    _stdout: &[u8],
     stderr: &[u8],
     late: bool,
 ) -> Result<(), Error> {
-    if status == Some(1) && stdout.is_empty() && stderr == b"syntax error\n" {
-        return Err(Error::StalePane);
-    }
+    // Queue guards include changing read state as well as object identity.
+    // Their refusal alone does not establish which check failed.
     if status != Some(0) {
         return Err(Error::Command {
             operation: CommandKind::CapturePane,

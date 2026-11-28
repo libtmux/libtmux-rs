@@ -240,10 +240,19 @@ fn a_resized_viewport_fails_the_same_queue_extent_guard() {
             None,
         )
         .unwrap();
+    let error = observed
+        .decode_capture(output.status.code(), output.stdout, &output.stderr, late)
+        .unwrap_err();
     assert!(matches!(
-        observed.decode_capture(output.status.code(), output.stdout, &output.stderr, late),
-        Err(Error::StalePane)
+        error,
+        Error::Command {
+            operation: CommandKind::CapturePane,
+            status: Some(1),
+            ..
+        }
     ));
+    assert_eq!(error.effect(), libtmux_core::Effect::Observation);
+    assert_eq!(fixture.server.observe_pane(key.id()).unwrap(), key);
 }
 
 #[test]
