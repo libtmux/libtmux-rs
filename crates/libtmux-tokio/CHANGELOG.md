@@ -45,6 +45,18 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- `Window::refresh`, `rename` and `resize` follow a surviving window across
+  the withdrawal of its discovery link. Session and window lookups from
+  `TMUX_PANE` retain the pane's daemon generation.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+- An open pane stream reports `PaneOutputEnd::PaneOutsideSession` when its
+  attached session loses access to the watched pane. A subsequent attachment
+  starts a new stream.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+- A timed-out ordinary subprocess request reports a second cleanup failure
+  even when the request first had to qualify the daemon version.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - `Pane::capture_with`, `Pane::capture_lines` and polling waits isolate pane
   bytes from hooks, preserving capture options and pending NULs and
   backslashes. Joined reads with an unqualified client and daemon pair
