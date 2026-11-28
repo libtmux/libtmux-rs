@@ -26,6 +26,10 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- The docs preview resolves primary home objects and native ID checks for
+  both Rust source layouts. Public API extraction follows parsed module
+  re-exports, so hidden helper names cannot acquire another declaration's
+  identity. The LLM export and fixture guidance use the selected API.
 - The docs preview resolves showcase API links to the defining Rust crate
   while retaining the released `0.1.2` identifiers. Its curated links omit
   the retired `Window::select` owner. CI and the installed-reader proof use
