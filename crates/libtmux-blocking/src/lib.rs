@@ -319,6 +319,28 @@ impl Server {
     ///
     /// Rejects a key from another socket or a stale daemon, and discards
     /// incomplete, failed or late observation bytes.
+    ///
+    /// # Examples
+    ///
+    /// Read an existing pane using its absolute socket path and ID. This
+    /// program writes the captured bytes only after both reads succeed.
+    ///
+    /// ```no_run
+    /// use std::io::{self, Write};
+    /// use libtmux_blocking::Server;
+    ///
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let mut args = std::env::args_os().skip(1);
+    ///     let socket = args.next().ok_or("pass an absolute socket path")?;
+    ///     let pane = args.next().ok_or("pass a pane ID such as %0")?;
+    ///     let pane = pane.to_str().ok_or("pane ID is not valid UTF-8")?.parse()?;
+    ///     let server = Server::at(socket)?;
+    ///     let key = server.observe_pane(pane)?;
+    ///     let bytes = server.capture(&key)?;
+    ///     io::stdout().lock().write_all(&bytes)?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn capture(&self, pane: &PaneKey) -> Result<Vec<u8>, Error> {
         self.capture_with(pane, RequestOptions::default())
     }

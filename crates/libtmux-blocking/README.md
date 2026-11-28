@@ -59,6 +59,14 @@ created even if observing its pane fails.
 `Vec<u8>`. Write those bytes with `std::io::Write::write_all` to preserve them.
 A key from another socket or a replaced daemon is refused.
 
+The complete example on [`Server::capture`] takes an existing socket and
+pane ID, observes the key and writes exact bytes without Tokio or mutation.
+Save it as `src/main.rs` and pass the socket and pane to read:
+
+```console
+$ cargo run -- /absolute/path/to/socket '%0'
+```
+
 The [mixed-client program](https://libtmux.org/en/rs/latest/reference/libtmux_blocking-server-new_session/)
 creates a session with this client and passes its pane key directly to a Tokio
 capture on the same socket. Use the `libtmux` facade for both namespaces.
