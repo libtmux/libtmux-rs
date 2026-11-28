@@ -1,5 +1,8 @@
 # libtmux Rust crate design
 
+The [proposed blocking and Tokio architecture](adr/0001-native-blocking-and-tokio.md)
+records the decision under review for the next breaking release.
+
 ## Contents
 
 - [Outcome](#outcome)
