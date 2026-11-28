@@ -122,7 +122,7 @@ jobs:
         with:
           tool: uv
       - name: Exercise shared operations on an isolated daemon
-        run: cargo test --locked -p libtmux-tokio --all-features --test shared_operations
+        run: cargo test --locked -p libtmux-tokio --all-features --test shared_operations --test parked_channels
       - name: Exercise native process registration and cleanup
         run: cargo test --locked -p libtmux-tokio --all-features --lib internal::subprocess::tests::typed_
       - name: Check out the shared native recorder
