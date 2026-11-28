@@ -824,6 +824,46 @@ async fn typed_pipe_registration_failure_reaps_the_owned_child_and_releases_capa
     }
 }
 
+#[test]
+fn ordinary_dispatch_returns_when_the_runtime_cannot_start_its_worker() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime builds");
+    runtime.block_on(async {
+        let (occupied, ready) = tokio::sync::oneshot::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let worker = tokio::task::spawn_blocking(move || {
+            occupied.send(()).expect("runtime is listening");
+            blocked.recv_timeout(TEST_TIMEOUT).expect("worker released");
+        });
+        ready.await.expect("only blocking worker is occupied");
+
+        let spawned_pid = Arc::new(AtomicU32::new(0));
+        let executor = executor("streams", Duration::from_millis(50)).with_test_hooks(TestHooks {
+            spawned_pid: Some(Arc::clone(&spawned_pid)),
+            ..TestHooks::default()
+        });
+        let result = tokio::time::timeout(
+            libtmux_core::supervision::CLEANUP_ALLOWANCE + Duration::from_secs(1),
+            executor.execute(request(46, [])),
+        )
+        .await;
+        release.send(()).expect("release the blocking worker");
+        worker.await.expect("worker exits");
+        executor.shutdown().await.expect("queued startup settles");
+
+        assert!(matches!(
+            result,
+            Ok(Err(Error::OperationCleanupPending { source }))
+                if matches!(*source, Error::Timeout { .. })
+        ));
+        assert_eq!(spawned_pid.load(Ordering::SeqCst), 0);
+        assert_eq!(executor.active_request_count(), 0);
+    });
+}
+
 #[tokio::test]
 async fn ordinary_dispatch_owns_the_child_before_pipe_registration() {
     let spawned_pid = Arc::new(AtomicU32::new(0));

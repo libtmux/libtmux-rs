@@ -458,11 +458,7 @@ async fn await_result(
     mut cancellation: CancellationGuard,
     context: RequestContext,
 ) -> Result<CommandResult, Error> {
-    let completion = if let Some(deadline) = context
-        .operation
-        .as_ref()
-        .and_then(OperationContext::deadline)
-    {
+    let completion = if let Some(deadline) = context.deadline {
         let latest = deadline
             .checked_add(libtmux_core::supervision::CLEANUP_ALLOWANCE)
             .unwrap_or(deadline);

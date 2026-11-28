@@ -21,6 +21,8 @@ The ordinary executor takes ownership of the OS child before registering
 its pipes with Tokio. If pipe registration fails, the supervisor signals
 the process group, reaps the child and returns the error. A fallback reaper
 owns the child and its admission slot if the runtime shuts down first.
+If a request reaches its deadline while startup or cleanup is still pending,
+the caller waits at most one further second for acknowledgement.
 [Tokio pipe registration](https://github.com/tokio-rs/tokio/blob/b53b2001ed2ccfd9b87e32a0c6da1a1eebdc80b8/tokio/src/process/unix/mod.rs#L122-L145)
 
 ## Recover a creation receipt
