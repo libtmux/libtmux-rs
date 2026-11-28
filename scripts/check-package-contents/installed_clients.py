@@ -287,6 +287,31 @@ def check_workspace(summary: Mapping) -> None:
         raise ValueError("installed workspace command omitted created identities")
 
 
+def check_mcp_discovery(tools: Sequence[Mapping], report: Mapping) -> None:
+    """Require conservative whole-call hints beside consistent direct capability axes."""
+    expected = {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+    rows = {row["name"]: row for row in report["tools"]}
+    if set(rows) != {tool["name"] for tool in tools}:
+        raise ValueError("installed MCP discovery surfaces list different tools")
+    for tool in tools:
+        name = tool["name"]
+        hints = tool.get("annotations", {})
+        if {key: hints.get(key) for key in expected} != expected:
+            raise ValueError(f"installed MCP {name} narrowed its whole-call annotations")
+        row = rows[name]
+        if row.get("annotations") != expected:
+            raise ValueError(f"installed MCP {name} resource narrowed its whole-call annotations")
+        direct = tool.get("_meta", {}).get("com.git-pull.libtmux-mcp/capability", {})
+        for axis in ("toolset", "processReach", "tmuxEffects", "outputClasses"):
+            if axis not in direct or direct[axis] != row.get(axis):
+                raise ValueError(f"installed MCP {name} direct capability {axis} disagrees")
+
+
 class Cargo:
     """Run Cargo against fresh extracted sources under one bounded build timeout."""
 
@@ -1056,6 +1081,7 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                     capabilities = json.loads(content["text"])
                     if content["uri"] != uri or set(capabilities["effectiveTools"]) != names:
                         raise ValueError("MCP capability report disagrees with tools/list")
+                    check_mcp_discovery(tools["tools"], capabilities)
                     refusal = exchange(
                         "tools/call",
                         {"name": "kill_session", "arguments": {"session": "$4294967295"}},

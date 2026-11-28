@@ -186,27 +186,17 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
     Ok(())
 }
 
-/// The hand-kept lists above, not the capability rows the hints derive from,
-/// say which tools must never look read-only or harmless to a client, and
-/// that every inspect tool looks read-only. The observer client that
-/// `wait_for_text` or `capture_since` attaches only reads.
+/// Whole-call hints cover configured tmux behavior for every toolset,
+/// including inspect tools whose direct operation only observes.
 #[test]
-fn listed_mutating_tools_carry_mutating_hints() -> TestResult {
+fn every_toolset_carries_configurable_tmux_whole_call_hints() -> TestResult {
     for tool in tools("inspect,manage,execute,teardown")?.offered() {
         let name = tool.name.as_ref();
         let hints = tool.annotations.as_ref().expect("annotations");
-        if INSPECT.contains(&name) {
-            assert_eq!(hints.read_only_hint, Some(true), "{name} readOnlyHint");
-        }
-        if [MANAGE, EXECUTE, TEARDOWN]
-            .iter()
-            .any(|names| names.contains(&name))
-        {
-            assert_eq!(hints.read_only_hint, Some(false), "{name} readOnlyHint");
-        }
-        if TEARDOWN.contains(&name) {
-            assert_eq!(hints.destructive_hint, Some(true), "{name} destructiveHint");
-        }
+        assert_eq!(hints.read_only_hint, Some(false), "{name} readOnlyHint");
+        assert_eq!(hints.destructive_hint, Some(true), "{name} destructiveHint");
+        assert_eq!(hints.idempotent_hint, Some(false), "{name} idempotentHint");
+        assert_eq!(hints.open_world_hint, Some(true), "{name} openWorldHint");
     }
     Ok(())
 }

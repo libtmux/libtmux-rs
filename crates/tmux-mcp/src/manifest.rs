@@ -112,6 +112,15 @@ pub(crate) struct Annotations {
 }
 
 impl Annotations {
+    // Configured aliases, hooks and jobs can add effects to any tmux call.
+    // Direct capability axes do not establish narrower whole-call hints.
+    const CONFIGURABLE_TMUX: Self = Self {
+        read_only_hint: false,
+        destructive_hint: true,
+        idempotent_hint: false,
+        open_world_hint: true,
+    };
+
     fn render(self, title: Option<String>) -> ToolAnnotations {
         ToolAnnotations::from_raw(
             title,
@@ -136,10 +145,10 @@ pub(crate) struct Capability {
     pub(crate) output_classes: BTreeSet<OutputClass>,
     pub(crate) may_expose_secrets: bool,
     pub(crate) may_return_untrusted_content: bool,
-    /// Whether repeating a call with the same arguments changes nothing more.
+    /// An idempotence declaration for a state-changing direct operation.
     ///
-    /// Declared only for a tool that changes tmux: a read-only tool is
-    /// idempotent by derivation.
+    /// Configured tmux behavior can still add effects on each call, so this
+    /// fact does not narrow the whole-call MCP annotations.
     pub(crate) idempotent: bool,
     pub(crate) input_sinks: BTreeMap<String, BTreeSet<InputSink>>,
     pub(crate) input_literalization: BTreeMap<String, InputLiteralization>,
@@ -184,30 +193,6 @@ impl From<&Capability> for PublishedCapability {
 impl Capability {
     pub(crate) fn controlled_opener(&self) -> &'static str {
         controlled_opener(self.toolset, self.process_reach, &self.output_classes)
-    }
-
-    /// The four MCP hints, derived from this row so they cannot drift from it.
-    ///
-    /// Pane input is destructive because the receiving shell runs whatever
-    /// arrives. The open-world hint follows process reach and terminal
-    /// content, not `may_return_untrusted_content`, which every row sets.
-    pub(crate) fn annotations(&self) -> Annotations {
-        let read_only = self.process_reach == ProcessReach::None
-            && self
-                .tmux_effects
-                .iter()
-                .all(|effect| *effect == TmuxEffect::Observe);
-        let drives_a_shell = matches!(
-            self.process_reach,
-            ProcessReach::PaneInput | ProcessReach::PaneCommand
-        );
-        Annotations {
-            read_only_hint: read_only,
-            destructive_hint: self.tmux_effects.contains(&TmuxEffect::Delete) || drives_a_shell,
-            idempotent_hint: read_only || self.idempotent,
-            open_world_hint: self.process_reach != ProcessReach::None
-                || self.output_classes.contains(&OutputClass::TerminalContent),
-        }
     }
 }
 
@@ -502,7 +487,7 @@ fn finish_route(
         }
         .into(),
     );
-    route.attr.annotations = Some(row.annotations().render(route.attr.title.clone()));
+    route.attr.annotations = Some(Annotations::CONFIGURABLE_TMUX.render(route.attr.title.clone()));
     if row
         .input_sinks
         .values()
@@ -535,7 +520,7 @@ fn finish_route(
     Ok(ReportTool {
         name,
         title,
-        annotations: row.annotations(),
+        annotations: Annotations::CONFIGURABLE_TMUX,
         capability: PublishedCapability::from(row),
     })
 }

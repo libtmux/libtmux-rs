@@ -74,7 +74,9 @@ recorder output in the `native-clients-<source SHA>` artefact. The report
 includes source, archive, program, recorder and installed-binary hashes.
 Start from a clean checkout. The app installs keep the external versions and
 checksums from each archived `Cargo.lock`. The MCP check reads its advertised
-capabilities and calls a disabled tool to verify its retry evidence.
+capabilities, requires conservative whole-call hints on both discovery
+surfaces, and checks that their direct capability axes agree. It calls a
+disabled tool to verify its retry evidence.
 
 With that exact docs revision checked out beside this repository:
 

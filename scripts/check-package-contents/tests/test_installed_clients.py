@@ -14,6 +14,75 @@ import pytest
 import yaml
 
 
+def _mcp_discovery() -> tuple[list[dict], dict]:
+    direct = {
+        "toolset": "inspect",
+        "processReach": "none",
+        "tmuxEffects": ["observe"],
+        "outputClasses": ["tmux-metadata"],
+    }
+    hints = {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+    tools = [
+        {
+            "name": "list_sessions",
+            "annotations": {**hints, "title": "List sessions"},
+            "_meta": {"com.git-pull.libtmux-mcp/capability": direct},
+        }
+    ]
+    report = {"tools": [{"name": "list_sessions", "annotations": hints.copy(), **direct}]}
+    return tools, report
+
+
+@pytest.mark.parametrize("provenance", ["unknown", "minimal"])
+def test_installed_discovery_keeps_direct_axes_and_whole_call_hints(provenance: str) -> None:
+    tools, report = _mcp_discovery()
+    report["connection"] = {"configurationProvenance": provenance}
+    clients.check_mcp_discovery(tools, report)
+
+
+@pytest.mark.parametrize("surface", ["tool", "resource"])
+@pytest.mark.parametrize(
+    ("hint", "wrong"),
+    [
+        ("readOnlyHint", True),
+        ("destructiveHint", False),
+        ("idempotentHint", True),
+        ("openWorldHint", False),
+    ],
+)
+def test_installed_discovery_refuses_narrow_whole_call_hints(
+    surface: str, hint: str, wrong: bool
+) -> None:
+    tools, report = _mcp_discovery()
+    row = tools[0] if surface == "tool" else report["tools"][0]
+    row["annotations"][hint] = wrong
+    with pytest.raises(ValueError, match="whole-call annotations"):
+        clients.check_mcp_discovery(tools, report)
+
+
+@pytest.mark.parametrize(
+    ("axis", "wrong"),
+    [
+        ("toolset", "execute"),
+        ("processReach", "pane-command"),
+        ("tmuxEffects", ["delete"]),
+        ("outputClasses", ["terminal-content"]),
+    ],
+)
+def test_installed_discovery_refuses_disagreement_about_direct_capabilities(
+    axis: str, wrong: str | list[str]
+) -> None:
+    tools, report = _mcp_discovery()
+    report["tools"][0][axis] = wrong
+    with pytest.raises(ValueError, match="direct capability"):
+        clients.check_mcp_discovery(tools, report)
+
+
 def test_blocking_reader_uses_the_archive_readme_bytes(tmp_path: Path) -> None:
     program = 'use libtmux::blocking::Server;\n\nfn main() { println!("README reader"); }\n'
     hidden = (

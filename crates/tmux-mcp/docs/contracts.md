@@ -110,8 +110,10 @@ environment holds unless the operator allowed it (see
 
 ## Capability records
 
-Each tool carries one machine-readable capability record, and registration,
-descriptions, annotations, selection, and `tmux://capabilities` all read it.
+Each tool carries one machine-readable record of its direct capabilities.
+Registration, descriptions, selection, and `tmux://capabilities` all read it.
+The same registry supplies the whole-call annotations separately: configured
+tmux behaviour can add effects beyond the direct operation.
 
 A client receives it under `_meta["com.git-pull.libtmux-mcp/capability"]`,
 holding only what the tool does not already carry: toolset, process reach,
@@ -136,8 +138,10 @@ description and schemas stay with `tools/list`, which a client already holds,
 so the whole report is about 26 KB.
 
 The report states the outer boundary. One process has one socket, no call can
-select another socket, no tool executes a host command, and the resource is
-static. Its connection object supplies the socket selector, resolved path,
+select another socket, no tool directly runs a client-authored command outside
+a tmux pane, and the resource is static. Configured tmux behaviour can still
+run host programs.
+Its connection object supplies the socket selector, resolved path,
 attach command, daemon state, and configuration provenance:
 
 ```json
@@ -194,21 +198,30 @@ each tool's four MCP annotations to decide whether to ask a person before a
 whole call. Tool selection shapes the advertised interface, and does not
 reduce the tmux user's authority.
 
-The annotations derive from each tool's capability row:
+Every tool reports the conservative whole-call hints from
+[CM-4 of the cross-port capability ADR][capability-adr]:
 
-- A tool that only observes tmux is `readOnlyHint: true`. Every `inspect` tool
-  is read-only: the observer client that [`wait_for_text`][wait_for_text] or
-  [`capture_since`][capture_since] attaches only reads, and changes no session, window, pane, or option.
-- Deleting tmux state or sending pane input is `destructiveHint: true`,
-  because the receiving shell runs whatever arrives.
-- Reads, teardown, and changes that set a named value, such as a rename, are
-  `idempotentHint: true`.
-- Starting or driving a process, or returning terminal text, is
-  `openWorldHint: true`.
+- `readOnlyHint: false`: configured behaviour can change the environment.
+- `destructiveHint: true`: those changes can include destructive effects.
+- `idempotentHint: false`: repeating a call can activate further effects.
+- `openWorldHint: true`: configured behaviour can interact with external entities.
+
+The [MCP annotation meanings][mcp-annotations] cover the whole call, including
+the aliases, hooks, plugins, status jobs, and pane processes it activates.
+For example, a configured `after-list-sessions` hook can change an option when
+`list_sessions` runs. Its direct capability remains `processReach: "none"`
+with `tmuxEffects: ["observe"]`; that does not make the whole call read-only.
+
+Unknown configuration provenance cannot justify narrower hints. Even an
+initially minimal configuration can change through another tmux client.
+The hints do not enforce approval or restrict the tmux user's authority.
 
 [`set_history_limit`][set_history_limit] is destructive: from tmux 3.7 a lower
 limit discards existing panes' scrollback past it, so it is in `teardown`
 beside [`clear_pane_scrollback`][clear_pane_scrollback].
+
+[capability-adr]: https://github.com/tmux-python/libtmux-mcp/blob/7ddaf62a4a0502ce5961b302971b345bd1df14d0/docs/dev/adr/0001-capability-model.md#cm-4-mcp-annotations-describe-an-entire-tool-call
+[mcp-annotations]: https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations
 
 ## The caller's pane
 

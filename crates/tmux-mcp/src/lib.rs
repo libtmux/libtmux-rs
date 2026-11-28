@@ -146,7 +146,7 @@ pub(crate) const INSTRUCTIONS: &str = concat!(
      says missed=true when output was lost before it was read.",
     "\n\nPANE MODES: a pane in copy mode or another tmux mode belongs to the person in it. \
      Read it with capture, search or snapshot; input to it is refused until they leave.",
-    "\n\nTOOLSETS: inspect reads; manage changes tmux state; execute runs processes and \
+    "\n\nTOOLSETS (direct effects): inspect reads; manage changes tmux state; execute runs processes and \
      sends pane input; teardown deletes. tmux://capabilities has the surface frozen at \
      startup; a missing tool was not selected.",
     "\n\nREQUIRES tmux 3.3a or newer; an older server is refused as unsupported_version.",

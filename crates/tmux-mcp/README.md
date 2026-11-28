@@ -559,11 +559,14 @@ fields.
 ### Asking first: annotations
 
 The server has no confirmation policy. A client decides whether to ask a
-person before a call from each tool's four MCP annotations, derived from its
-capability record.
+person before a call. Every tool's whole-call hints are `readOnlyHint: false`,
+`destructiveHint: true`, `idempotentHint: false`, and `openWorldHint: true`.
+
+Configured aliases, hooks and jobs can add effects even to inspect calls.
+Capability records describe direct operations separately from these hints.
 
 Selecting tools shapes what a client is offered, not the tmux user's authority.
-[The contract][contract-asking] maps tools to annotations.
+[The contract][contract-asking] explains the whole-call annotations.
 
 ## What comes back
 
