@@ -63,6 +63,46 @@ struct Shared {
 struct Lifecycle {
     accepting: bool,
     entries: HashMap<RequestId, watch::Sender<bool>>,
+    cleanup_failure: Option<CleanupFailure>,
+}
+
+#[derive(Clone, Copy)]
+struct CleanupFailure {
+    request_id: u64,
+    stages: [Option<io::ErrorKind>; 3],
+}
+
+impl CleanupFailure {
+    fn result(self) -> Result<(), Error> {
+        let [group, kill, waited] = self
+            .stages
+            .map(|kind| kind.map_or(Ok(()), |kind| Err(io::Error::from(kind))));
+        cleanup_result(
+            self.request_id,
+            &crate::Command::new("subprocess").summary(),
+            group,
+            kill,
+            waited,
+        )
+    }
+}
+
+impl Shared {
+    fn retain_cleanup(
+        &self,
+        request_id: u64,
+        group: &io::Result<()>,
+        kill: &io::Result<()>,
+        waited: &io::Result<()>,
+    ) {
+        let stages = [group, kill, waited].map(|result| result.as_ref().err().map(io::Error::kind));
+        if stages.iter().any(Option::is_some) {
+            // Retain only stage categories, never request arguments or child output.
+            lock_lifecycle(self)
+                .cleanup_failure
+                .get_or_insert(CleanupFailure { request_id, stages });
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -145,6 +185,7 @@ impl SubprocessExecutor {
             lifecycle: Mutex::new(Lifecycle {
                 accepting: true,
                 entries: HashMap::new(),
+                cleanup_failure: None,
             }),
             empty: Notify::new(),
             admission: ProcessAdmission::new(limits.max_in_flight, limits.acquire_timeout),
@@ -173,6 +214,7 @@ impl SubprocessExecutor {
                 lifecycle: Mutex::new(Lifecycle {
                     accepting: true,
                     entries: HashMap::new(),
+                    cleanup_failure: None,
                 }),
                 empty: Notify::new(),
                 admission: ProcessAdmission::new(DispatchLimits::DEFAULT_IN_FLIGHT, None),
@@ -394,8 +436,13 @@ impl Executor for SubprocessExecutor {
 
             loop {
                 let notified = shared.empty.notified();
-                if lock_lifecycle(&shared).entries.is_empty() {
-                    return Ok(());
+                {
+                    let lifecycle = lock_lifecycle(&shared);
+                    if lifecycle.entries.is_empty() {
+                        return lifecycle
+                            .cleanup_failure
+                            .map_or(Ok(()), CleanupFailure::result);
+                    }
                 }
                 notified.await;
             }
@@ -562,6 +609,7 @@ fn start_native_child(
     // Child::wait closes stdin; the one-shot writer must stay with its owner.
     let stdin = child.stdin.take();
     let child_id = child.id();
+    let shared = Arc::clone(&reservation.registry.shared);
     let mut child = NativeChild {
         child: Some(child),
         changed,
@@ -599,8 +647,15 @@ fn start_native_child(
                 },
             };
             let group = process_group.signal_checked();
+            #[cfg(test)]
+            let group = group.and_then(|()| {
+                configuration
+                    .hooks
+                    .reported_group_signal_failure
+                    .map_or(Ok(()), |kind| Err(kind.into()))
+            });
             let kill = child.start_kill();
-            let waited = child.wait_blocking();
+            let waited = child.wait_blocking().map(|_| ());
             if waited.is_ok()
                 || waited
                     .as_ref()
@@ -608,15 +663,10 @@ fn start_native_child(
             {
                 process_group.disarm();
             }
+            shared.retain_cleanup(context.request_id(), &group, &kill, &waited);
             return Error::after_cleanup(
                 Err(primary),
-                cleanup_result(
-                    context.request_id(),
-                    &context.command,
-                    group,
-                    kill,
-                    waited.map(|_| ()),
-                ),
+                cleanup_result(context.request_id(), &context.command, group, kill, waited),
             );
         }
     };
@@ -633,6 +683,7 @@ fn start_native_child(
         &configuration.hooks,
     );
     let ownership = ChildOwnership {
+        shared,
         process_group,
         readers,
         child,
@@ -818,6 +869,7 @@ fn reap_native(mut job: NativeReap) {
 }
 
 struct ChildOwnership {
+    shared: Arc<Shared>,
     // This guard must drop before `child`; the unreaped leader anchors the PGID.
     process_group: ProcessGroupGuard,
     readers: ReaderTasks,
@@ -911,6 +963,7 @@ async fn supervise_outer(
                 &mut ownership.readers,
                 &mut ownership.process_group,
                 &context,
+                &ownership.shared,
                 #[cfg(test)]
                 hooks.reported_group_signal_failure,
             )
@@ -1129,6 +1182,7 @@ async fn cleanup_child(
     readers: &mut ReaderTasks,
     process_group: &mut ProcessGroupGuard,
     context: &RequestContext,
+    shared: &Shared,
     #[cfg(test)] reported_group_signal_failure: Option<io::ErrorKind>,
 ) -> Result<(), Error> {
     readers.abort_and_join().await;
@@ -1152,6 +1206,7 @@ async fn cleanup_child(
             }
         }
     };
+    shared.retain_cleanup(context.request_id(), &group, &kill, &waited);
     cleanup_result(context.request_id(), &context.command, group, kill, waited)
 }
 
@@ -1510,3 +1565,6 @@ fn trace_finished(_context: &RequestContext, _result: &Result<CommandResult, Err
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cleanup_history;
