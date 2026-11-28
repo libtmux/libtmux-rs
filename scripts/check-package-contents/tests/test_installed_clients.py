@@ -274,7 +274,7 @@ def test_stdio_reader_enforces_its_byte_limit(monkeypatch: pytest.MonkeyPatch) -
         clients.JsonLines(source).line()
 
 
-def test_ci_uses_the_same_pinned_recorder_and_keeps_the_proof_artifact() -> None:
+def test_native_workflows_share_the_recorder_pin_and_keep_the_proof_artifact() -> None:
     workflow = yaml.safe_load((clients.ROOT / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"]["native-clients"]["steps"]
     [checkout] = [
@@ -290,6 +290,17 @@ def test_ci_uses_the_same_pinned_recorder_and_keeps_the_proof_artifact() -> None
     assert upload["if"] == "always()"
     assert upload["with"]["path"] == "artifacts/native-clients"
     assert "native-clients" in workflow["jobs"]["required"]["needs"]
+    docs = yaml.safe_load((clients.ROOT / ".github/workflows/docs.yml").read_text())
+    for job, name in [("build", "port-docs"), ("publish", "reusable-deploy")]:
+        assert docs["jobs"][job]["uses"] == (
+            f"libtmux/docs/.github/workflows/{name}.yml@{clients.RECORDER_REVISION}"
+        )
+    [verifier] = [
+        step
+        for step in docs["jobs"]["installed-examples"]["steps"]
+        if step.get("with", {}).get("repository") == "libtmux/docs"
+    ]
+    assert verifier["with"]["ref"] == clients.RECORDER_REVISION
 
 
 def test_install_preserves_external_lockfile_checksums_and_versions() -> None:
