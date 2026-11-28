@@ -328,10 +328,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                     background_observed,
                 )
         settle = time.monotonic() + 0.5
-        while (
-            any(not has_exited(process_state(pid)) for pid in pids)
-            and time.monotonic() < settle
-        ):
+        while any(not has_exited(process_state(pid)) for pid in pids) and time.monotonic() < settle:
             time.sleep(0.005)
         after = {pid: process_state(pid) for pid in pids}
         observed_keeper = native(
