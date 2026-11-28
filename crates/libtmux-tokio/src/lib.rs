@@ -271,31 +271,31 @@
 #![cfg_attr(
     feature = "control-mode",
     doc = r#"
-## Being told instead of asking
+## Watch pane output
 
-Everything above runs a tmux command and reads the answer. The `control-mode`
-feature opens one connection and keeps it, so tmux reports what happens as it
-happens -- no polling interval, and nothing missed between two polls.
-
-[`Pane::stream_output`] is the narrow version: what one pane writes, as it
-writes it, where [`Pane::capture`] gives only what is on screen now.
+The `control-mode` feature keeps a tmux client connected to the daemon.
+[`Pane::stream_output`] delivers bytes as a pane writes them. If the
+subscriber falls behind, it reports [`Error::ControlGap`].
+[`Pane::capture`] reads the pane's current grid.
 
 ```no_run
 # async fn watch(pane: &libtmux_tokio::Pane) -> Result<(), libtmux_tokio::Error> {
 let mut output = pane.stream_output().await?;
 
-while let Some(chunk) = output.next_chunk().await {
-    println!("{} bytes", chunk.len());
-}
-
-output.shutdown().await
+let read = loop {
+    match output.next_chunk().await {
+        Some(Ok(bytes)) => println!("{} bytes", bytes.len()),
+        Some(Err(error)) => break Err(error),
+        None => break Ok(()),
+    }
+};
+libtmux_tokio::Error::after_cleanup(read, output.shutdown().await)
 # }
 ```
 
-[`control::ControlMode`] is the whole connection: every notification the server
-sends, plus commands that travel down the connection rather than spawning a
-process. Sending and watching are separate handles, so a task can act on what
-it sees. See the [`control`] module.
+Use [`control::ControlMode`] to watch server notifications and send commands
+on the same connection. Its [`split`](control::ControlMode::split) method
+gives the caller a command sender and an event subscriber.
 "#
 )]
 // docs.rs builds with this cfg set, so every gated item there carries the
