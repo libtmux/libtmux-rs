@@ -26,6 +26,13 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- The root README puts ordinary Tokio use before fixture examples and names
+  the blocking client's current typed operations. The Tokio README uses
+  sibling checkout dependencies for its unpublished API and distinguishes
+  the published `libtmux` 0.1.2 API.
+- `check-api-examples` validates the split facade's standalone run recipe
+  against the facade README, changing only the Cargo invocation. Legacy
+  and Tokio profiles retain their exact default command.
 - `format_injection` checks literal start directories against the child
   process's byte report. tmux 3.3a may omit its current path while the child
   starts; unescaped directory formats still fail the assertions.
