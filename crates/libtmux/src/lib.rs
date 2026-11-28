@@ -41,3 +41,7 @@ pub use libtmux_tokio as tokio;
 /// use libtmux::NewSessionOptions;
 /// ```
 mod retired_imports {}
+
+#[cfg(all(doctest, feature = "derive"))]
+#[doc = include_str!("../libtmux-macros-README.md")]
+mod macros_readme {}

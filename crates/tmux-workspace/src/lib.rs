@@ -474,16 +474,6 @@ fn referenced(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Compiles the `libtmux-macros` README's examples, and nothing else.
-///
-/// It cannot be compiled from `libtmux-macros`, whose only dependency on
-/// `libtmux` is deliberately renamed so the UI tests prove the derive resolves
-/// the crate. Here `libtmux` is an ordinary dependency under its own name,
-/// which is the case a reader of that README is in.
-#[cfg(doctest)]
-#[doc = include_str!("../libtmux-macros-README.md")]
-pub struct MacrosReadme;
-
 /// The `tmux-workspace` command's reference, rendered with the library's
 /// documentation so it is readable on docs.rs and a link to it is checked
 /// when the documentation builds. Documentation only; it holds no items.

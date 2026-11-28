@@ -144,12 +144,10 @@ These pages are compiled along with them, so their Rust examples are tests:
   documentation.
 - `crates/tmux-workspace/README.md`, by `Readme` in the same file. It is the
   command's page on crates.io, so it is compiled without being rendered.
-- `crates/libtmux-macros/README.md`, by `MacrosReadme` in
-  `crates/tmux-workspace/src/lib.rs`, reached through a symlink. A proc-macro
-  crate cannot doctest a README that derives through it, and the example needs
-  `libtmux` under its own name, which is only true from a third crate.
-  `crates/libtmux-tokio/tests/macros_readme.rs` compiles the same example again as
-  an ordinary test.
+- The facade compiles `crates/libtmux-macros/README.md` with its `derive`
+  feature. Its package includes the README through a symlink. The Tokio
+  integration test `crates/libtmux-tokio/tests/macros_readme.rs` exercises
+  the derive through the Tokio crate name.
 
 `crates/tmux-mcp/README.md` has no Rust to compile. Its commands and its JSON
 client configurations are checked instead by `crates/tmux-mcp/tests/docs.rs`,

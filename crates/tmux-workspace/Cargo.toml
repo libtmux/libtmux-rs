@@ -21,7 +21,6 @@ include = [
     "/README.md",
     "/docs/*.md",
     "/examples/*.rs",
-    "/libtmux-macros-README.md",
     "/src/**/*.rs",
     "/src/cli/bridge.py",
     "/src/cli/python_version_check.py",

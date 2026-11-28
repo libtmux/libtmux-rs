@@ -18,6 +18,7 @@ include = [
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
     "/README.md",
+    "/libtmux-macros-README.md",
     "/docs/adr/*.md",
     "/docs/design.md",
     "/docs/migration.md",
