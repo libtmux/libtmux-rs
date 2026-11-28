@@ -34,7 +34,7 @@ APPLICATIONS = ("tmux-mcp", "tmux-workspace")
 PACKAGES = (*LIBRARIES, *APPLICATIONS)
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path("/tmp/libtmux-rs-test")
-RECORDER_REVISION = "112e36a381353ad5b73f95eb17e3ea39306aaee7"
+RECORDER_REVISION = "c6a957b058caae42ed413172ec3977a945d46aac"
 STREAM_LIMIT = 8 * 1024 * 1024
 
 TOKIO_PROGRAM = """\
