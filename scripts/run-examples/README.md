@@ -12,6 +12,7 @@ it needs. The script checks the table against `cargo metadata` in both
 directions before it runs anything, so an added example with no row fails and
 so does a row naming an example that is gone. A `pane` example reads `$TMUX`
 as a process inside a pane does, and is handed the fixture server by name.
+A `socket` example receives the same private socket path as an argument.
 Before the table, the script runs `inspect` with every variable that selects a
 server aimed at the fixture and requires that it finds none.
 

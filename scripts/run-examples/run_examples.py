@@ -48,7 +48,8 @@ DEV_ROOT = Path("/tmp/libtmux-rs-dev")
 #
 # The last column is a list of words: `control` for an example that needs
 # control acquisition, `pane` for one that reads `$TMUX` as a process inside a
-# pane does and is handed this script's server by name.
+# pane does and is handed this script's server by name, and `socket` for one
+# that takes the fixture socket as a command-line argument.
 #
 # The column before it is what the example must print, and it answers two
 # questions a leak check cannot.
@@ -80,7 +81,7 @@ libtmux-tokio | watch    | control-mode,test-support                     |    | 
 libtmux-tokio | matrix   | plan,control-mode,test-support,query |    |               | every mode built the same thing: true
 libtmux-tokio | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
 libtmux-tokio | recover  | test-support                                  |    |               | is_object_gone: false
-libtmux | api_mixed | blocking,tokio,test-support | | | mixed runtime
+libtmux | api_mixed | blocking,tokio | | | mixed runtime | socket
 tmux-mcp | budget   |                                               |    |               | of it output schemas
 tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
@@ -254,9 +255,12 @@ class Fixture:
         )
 
 
-def cargo_run(row: Row) -> list[str]:
+def cargo_run(row: Row, fixture: Fixture) -> list[str]:
     """The `cargo run` command for a row; its environment is `run_environment`."""
-    return ["cargo", "run", *cargo_options(row), "--", *row.arguments.split()]
+    arguments = row.arguments.split()
+    if row.needs_word("socket"):
+        arguments.append(str(fixture.socket))
+    return ["cargo", "run", *cargo_options(row), "--", *arguments]
 
 
 def run_environment(row: Row, fixture: Fixture) -> dict[str, str]:
@@ -272,7 +276,7 @@ def run_plain(row: Row, fixture: Fixture, out: Path) -> bool:
     with (
         out.open("wb") as log,
         subprocess.Popen(
-            cargo_run(row),
+            cargo_run(row, fixture),
             cwd=ROOT,
             env=run_environment(row, fixture),
             stdin=subprocess.DEVNULL,
@@ -300,7 +304,7 @@ def run_driven(row: Row, fixture: Fixture, out: Path) -> bool:
     with (
         out.open("wb") as log,
         subprocess.Popen(
-            cargo_run(row),
+            cargo_run(row, fixture),
             cwd=ROOT,
             env=run_environment(row, fixture),
             stdin=subprocess.PIPE,
