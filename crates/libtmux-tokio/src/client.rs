@@ -522,6 +522,13 @@ impl fmt::Debug for Client {
 }
 
 #[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Client {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
+    }
+}
+
+#[cfg(feature = "query")]
 impl Client {
     /// Read one field of this client's snapshot, named by the handle that
     /// filters it.
@@ -597,12 +604,5 @@ impl FilterSchema for Client {
 impl fmt::Display for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.name().to_string_lossy())
-    }
-}
-
-#[cfg(feature = "query")]
-impl libtmux_core::snapshot::SnapshotFields for Client {
-    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
-        self.stored(name)
     }
 }

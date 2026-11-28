@@ -1483,6 +1483,13 @@ impl fmt::Debug for Pane {
 }
 
 #[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Pane {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
+    }
+}
+
+#[cfg(feature = "query")]
 impl Pane {
     /// Read one field of this pane's snapshot, named by the handle that
     /// filters it.
@@ -2015,12 +2022,5 @@ mod tests {
         for depth in [1, 2, u32::MAX] {
             assert!(pane_mode_is_active(depth), "mode depth {depth}");
         }
-    }
-}
-
-#[cfg(feature = "query")]
-impl libtmux_core::snapshot::SnapshotFields for Pane {
-    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
-        self.stored(name)
     }
 }

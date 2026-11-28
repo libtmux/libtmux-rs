@@ -1028,6 +1028,13 @@ impl fmt::Debug for Session {
 }
 
 #[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Session {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
+    }
+}
+
+#[cfg(feature = "query")]
 impl Session {
     /// Read one field of this session's snapshot, named by the handle that
     /// filters it.
@@ -1359,12 +1366,5 @@ mod option_tests {
         let summary = options.into_command("$1", "#{window_id}").summary();
         assert_eq!(summary.sensitive_argument_count(), 2);
         assert!(!summary.to_string().contains(secret));
-    }
-}
-
-#[cfg(feature = "query")]
-impl libtmux_core::snapshot::SnapshotFields for Session {
-    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
-        self.stored(name)
     }
 }

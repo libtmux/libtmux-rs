@@ -1423,6 +1423,13 @@ impl fmt::Debug for Window {
 }
 
 #[cfg(feature = "query")]
+impl libtmux_core::snapshot::SnapshotFields for Window {
+    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.stored(name)
+    }
+}
+
+#[cfg(feature = "query")]
 impl Window {
     /// Read one field of this window's snapshot, named by the handle that
     /// filters it.
@@ -2349,12 +2356,5 @@ mod layout_version_tests {
             classify("main-vertical-mirrored", b"tmux 3.3a\n"),
             SavedLayout::Unrecognized,
         );
-    }
-}
-
-#[cfg(feature = "query")]
-impl libtmux_core::snapshot::SnapshotFields for Window {
-    fn stored_field(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
-        self.stored(name)
     }
 }
