@@ -741,7 +741,9 @@ async fn aborting_the_actor_retains_only_a_completed_verified_creation() {
         );
         assert_eq!(error.creation_receipt().is_some(), complete);
         assert!(!error.is_transient());
-        let _ = events.shutdown().await;
+        let error = events.shutdown_after_error(error).await;
+        assert!(matches!(error, Error::OperationCleanupPending { .. }));
+        assert_eq!(error.creation_receipt().is_some(), complete);
         fixture.server.shutdown().await.unwrap();
         gone(child).await;
     }

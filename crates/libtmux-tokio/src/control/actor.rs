@@ -313,7 +313,8 @@ pub(super) async fn open(
         outcome = &mut connection => {
             return match outcome {
                 Ok(Err(error)) => Err(error),
-                _ => Err(Error::control_mode_closed()),
+                Ok(Ok(())) => Err(Error::control_mode_closed()),
+                Err(_) => Err(super::lost_connection_task()),
             };
         }
     }
@@ -359,8 +360,8 @@ async fn opening_cleanup(
         .unwrap_or(now);
     match tokio::time::timeout_at(latest, connection).await {
         Ok(Ok(Err(terminal))) => super::retain_cleanup(primary, terminal),
-        Ok(Ok(Ok(())) | Err(_)) => primary,
-        Err(_) => Error::OperationCleanupPending {
+        Ok(Ok(Ok(()))) => primary,
+        Ok(Err(_)) | Err(_) => Error::OperationCleanupPending {
             source: Box::new(primary),
         },
     }

@@ -1122,6 +1122,12 @@ fn decode_watched_pane_id(line: &TmuxText) -> Result<PaneId, Error> {
     id.parse().map_err(invalid)
 }
 
+fn lost_connection_task() -> Error {
+    Error::OperationCleanupPending {
+        source: Box::new(Error::control_mode_closed()),
+    }
+}
+
 fn retain_cleanup(mut primary: Error, terminal: Error) -> Error {
     // A completed actor may have had only its child cleanup fail. That
     // diagnostic is independent of the request or qualification failure.
@@ -1181,9 +1187,11 @@ pub struct ControlEvents {
 impl ControlEvents {
     pub(crate) async fn shutdown_after_error(self, primary: Error) -> Error {
         match self.shutdown().await {
-            Err(Error::ShutdownPending) => Error::OperationCleanupPending {
-                source: Box::new(primary),
-            },
+            Err(Error::ShutdownPending | Error::OperationCleanupPending { .. }) => {
+                Error::OperationCleanupPending {
+                    source: Box::new(primary),
+                }
+            }
             Err(terminal) => retain_cleanup(primary, terminal),
             Ok(()) => primary,
         }
@@ -1219,7 +1227,9 @@ impl ControlEvents {
     ///
     /// Returns a connection or cleanup error not already delivered by the
     /// stream. After the one-second allowance, [`Error::ShutdownPending`]
-    /// leaves cleanup with the connection task. Keep its Tokio runtime alive.
+    /// leaves cleanup with the connection task. An interrupted task reports
+    /// [`Error::OperationCleanupPending`] if it lost the cleanup acknowledgement.
+    /// Keep its Tokio runtime alive through shutdown.
     pub async fn shutdown(mut self) -> Result<(), Error> {
         let _ = self.stop.send(());
         // Draining releases a connection that is parked handing over an event,
@@ -1231,7 +1241,7 @@ impl ControlEvents {
             return Ok(());
         };
         crate::internal::operation::finish_shutdown(async {
-            connection.await.map_err(|_| Error::control_mode_closed())?
+            connection.await.map_err(|_| lost_connection_task())?
         })
         .await
     }
@@ -1268,7 +1278,7 @@ impl ControlEvents {
         Poll::Ready(match outcome {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(Err(error)),
-            Err(_) => Some(Err(Error::control_mode_closed())),
+            Err(_) => Some(Err(lost_connection_task())),
         })
     }
 }
