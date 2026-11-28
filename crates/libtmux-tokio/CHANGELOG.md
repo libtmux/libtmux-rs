@@ -20,6 +20,12 @@ Notable changes to `libtmux-tokio`.
   of a replacement retires the old generation's clients and signals.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
+- Explicit shutdown returns `Error::ShutdownPending` if child cleanup takes
+  longer than one second. The server keeps reaping and a later
+  `Server::shutdown` can confirm completion. A successful subprocess call
+  also signals any surviving members of its client process group.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - **Breaking.** The Tokio client no longer exposes `Error::ServerReplaced`.
   An ordinary queue-guard failure returns the native result without claiming
   that nothing ran. `Error::is_transient` no longer treats diagnostics about
