@@ -222,7 +222,7 @@ def stage_archives(
 ) -> tuple[dict[str, Path], dict[str, str], list[dict]]:
     """Extract every publishable archive and retain its original digest."""
     packages = [item for name in PACKAGES for item in ("-p", name)]
-    cargo.run(ROOT, "package", "--locked", "--allow-dirty", "--no-verify", *packages)
+    cargo.run(ROOT, "package", "--locked", "--no-verify", *packages)
     staged = {}
     versions = {}
     archives = []
@@ -242,8 +242,8 @@ def stage_archives(
         staged[package] = (directory / archive.stem).resolve()
         manifest = tomllib.loads((staged[package] / "Cargo.toml").read_text())
         vcs = json.loads((staged[package] / ".cargo_vcs_info.json").read_bytes())
-        if vcs["git"]["sha1"] != source_revision:
-            raise ValueError(f"{archive.name} was packaged from another source revision")
+        if vcs["git"]["sha1"] != source_revision or vcs["git"].get("dirty"):
+            raise ValueError(f"{archive.name} does not match the clean source revision")
         if manifest["package"]["name"] != package:
             raise ValueError(f"{archive.name} contains another package")
         versions[package] = manifest["package"]["version"]
@@ -380,6 +380,20 @@ def consume(
     return consumers, mixed_record, fixture_binary
 
 
+def verify_external_pins(shipped: Mapping, resolved: Mapping, staged: Mapping[str, Path]) -> None:
+    """Rebinding sibling archives must preserve every external version and checksum."""
+
+    def external(lock: Mapping) -> set[tuple]:
+        return {
+            (package["name"], package["version"], package.get("source"), package.get("checksum"))
+            for package in lock["package"]
+            if package["name"] not in staged
+        }
+
+    if external(shipped) != external(resolved):
+        raise ValueError("staged application changed a dependency pinned in the shipped Cargo.lock")
+
+
 def install_apps(cargo: Cargo, directory: Path, staged: dict[str, Path]) -> tuple[Path, list[dict]]:
     """Install the extracted commands without changing their shipped manifests."""
     config = directory / "staged-registry.toml"
@@ -395,10 +409,10 @@ def install_apps(cargo: Cargo, directory: Path, staged: dict[str, Path]) -> tupl
     for package in APPLICATIONS:
         path = staged[package]
         arguments = ("--config", str(config))
-        cargo.run(path, "generate-lockfile", *arguments)
-        selected = check_dependency_tree(
-            cargo.tree(path, *arguments, "--locked"), staged, expect_tokio=True
-        )
+        lockfile = path / "Cargo.lock"
+        shipped = tomllib.loads(lockfile.read_text())
+        selected = check_dependency_tree(cargo.tree(path, *arguments), staged, expect_tokio=True)
+        verify_external_pins(shipped, tomllib.loads(lockfile.read_text()), staged)
         cargo.run(
             path,
             "install",
@@ -582,7 +596,7 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                         input_bytes.extend(encoded)
                         transcript.append({"direction": "stdin", "message": message})
 
-                    def request(method: str, params: dict) -> dict:
+                    def exchange(method: str, params: dict) -> dict:
                         nonlocal sequence
                         sequence += 1
                         message = {
@@ -599,9 +613,13 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                             if answer.get("jsonrpc") != "2.0":
                                 raise ValueError("MCP stdout contains non-protocol data")
                             if answer.get("id") == sequence:
-                                if "error" in answer:
-                                    raise ValueError(f"MCP refused {method}: {answer['error']}")
-                                return answer["result"]
+                                return answer
+
+                    def request(method: str, params: dict) -> dict:
+                        answer = exchange(method, params)
+                        if "error" in answer:
+                            raise ValueError(f"MCP refused {method}: {answer['error']}")
+                        return answer["result"]
 
                     request(
                         "initialize",
@@ -613,10 +631,32 @@ def drive_applications(binaries: Path, fixture_binary: Path, output: Path) -> No
                     )
                     send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                     tools = request("tools/list", {})
-                    if not {"list_sessions", "capture_pane"}.issubset(
-                        {tool["name"] for tool in tools["tools"]}
+                    names = {tool["name"] for tool in tools["tools"]}
+                    if (
+                        not {"list_sessions", "capture_pane"}.issubset(names)
+                        or "kill_session" in names
                     ):
-                        raise ValueError("installed MCP omitted its inspect tools")
+                        raise ValueError("installed MCP exposed the wrong inspect surface")
+                    uri = "tmux://capabilities"
+                    resources = request("resources/list", {})["resources"]
+                    if uri not in {item["uri"] for item in resources}:
+                        raise ValueError("installed MCP omitted its capabilities resource")
+                    [content] = request("resources/read", {"uri": uri})["contents"]
+                    capabilities = json.loads(content["text"])
+                    if content["uri"] != uri or set(capabilities["effectiveTools"]) != names:
+                        raise ValueError("MCP capability report disagrees with tools/list")
+                    refusal = exchange(
+                        "tools/call",
+                        {"name": "kill_session", "arguments": {"session": "$4294967295"}},
+                    )
+                    evidence = refusal.get("error", {}).get("data", {})
+                    if (
+                        evidence.get("kind") != "invalid_input"
+                        or evidence.get("retryable") is not False
+                    ):
+                        raise ValueError(
+                            "installed MCP omitted its scoped refusal and retry evidence"
+                        )
                     sessions = request("tools/call", {"name": "list_sessions", "arguments": {}})
                     names = {item["name"] for item in sessions["structuredContent"]["sessions"]}
                     if names != {"installed-keeper", "installed-workspace"}:
@@ -673,6 +713,8 @@ def check_consumers(directory: Path, recorder: Path, output: Path) -> None:
     dirty = bool(
         subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT)
     )
+    if dirty:
+        raise ValueError("archive verification requires a clean source revision")
     output.mkdir(parents=True, exist_ok=False)
     (directory / "rust-toolchain.toml").write_bytes((ROOT / "rust-toolchain.toml").read_bytes())
     cargo = Cargo(directory)
@@ -716,6 +758,8 @@ def check_consumers(directory: Path, recorder: Path, output: Path) -> None:
     dirty |= bool(
         subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT)
     )
+    if dirty:
+        raise ValueError("source files changed while the archive proof was running")
     report = {
         "schemaVersion": 1,
         "sourceRevision": revision,

@@ -49,7 +49,7 @@ The `native-clients` CI job checks out the recorder at the revision named by
 `RECORDER_REVISION`, then retains `proof.json`, the original archives and
 recorder output in the `native-clients-<source SHA>` artefact. The report
 includes source, archive, program, recorder and installed-binary hashes.
-A dirty source tree is reported as such and cannot certify an exact revision.
+Start from a clean checkout. The app installs keep the external versions and checksums from each archived `Cargo.lock`. The MCP check reads its advertised capabilities and calls a disabled tool to verify its retry evidence.
 
 With that exact docs revision checked out beside this repository:
 

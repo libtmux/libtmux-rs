@@ -180,3 +180,18 @@ def test_ci_uses_the_same_pinned_recorder_and_keeps_the_proof_artifact() -> None
     assert upload["if"] == "always()"
     assert upload["with"]["path"] == "artifacts/native-clients"
     assert "native-clients" in workflow["jobs"]["required"]["needs"]
+
+
+def test_install_preserves_external_lockfile_checksums_and_versions() -> None:
+    original = {"name": "external", "version": "1.0.0", "source": "registry", "checksum": "abc"}
+    shipped = {
+        "package": [original, {"name": "libtmux-core", "version": "0.1.2", "source": "registry"}]
+    }
+    staged = {"libtmux-core": Path("/staged/core")}
+    rebound = {"package": [original, {"name": "libtmux-core", "version": "0.1.2"}]}
+    clients.verify_external_pins(shipped, rebound, staged)
+    for field, update in [("version", "1.0.1"), ("checksum", "def")]:
+        with pytest.raises(ValueError, match=r"shipped Cargo\.lock"):
+            clients.verify_external_pins(
+                shipped, {"package": [{**original, field: update}]}, staged
+            )
