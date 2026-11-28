@@ -36,5 +36,8 @@ thiserror.workspace = true
 static_assertions = "1.1.0"
 serde_json.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
