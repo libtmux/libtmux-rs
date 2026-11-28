@@ -1,4 +1,6 @@
 //! Decode only the initial blocks of a one-shot, non-attaching control client.
+use std::collections::BTreeSet;
+
 use crate::{Error, parse_number};
 
 pub(super) struct Frames<'a>(&'a [u8]);
@@ -37,12 +39,22 @@ impl<'a> Frames<'a> {
     /// from the independently verified first action block.
     pub(super) fn followups_succeeded(self, mut previous: u64) -> bool {
         let mut active = None;
+        let mut closed = BTreeSet::new();
         for line in self.0.split_inclusive(|&b| b == b'\n') {
+            let closing = line
+                .strip_prefix(b"%end ")
+                .or_else(|| line.strip_prefix(b"%error "));
+            if closing.is_some_and(|header| closed.contains(header)) {
+                return false;
+            }
             if let Some(header) = active {
                 if line.strip_prefix(b"%error ") == Some(header) {
                     return false;
                 }
                 if line.strip_prefix(b"%end ") == Some(header) {
+                    // Borrow each closed tuple once rather than rescanning
+                    // the complete tail for every hook frame.
+                    closed.insert(header);
                     active = None;
                 }
             } else if !creation_notice(line) {
@@ -102,9 +114,10 @@ fn split_record(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 fn creation_notice(line: &[u8]) -> bool {
-    line == b"%sessions-changed\n"
-        || line.starts_with(b"%config-error ")
-        || line.starts_with(b"%pane-mode-changed ")
+    line.ends_with(b"\n")
+        && (line == b"%sessions-changed\n"
+            || line.starts_with(b"%config-error ")
+            || line.starts_with(b"%pane-mode-changed "))
 }
 
 fn command_number(header: &[u8]) -> Result<u64, Error> {

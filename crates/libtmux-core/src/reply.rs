@@ -218,6 +218,22 @@ impl Reply {
         self.observation(CommandKind::CapturePane, result)
     }
 
+    /// Return the pane-dead observation and bytes from a qualified native capture.
+    ///
+    /// The boolean is true when the pane was observed dead immediately before
+    /// capture. The driver must use [`Capture::arguments_with_dead`] with a
+    /// qualified hook-free conditional and nonempty capture frame. Both the
+    /// capture and all follow-up frames must succeed without ambiguity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::StalePane`] for a verified generation refusal, or an
+    /// observation error for ambiguous framing, failure or a late reply.
+    pub fn capture_with_dead(self) -> Result<(bool, Vec<u8>), Error> {
+        let result = Capture::decode_frames_with_dead(self.status, &self.stdout);
+        self.observation(CommandKind::CapturePane, result)
+    }
+
     fn observation<T>(
         &self,
         operation: CommandKind,
@@ -423,6 +439,80 @@ mod tests {
             assert_eq!(error.effect(), Effect::Observation);
             assert_secret_absent(&error, "private-screen");
         }
+    }
+
+    #[test]
+    fn dead_capture_rejects_late_or_failed_reads_without_exposing_bytes() {
+        let condition = b"%begin 1 2 0\n%end 1 2 0\n%begin 1 3 0\n%end 1 3 0\n";
+        for marker in [&b""[..], b"%begin 1 4 0\n%end 1 4 0\n"] {
+            let output = [
+                condition.as_slice(),
+                marker,
+                b"%begin 1 5 0\nprivate-screen\n%end 1 5 0\n%exit\n",
+            ]
+            .concat();
+            let error = Reply::new(Some(0), output.clone(), 0, true)
+                .capture_with_dead()
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                Error::LateObservation {
+                    operation: CommandKind::CapturePane
+                }
+            ));
+            assert_eq!(error.effect(), Effect::Observation);
+            assert_secret_absent(&error, "private-screen");
+            for status in [None, Some(1)] {
+                let error = Reply::new(status, output.clone(), 9, false)
+                    .capture_with_dead()
+                    .unwrap_err();
+                assert!(
+                    matches!(error, Error::Command { operation: CommandKind::CapturePane, status: found, .. } if found == status)
+                );
+                assert_eq!(error.effect(), Effect::Observation);
+                assert_secret_absent(&error, "private-screen");
+            }
+        }
+        let malformed = Reply::new(Some(0), b"private-screen".to_vec(), 0, false)
+            .capture_with_dead()
+            .unwrap_err();
+        assert!(matches!(malformed, Error::FramedRead));
+        assert_secret_absent(&malformed, "private-screen");
+        let stale = Reply::new(
+            Some(1),
+            b"%begin 1 2 0\nsyntax error\n%error 1 2 0\n%exit\n".to_vec(),
+            0,
+            false,
+        )
+        .capture_with_dead()
+        .unwrap_err();
+        assert!(matches!(stale, Error::StalePane));
+        let pane: PaneId = "%7".parse().unwrap();
+        let absent = Reply::new(
+            Some(0),
+            b"%begin 1 2 0\n%end 1 2 0\n%exit\n".to_vec(),
+            0,
+            false,
+        )
+        .observe(Path::new("/socket"), pane.clone())
+        .unwrap_err();
+        assert!(matches!(absent, Error::PaneNotFound(found) if found == pane));
+    }
+
+    #[test]
+    fn ambiguous_hook_tail_retains_the_verified_creation_receipt() {
+        let output = [
+            ACTION,
+            b"%begin 1 3 0\n%end 1 3 0\n%begin 1 4 0\n%end 1 3 0\n%end 1 4 0\n%exit\n",
+        ]
+        .concat();
+        let error = creation(Some(0), &output, false).unwrap_err();
+        assert!(matches!(error, Error::CreationFollowup { .. }));
+        assert_eq!(error.effect(), Effect::Created);
+        assert_eq!(
+            error.creation_receipt().unwrap().pane().id().to_string(),
+            "%1"
+        );
     }
 
     #[test]
