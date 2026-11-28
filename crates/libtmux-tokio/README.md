@@ -524,28 +524,40 @@ the costly one: a link is gone and its window is still running.
 ## Choosing how commands reach tmux
 
 Control mode and chaining decide what a run costs and what it can prove.
-Every operation uses Tokio; either transport can execute the same typed calls.
+The Tokio adapter can route a typed call through a subprocess or a control connection.
 
 ### What each one does
 
 | Switch | Off (the default) | On |
 | --- | --- | --- |
-| **Control mode** | One tmux process per command | One connection for every command, and tmux reports changes as they happen |
+| **Control mode** | One tmux process per command | Eligible commands share a connection that also receives tmux notifications |
 | **Chaining** | One tmux process per command | Neighbouring commands share one process, trading the ability to say which one failed |
 
-Counted by `examples/matrix.rs` on one workload of six operations, all leaving
-identical tmux state:
+The matrix runs six operations against a private tmux server, then counts the
+panes and windows. This is one subprocess run. The wall times vary by machine.
 
-| Mode | Dispatches | Processes | Attribution on failure |
-| --- | --- | --- | --- |
-| One command per invocation | 6 | 7 | names the failing command |
-| Folded into shared invocations | 3 | 4 | `Unknown` -- tmux reports one status for the group |
-| Control mode, streaming | 6 | 3 | names the failing command |
-| Control mode, routed | 6 | 4 | names the failing command |
+<!-- example-output: matrix --package libtmux-tokio --all-features -- --baseline -->
 
-Processes include version probes and, for control mode, the connection itself.
-Reproduce the table with
-`cargo run --example matrix --features full,test-support`.
+```text
+mode                     feature            dispatches processes      wall  attribution  query output
+----------------------------------------------------------------------------------------------------------------------
+async/sequential         plan                        6         7     19ms  per-command  2 panes, 2 windows, 2 active
+async/folded             plan                        3         4     14ms  merged       2 panes, 2 windows, 2 active
+async/marked-fold        plan                        3         4     13ms  merged       2 panes, 2 windows, 2 active
+
+every mode built the same thing: true
+dispatches ranged 3..6, processes ranged 4..7
+
+the same failure, dispatched two ways:
+  Sequential   1 dispatch(es) -> [Failed, Skipped]
+  Folding      1 dispatch(es) -> [Unknown, Unknown]
+  Sequential names the failing operation; Folding cannot, because tmux
+  reports one status for the group whichever member failed.
+```
+
+Run `cargo run -p libtmux-tokio --all-features --example matrix` to include
+control mode on a qualified daemon. The process count includes qualification
+probes and the attached client.
 
 ### How to turn each one on
 

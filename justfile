@@ -327,7 +327,7 @@ doc-blocks:
 # and compares every column but the clock.
 [group: 'docs']
 example-tables:
-    uv run scripts/check-example-tables/check_example_tables.py README.md
+    uv run scripts/check-example-tables/check_example_tables.py crates/libtmux-tokio/README.md
 
 # A Contents list is a copy of a document's headings, and a copy drifts: a
 # renamed section leaves the list rendering a link to an anchor that is gone.
