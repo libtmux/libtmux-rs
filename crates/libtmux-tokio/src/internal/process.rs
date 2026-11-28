@@ -381,6 +381,7 @@ impl PersistentClients {
 
         Ok(PersistentReservation {
             stopped,
+            deadline,
             registration: PersistentRegistration {
                 shared: Arc::clone(&self.shared),
                 _permit: permit,
@@ -409,6 +410,7 @@ impl PersistentClients {
 #[cfg(feature = "control-mode")]
 pub(crate) struct PersistentReservation {
     stopped: watch::Receiver<bool>,
+    deadline: Option<Instant>,
     registration: PersistentRegistration,
 }
 
@@ -416,6 +418,35 @@ pub(crate) struct PersistentReservation {
 impl PersistentReservation {
     pub(crate) fn stopped(&self) -> watch::Receiver<bool> {
         self.stopped.clone()
+    }
+
+    async fn start<T: Send + 'static>(
+        self,
+        request: CommandRequest,
+        spawn: impl FnOnce(Self, CommandRequest) -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
+        let (reply, result) = tokio::sync::oneshot::channel();
+        tokio::task::spawn_blocking(move || {
+            // A queued blocking worker can outlive the attach future.
+            if reply.is_closed() {
+                return;
+            }
+            let outcome = if *self.stopped.borrow() {
+                Err(Error::executor_shutdown(
+                    request.request_id().get(),
+                    request.summary().clone(),
+                ))
+            } else if self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                Err(Error::control_mode_dispatch_timeout())
+            } else {
+                spawn(self, request)
+            };
+            let _ = reply.send(outcome);
+        });
+        result.await.map_err(|_| Error::control_mode_closed())?
     }
 }
 
@@ -484,7 +515,7 @@ impl PersistentChild {
         executable: super::control_socket::PinnedExecutable,
         identity: libtmux_core::control::ControlIdentity,
     ) -> Result<Self, Error> {
-        tokio::task::spawn_blocking(move || {
+        let spawn = move |reservation: PersistentReservation, request: CommandRequest| {
             validate_request(&launch, &request)?;
             let mut command = launch.command(request.argv());
             command
@@ -558,9 +589,8 @@ impl PersistentChild {
                 command: request.summary().clone(),
                 identity,
             })
-        })
-        .await
-        .map_err(|_| Error::control_mode_closed())?
+        };
+        reservation.start(request, spawn).await
     }
 
     pub(crate) fn version(&self) -> &crate::TmuxVersion {
@@ -673,6 +703,79 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::LaunchContext;
+
+    #[cfg(feature = "control-mode")]
+    #[test]
+    fn dropped_and_stopped_attaches_release_their_queued_startup() {
+        use crate::command::{CommandRequest, RequestId};
+        use crate::{Command, ControlClientLimits, Error};
+        use std::time::Duration;
+        use tokio::sync::oneshot;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime builds");
+        runtime.block_on(async {
+            let (occupied, ready) = oneshot::channel();
+            let (release, blocked) = std::sync::mpsc::channel();
+            let worker = tokio::task::spawn_blocking(move || {
+                occupied.send(()).expect("runtime is listening");
+                blocked
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("worker released");
+            });
+            ready.await.expect("only blocking worker is occupied");
+
+            let queue = async |clients: &super::PersistentClients, id| {
+                let id = RequestId::new(id);
+                let request = CommandRequest::with_global_argv(id, &[], Command::new("attach"));
+                let reservation = clients
+                    .reserve(id, request.summary().clone(), None)
+                    .await
+                    .expect("admitted");
+                let (spawned, observed) = oneshot::channel();
+                let mut startup = Box::pin(reservation.start(request, move |_, _| {
+                    spawned.send(()).expect("test observes startup");
+                    Ok(())
+                }));
+                tokio::select! {
+                    biased;
+                    _ = &mut startup => panic!("worker started while the pool was occupied"),
+                    () = std::future::ready(()) => {}
+                }
+                (startup, observed)
+            };
+            let first = super::PersistentClients::new(ControlClientLimits::default());
+            let second = super::PersistentClients::new(ControlClientLimits::default());
+            let (abandoned, first_spawn) = queue(&first, 1).await;
+            let (shutting_down, second_spawn) = queue(&second, 2).await;
+            drop(abandoned);
+            let mut shutdown = Box::pin(second.shutdown());
+            tokio::select! {
+                biased;
+                () = &mut shutdown => panic!("shutdown skipped the outstanding reservation"),
+                () = std::future::ready(()) => {}
+            }
+            release.send(()).expect("worker released");
+            assert!(
+                first_spawn.await.is_err(),
+                "an abandoned attach started its client"
+            );
+            assert!(matches!(
+                shutting_down.await,
+                Err(Error::ExecutorShutdown { .. })
+            ));
+            assert!(
+                second_spawn.await.is_err(),
+                "a stopped server started its client"
+            );
+            worker.await.expect("blocking worker exits");
+            shutdown.await;
+            first.shutdown().await;
+        });
+    }
 
     fn executable(path: &Path) {
         std::fs::write(path, b"#!/bin/sh\nexit 0\n").expect("fixture executable is written");

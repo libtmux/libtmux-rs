@@ -147,6 +147,60 @@ mod tests {
 
     use super::PinnedSocket;
 
+    #[tokio::test]
+    async fn an_expired_control_attach_cannot_start_its_executable() {
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use crate::command::{CommandRequest, RequestId};
+        use crate::internal::process::{LaunchContext, PersistentChild, PersistentClients};
+        use crate::{Command, ControlClientLimits, ControlModeErrorKind, Error};
+        use libtmux_core::{CreationNonce, control::ControlProbe};
+
+        let carrier = PinnedSocket {
+            directory: tempfile::tempdir().unwrap(),
+        };
+        let launch = LaunchContext::new("/bin/true").with_current_dir(carrier.directory.path());
+        let executable = carrier.pin_executable(&launch).unwrap();
+        let request_id = RequestId::new(1);
+        let request = CommandRequest::with_global_argv(request_id, &[], Command::new("attach"));
+        let clients = PersistentClients::new(ControlClientLimits::default());
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(10);
+        let reservation = clients
+            .reserve(request_id, request.summary().clone(), Some(deadline))
+            .await
+            .unwrap();
+        let probe = ControlProbe::new("$0".parse().unwrap(), CreationNonce::from_bytes([0x10; 16]));
+        let identity = probe.decode_control_report(
+            b"unknown command: libtmux-control-challenge:10101010101010101010101010101010:3.8,123,456,$0\n"
+        ).unwrap();
+
+        tokio::time::sleep_until(deadline).await;
+        let result = PersistentChild::spawn(
+            launch,
+            request,
+            reservation,
+            Arc::new(Mutex::default()),
+            carrier.into_directory(),
+            executable,
+            identity,
+        )
+        .await;
+        let refused = matches!(
+            &result,
+            Err(Error::ControlMode {
+                kind: ControlModeErrorKind::DispatchTimedOut,
+                ..
+            })
+        );
+        drop(result);
+        clients.shutdown().await;
+        assert!(
+            refused,
+            "an expired reservation must refuse OS child startup"
+        );
+    }
+
     fn arguments(global: &[&str]) -> (Vec<OsString>, OsString) {
         let directory = tempfile::tempdir().expect("temporary directory");
         let socket = directory.path().join("server.sock");

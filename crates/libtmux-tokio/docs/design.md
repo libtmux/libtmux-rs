@@ -25,6 +25,10 @@ If a request reaches its deadline while startup or cleanup is still pending,
 the caller waits at most one further second for acknowledgement.
 [Tokio pipe registration](https://github.com/tokio-rs/tokio/blob/b53b2001ed2ccfd9b87e32a0c6da1a1eebdc80b8/tokio/src/process/unix/mod.rs#L122-L145)
 
+A control attach waiting for a blocking worker can expire, lose its caller,
+or encounter server shutdown. The worker checks all three before launching
+the client. After launch, the supervisor owns the client through cleanup.
+
 ## Recover a creation receipt
 
 A failing after-hook can make tmux exit unsuccessfully after it created the
