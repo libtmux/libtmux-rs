@@ -198,8 +198,11 @@ impl<T: Copy> Availability<&T> {
 
 /// Closed progress-state vocabulary tmux emits for a pane's progress bar.
 ///
-/// This is public because [`crate::PaneFields`] exposes a typed handle for the
-/// field, so callers name these variants when filtering.
+/// With the `query` feature, callers use these variants to filter pane progress.
+#[cfg_attr(
+    feature = "query",
+    doc = "The typed filter handle is exposed by [`crate::PaneFields`]."
+)]
 ///
 /// # Examples
 ///

@@ -9,7 +9,7 @@ use super::Filterable;
 /// `#[derive(libtmux_core::Filterable)]` implements this and [`Filterable`] from
 /// the same field declaration. Implement it manually only when a handwritten
 /// [`Filterable`] target must also expose a `JsonSchema` for its
-/// [`FilterExpr`].
+/// [`FilterExpr`](super::FilterExpr).
 ///
 /// The schema closes targets, fields, operators, relations, and JSON value
 /// families. Deserialization remains authoritative for fixed-width integer
