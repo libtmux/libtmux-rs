@@ -389,14 +389,13 @@ mod tests {
             let server = limited.clone();
             tokio::spawn(async move {
                 server
-                    .chain(
-                        CommandChain::new(
-                            Command::new("wait-for").arg("-S").arg("retry-refused-held"),
-                        )
-                        // run-shell occupies an ordinary dispatch permit. A direct
-                        // wait-for has its own independent parked-client budget.
-                        .then(Command::new("run-shell").arg("tmux wait-for retry-refused-release")),
-                    )
+                    .chain(CommandChain::new(
+                        // The nested queue holds an ordinary permit without
+                        // resolving another tmux executable through PATH.
+                        Command::new("run-shell")
+                            .arg("-C")
+                            .arg("wait-for -S retry-refused-held ; wait-for retry-refused-release"),
+                    ))
                     .await
             })
         };
@@ -404,11 +403,13 @@ mod tests {
             .wait_for_channel("retry-refused-held", Duration::from_secs(2))
             .await
             .expect("the holding dispatch starts");
+        assert_eq!(held, libtmux_tokio::ChannelWait::Signalled);
+        assert!(
+            !holding.is_finished(),
+            "the signalled dispatch is still held"
+        );
 
-        let error = limited
-            .cmd(Command::new("list-sessions"))
-            .await
-            .expect_err("the only dispatch permit is occupied");
+        let refused = limited.cmd(Command::new("list-sessions")).await;
         coordinator
             .signal_channel("retry-refused-release")
             .await
@@ -420,7 +421,11 @@ mod tests {
         coordinator.shutdown().await.expect("the coordinator stops");
         guard.shutdown().await.expect("tmux fixture shuts down");
 
-        assert_eq!(held, libtmux_tokio::ChannelWait::Signalled);
+        let error = refused.expect_err("the only dispatch permit is occupied");
+        assert!(matches!(
+            &error,
+            libtmux_tokio::Error::Overloaded { in_flight: 1, .. }
+        ));
         assert_eq!(error.kind(), ErrorKind::Refused);
         let projected = tmux_error(&error).into_error_data();
         assert_eq!(projected.code, ErrorCode::INTERNAL_ERROR);
