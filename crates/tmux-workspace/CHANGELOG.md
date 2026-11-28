@@ -132,6 +132,10 @@ No entries for `tmux-workspace`.
 
 ### Fixed
 
+- When a foreground `before_script` job stops, `tmux-workspace load` consumes
+  the stop once. A shell can bring the job back to the foreground and interrupt
+  it without the CLI suspending itself a second time.
+
 - `tmux-workspace freeze` without a session name, run from a pane on one tmux
   server and aimed at another with `-L` or `-S`, captured whichever session
   owned the same pane ID there. It now uses the pane's session only when
