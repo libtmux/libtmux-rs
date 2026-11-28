@@ -56,6 +56,25 @@ def native_inventory(root: Path, package: str) -> tuple[dict[str, str], set[str]
     return inventory, native
 
 
+def expected_run_command(root: Path, *, package: str, split: bool) -> str:
+    """Keep the mixed reader's standalone run aligned with its checkout recipe."""
+    if not split or package != "libtmux":
+        return "cargo run --quiet"
+    readme = source_file(root, "crates/libtmux/README.md")["code"]
+    invocation = '  cargo run --quiet -p libtmux --example api_mixed --features tokio -- "$socket"'
+    recipes = [
+        block
+        for block in re.findall(r"^```sh\n(.*?)\n```$", readme, re.DOTALL | re.MULTILINE)
+        if invocation in block.split("\n")
+    ]
+    if len(recipes) != 1 or recipes[0].split("\n").count(invocation) != 1:
+        raise ValueError("expected one mixed-reader shell recipe in the facade README")
+    return "\n".join(
+        '  cargo run --quiet -- "$socket"' if line == invocation else line
+        for line in recipes[0].split("\n")
+    )
+
+
 def validate(
     root: Path,
     manifest: dict,
@@ -80,7 +99,7 @@ def validate(
         manifest["language"] != "rust"
         or manifest["nativeInventory"] != f"crates/{package}/docs/public-api.txt"
         or manifest["programFileName"] != "src/main.rs"
-        or manifest["runCommand"] != "cargo run --quiet"
+        or manifest["runCommand"] != expected_run_command(root, package=package, split=split)
     ):
         raise ValueError("unexpected Rust example setup")
     if inventories is None:

@@ -7,6 +7,7 @@ import check_api_examples as CHECK
 import pytest
 
 PACKAGES = ("libtmux-core", "libtmux-blocking", "libtmux-tokio", "libtmux")
+CHECKOUT = Path(__file__).resolve().parents[3]
 
 
 def write(root: Path, file: str, code: str) -> None:
@@ -100,7 +101,10 @@ def split_root(tmp_path):
             "libtmux_tokio::Server::capture",
         ],
     )
-    make_manifest(tmp_path, "libtmux", [mixed])
+    facade = make_manifest(tmp_path, "libtmux", [mixed])
+    facade["runCommand"] = json.loads((CHECKOUT / CHECK.MANIFEST).read_text())["runCommand"]
+    write(tmp_path, str(CHECK.MANIFEST), json.dumps(facade) + "\n")
+    write(tmp_path, "crates/libtmux/README.md", (CHECKOUT / "crates/libtmux/README.md").read_text())
     write(tmp_path, mixed["sourceFile"], "fn main() {}\n")
     return tmp_path
 
@@ -180,6 +184,62 @@ def test_workspace_reads_both_manifests_and_the_defining_crate_inventories(split
 
 def test_old_revisions_keep_the_single_manifest_contract(root, manifest):
     assert CHECK.validate_workspace(root) == CHECK.validate(root, manifest)
+
+
+def test_checked_in_mixed_recipe_and_programs_pass():
+    result = CHECK.validate_workspace(CHECKOUT)
+    mixed = next(item for item in result["examples"] if item["id"] == "rust-mixed")
+    assert (
+        mixed["files"][-1]["code"]
+        == (CHECKOUT / "crates/libtmux/examples/api_mixed.rs").read_text()
+    )
+
+
+@pytest.mark.parametrize("damage", ["default", "cleanup", "endpoint", "cargo", "extra"])
+def test_checked_in_mixed_recipe_rejects_a_changed_run(damage):
+    manifest = json.loads((CHECKOUT / CHECK.MANIFEST).read_text())
+    command = manifest["runCommand"]
+    if damage == "default":
+        command = "cargo run --quiet"
+    elif damage == "cleanup":
+        command = command.replace("  trap cleanup EXIT\n", "")
+    elif damage == "endpoint":
+        command = command.replace("/tmp/libtmux-rs-dev/mixed.XXXXXX", "/tmp/shared.XXXXXX")
+    elif damage == "cargo":
+        command = command.replace(
+            '  cargo run --quiet -- "$socket"',
+            '  cargo run --quiet -p libtmux --example api_mixed --features tokio -- "$socket"',
+        )
+    else:
+        command += "\ntrue"
+    assert command != manifest["runCommand"]
+    manifest["runCommand"] = command
+    inventories = {package: CHECK.native_inventory(CHECKOUT, package) for package in PACKAGES}
+    with pytest.raises(ValueError, match="unexpected Rust example setup"):
+        CHECK.validate(CHECKOUT, manifest, split=True, inventories=inventories)
+
+
+@pytest.mark.parametrize("damage", ["missing", "duplicate", "invocation"])
+def test_checked_in_readme_requires_one_recognised_mixed_recipe(tmp_path, damage):
+    readme = (CHECKOUT / "crates/libtmux/README.md").read_text()
+    if damage == "missing":
+        readme = readme.replace("```sh\n", "```text\n")
+    elif damage == "duplicate":
+        readme += readme
+    else:
+        readme = readme.replace("--features tokio --", "--features test-support --")
+    write(tmp_path, "crates/libtmux/README.md", readme)
+    with pytest.raises(ValueError, match="one mixed-reader shell recipe"):
+        CHECK.expected_run_command(tmp_path, package="libtmux", split=True)
+
+
+def test_tokio_recipe_keeps_its_default_run(split_root):
+    file = split_root / "crates/libtmux-tokio/examples/api/manifest.json"
+    manifest = json.loads(file.read_text())
+    manifest["runCommand"] = json.loads((CHECKOUT / CHECK.MANIFEST).read_text())["runCommand"]
+    file.write_text(json.dumps(manifest) + "\n")
+    with pytest.raises(ValueError, match="unexpected Rust example setup"):
+        CHECK.validate_workspace(split_root)
 
 
 def test_split_layout_never_falls_back_to_the_legacy_manifest(split_root):

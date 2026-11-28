@@ -12,6 +12,10 @@ that hides a source helper, a truncated source file, or a manifest that
 disagrees with the programs on disk. The mixed program may own its runtime
 from a synchronous `main`; an asynchronous `main` needs `#[tokio::main]`.
 
+Legacy and Tokio examples keep `cargo run --quiet`. The split facade's
+external-fixture recipe must match its README shell block, with only the
+checkout's Cargo invocation replaced by the standalone invocation.
+
 `just api-examples` runs it, and so does `just check` in CI. The documentation
 build reads the payload that `--output` writes.
 
