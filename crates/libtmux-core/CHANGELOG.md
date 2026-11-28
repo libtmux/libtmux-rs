@@ -6,6 +6,9 @@ Notable changes to `libtmux-core`.
 
 ### Added
 
+- Native capture codecs can return the pane-dead observation preceding a
+  capture. Ordinary codecs support bounded history ranges and pending bytes.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 - `Error::JoinedCaptureHook` reports an ordinary joined pane capture whose
   stdout can include a configured hook's reply. The caller receives no
   partial pane bytes. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
@@ -29,5 +32,9 @@ Notable changes to `libtmux-core`.
 
 ### Fixed
 
+- One-shot captures validate complete, successful and unambiguous hook tails
+  before returning screen bytes. Duplicate closes inside later hook output
+  and incomplete notices are refused. Creation replies retain their verified
+  receipt when this validation fails.
 - `FilterSchema` links its expression type with `query` enabled and `schema`
   disabled. `PaneProgressState` links `PaneFields` when `query` is enabled.
