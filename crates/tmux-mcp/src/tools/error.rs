@@ -319,7 +319,7 @@ mod tests {
     fn an_effect_boundary_changes_only_later_failures() {
         let mut boundary = EffectBoundary::new("send_keys");
         let first = boundary
-            .error(libtmux_tokio::Error::RuntimeNested)
+            .error(libtmux_tokio::Error::UnrecognizedLayout)
             .into_error_data();
         assert_eq!(first.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
@@ -329,7 +329,7 @@ mod tests {
 
         boundary.mark();
         let later = boundary
-            .error(libtmux_tokio::Error::RuntimeNested)
+            .error(libtmux_tokio::Error::UnrecognizedLayout)
             .into_error_data();
         assert_eq!(later.code, ErrorCode::INTERNAL_ERROR);
         let detail = later.data.expect("the later error carries detail");

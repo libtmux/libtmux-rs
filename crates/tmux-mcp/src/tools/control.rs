@@ -813,11 +813,11 @@ mod tests {
             .expect_err("a leaked buffer follows a completed paste");
         assert_eq!(cleanup.kind(), ErrorKind::PartialEffect);
 
-        let paste = paste_outcome(Err(Error::RuntimeNested), Ok(()))
+        let paste = paste_outcome(Err(Error::UnrecognizedLayout), Ok(()))
             .expect_err("successful cleanup restores the paste error");
         assert_eq!(paste.kind(), ErrorKind::InvalidInput);
 
-        let both = paste_outcome(Err(Error::RuntimeNested), Err(cleanup_error()))
+        let both = paste_outcome(Err(Error::UnrecognizedLayout), Err(cleanup_error()))
             .expect_err("failed cleanup leaves the setup effect behind");
         assert!(
             matches!(
