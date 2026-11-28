@@ -4,7 +4,6 @@ assoc_const libtmux_tokio::ControlLimits::DEFAULT_LINE_BYTES: usize
 assoc_const libtmux_tokio::DispatchLimits::DEFAULT_IN_FLIGHT: usize
 assoc_const libtmux_tokio::OutputLimits::DEFAULT_STDERR_BYTES: usize
 assoc_const libtmux_tokio::OutputLimits::DEFAULT_STDOUT_BYTES: usize
-assoc_type libtmux_tokio::query::ReadField::Value<'a> where Target: 'a
 constant libtmux_tokio::option_names::ACTIVITY_ACTION: &str
 constant libtmux_tokio::option_names::AFTER_BIND_KEY: &str
 constant libtmux_tokio::option_names::AFTER_CAPTURE_PANE: &str
@@ -223,7 +222,7 @@ constant libtmux_tokio::option_names::WORD_SEPARATORS: &str
 constant libtmux_tokio::option_names::WRAP_SEARCH: &str
 constant libtmux_tokio::option_names::XTERM_KEYS: &str
 enum libtmux_tokio::AccessMode
-enum libtmux_tokio::Availability<T>
+enum libtmux_tokio::Availability = libtmux_core::snapshot::Availability
 enum libtmux_tokio::ChannelWait
 enum libtmux_tokio::Chooser
 enum libtmux_tokio::ControlModeErrorKind
@@ -239,7 +238,7 @@ enum libtmux_tokio::OptionScope = libtmux_core::placement::OptionScope
 enum libtmux_tokio::OptionValue
 enum libtmux_tokio::OptionValueRefusal
 enum libtmux_tokio::PaneDirection
-enum libtmux_tokio::PaneProgressState
+enum libtmux_tokio::PaneProgressState = libtmux_core::snapshot::PaneProgressState
 enum libtmux_tokio::PaneSize
 enum libtmux_tokio::PaneTarget = libtmux_core::target::PaneTarget
 enum libtmux_tokio::PaneWait
@@ -258,7 +257,9 @@ enum libtmux_tokio::SplitDirection = libtmux_core::placement::SplitDirection
 enum libtmux_tokio::VersionError = libtmux_core::version::VersionError
 enum libtmux_tokio::WindowPlacement
 enum libtmux_tokio::WindowTarget = libtmux_core::target::WindowTarget
-enum libtmux_tokio::control::Event
+enum libtmux_tokio::control::ControlNotice = libtmux_core::control::ControlNotice
+enum libtmux_tokio::control::Event = libtmux_core::control::events::Event
+enum libtmux_tokio::control::PaneOutputEnd
 enum libtmux_tokio::control::Subscription
 enum libtmux_tokio::plan::Attribution
 enum libtmux_tokio::plan::OperationValue
@@ -268,9 +269,6 @@ enum libtmux_tokio::test::TestServerErrorKind
 function libtmux_tokio::AccessRule::mode: const fn(&self) -> libtmux_tokio::AccessMode
 function libtmux_tokio::AccessRule::name: fn(&self) -> &str
 function libtmux_tokio::AccessRule::principal: const fn(&self) -> libtmux_tokio::Principal
-function libtmux_tokio::Availability::as_ref: const fn(&self) -> libtmux_tokio::Availability<&T>
-function libtmux_tokio::Availability::available: fn(self) -> Option<T>
-function libtmux_tokio::Availability::is_available: const fn(&self) -> bool
 function libtmux_tokio::CaptureOptions::end: const fn(self, line: i32) -> Self
 function libtmux_tokio::CaptureOptions::escape_sequences: const fn(self) -> Self
 function libtmux_tokio::CaptureOptions::history: const fn() -> Self
@@ -296,6 +294,7 @@ function libtmux_tokio::Client::pid: fn(&self) -> u32
 function libtmux_tokio::Client::redraw: async fn(&self) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Client::refresh: async fn(&mut self) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Client::refreshed: async fn(&self) -> Result<Self, libtmux_tokio::Error>
+function libtmux_tokio::Client::snapshot: const fn(&self) -> &libtmux_tokio::ClientSnapshot
 function libtmux_tokio::Client::suspend: async fn(&self) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Client::switch_to: async fn(&self, session: &libtmux_tokio::Session) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Client::term_name: fn(&self) -> &libtmux_tokio::TmuxText
@@ -318,9 +317,14 @@ function libtmux_tokio::ControlClientLimits::acquire_timeout: const fn(self, tim
 function libtmux_tokio::ControlClientLimits::clients: const fn(self) -> usize
 function libtmux_tokio::ControlClientLimits::max_clients: const fn(self, clients: usize) -> Self
 function libtmux_tokio::ControlLimits::block_bytes: const fn(self) -> usize
+function libtmux_tokio::ControlLimits::drain_timeout: const fn(self, timeout: Duration) -> Self
 function libtmux_tokio::ControlLimits::line_bytes: const fn(self) -> usize
 function libtmux_tokio::ControlLimits::max_block_bytes: const fn(self, bytes: usize) -> Self
+function libtmux_tokio::ControlLimits::max_event_bytes: const fn(self, bytes: usize) -> Self
+function libtmux_tokio::ControlLimits::max_events: const fn(self, events: usize) -> Self
 function libtmux_tokio::ControlLimits::max_line_bytes: const fn(self, bytes: usize) -> Self
+function libtmux_tokio::ControlLimits::max_pending_requests: const fn(self, requests: usize) -> Self
+function libtmux_tokio::ControlLimits::max_reply_blocks: const fn(self, blocks: usize) -> Self
 function libtmux_tokio::DispatchLimits::acquire_timeout: const fn(self, timeout: Option<Duration>) -> Self
 function libtmux_tokio::DispatchLimits::in_flight: const fn(self) -> usize
 function libtmux_tokio::DispatchLimits::max_in_flight: const fn(self, permits: usize) -> Self
@@ -402,6 +406,7 @@ function libtmux_tokio::Pane::is_input_disabled: fn(&self) -> bool
 function libtmux_tokio::Pane::is_piped: fn(&self) -> bool
 function libtmux_tokio::Pane::is_synchronized: fn(&self) -> bool
 function libtmux_tokio::Pane::join_into: async fn(self, beside: &Self, options: libtmux_tokio::JoinOptions) -> Result<Self, libtmux_tokio::Error>
+function libtmux_tokio::Pane::key: const fn(&self) -> &libtmux_tokio::PaneKey
 function libtmux_tokio::Pane::kill: async fn(self) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Pane::left: fn(&self) -> i32
 function libtmux_tokio::Pane::option_names: async fn(&self) -> Result<Vec<String>, libtmux_tokio::Error>
@@ -425,6 +430,7 @@ function libtmux_tokio::Pane::set_hook: async fn(&self, name: &str, command: imp
 function libtmux_tokio::Pane::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Pane::set_title: async fn(&mut self, title: impl Into<libtmux_tokio::TmuxArg>) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Pane::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux_tokio::OptionValue>) -> Result<(), libtmux_tokio::Error>
+function libtmux_tokio::Pane::snapshot: const fn(&self) -> &libtmux_tokio::PaneSnapshot
 function libtmux_tokio::Pane::split: async fn(&self, options: impl Into<libtmux_tokio::SplitOptions>) -> Result<Self, libtmux_tokio::Error>
 function libtmux_tokio::Pane::stream_output: async fn(&self) -> Result<libtmux_tokio::control::PaneOutput, libtmux_tokio::Error>
 function libtmux_tokio::Pane::stream_output_with_limits: async fn(&self, limits: libtmux_tokio::ControlLimits) -> Result<libtmux_tokio::control::PaneOutput, libtmux_tokio::Error>
@@ -526,6 +532,7 @@ function libtmux_tokio::Server::set_typed_global_window_option: async fn(&self, 
 function libtmux_tokio::Server::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux_tokio::OptionValue>) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Server::shutdown: async fn(&self) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Server::signal_channel: async fn(&self, channel: &str) -> Result<(), libtmux_tokio::Error>
+function libtmux_tokio::Server::snapshots: async fn<S: libtmux_core::Snapshot>(&self) -> Result<Vec<S>, libtmux_tokio::Error>
 function libtmux_tokio::Server::socket_name: fn(&self) -> Option<&OsStr>
 function libtmux_tokio::Server::socket_path: fn(&self) -> &Path
 function libtmux_tokio::Server::source_file: async fn(&self, path: impl Into<PathBuf>) -> Result<(), libtmux_tokio::Error>
@@ -545,6 +552,7 @@ function libtmux_tokio::Server::unset_option: async fn(&self, name: &str) -> Res
 function libtmux_tokio::Server::validate_layouts: async fn<'a>(&self, layouts: impl IntoIterator<Item = (&'a OsStr, usize)>) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Server::wait_for_channel: async fn(&self, channel: &str, within: Duration) -> Result<libtmux_tokio::ChannelWait, libtmux_tokio::Error>
 function libtmux_tokio::Server::window_by_id: async fn(&self, id: &libtmux_tokio::WindowId) -> Result<Option<libtmux_tokio::Window>, libtmux_tokio::Error>
+function libtmux_tokio::Server::window_links: async fn(&self) -> Result<Vec<libtmux_tokio::WindowLink>, libtmux_tokio::Error>
 function libtmux_tokio::Server::windows: async fn(&self) -> Result<Vec<libtmux_tokio::Window>, libtmux_tokio::Error>
 function libtmux_tokio::Server::with_channel_lock: async fn<T, E>(&self, channel: &str, operation: impl AsyncFnOnce(&Self) -> Result<T, E>) -> Result<T, libtmux_tokio::ScopeError<T, E>>
 function libtmux_tokio::Server::with_session: async fn<T, E>(&self, options: impl Into<libtmux_tokio::NewSession>, operation: impl AsyncFnOnce(&libtmux_tokio::Session) -> Result<T, E>) -> Result<T, libtmux_tokio::ScopeError<T, E>>
@@ -576,6 +584,7 @@ function libtmux_tokio::Session::hook: async fn(&self, name: &str) -> Result<Opt
 function libtmux_tokio::Session::hooks: async fn(&self) -> Result<BTreeMap<String, libtmux_tokio::IndexedHooks>, libtmux_tokio::Error>
 function libtmux_tokio::Session::id: const fn(&self) -> &libtmux_tokio::SessionId
 function libtmux_tokio::Session::is_attached: fn(&self) -> bool
+function libtmux_tokio::Session::key: const fn(&self) -> &libtmux_tokio::SessionKey
 function libtmux_tokio::Session::kill: async fn(self) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Session::last_attached: fn(&self) -> Option<SystemTime>
 function libtmux_tokio::Session::last_window: async fn(&self) -> Result<Option<libtmux_tokio::Window>, libtmux_tokio::Error>
@@ -597,6 +606,7 @@ function libtmux_tokio::Session::set_hook: async fn(&self, name: &str, command: 
 function libtmux_tokio::Session::set_hooks: async fn(&self, name: &str, hooks: &libtmux_tokio::IndexedHooks, replace: libtmux_tokio::ReplaceMode) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Session::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Session::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux_tokio::OptionValue>) -> Result<(), libtmux_tokio::Error>
+function libtmux_tokio::Session::snapshot: const fn(&self) -> &libtmux_tokio::SessionSnapshot
 function libtmux_tokio::Session::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux_tokio::OptionValue>, libtmux_tokio::Error>
 function libtmux_tokio::Session::unset_environment: async fn(&self, name: &str) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Session::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux_tokio::Error>
@@ -648,7 +658,6 @@ function libtmux_tokio::Window::layout: fn(&self) -> &libtmux_tokio::TmuxText
 function libtmux_tokio::Window::link: fn(&self) -> libtmux_tokio::WindowLink
 function libtmux_tokio::Window::link_to: async fn(&self, session: &libtmux_tokio::Session, index: Option<i32>) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Window::linked_sessions: async fn(&self) -> Result<Vec<libtmux_tokio::Session>, libtmux_tokio::Error>
-function libtmux_tokio::Window::move_to: async fn(&mut self, session: &libtmux_tokio::Session, index: i32) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Window::name: fn(&self) -> &libtmux_tokio::TmuxText
 function libtmux_tokio::Window::next_layout: async fn(&mut self) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Window::option_names: async fn(&self) -> Result<Vec<String>, libtmux_tokio::Error>
@@ -665,7 +674,6 @@ function libtmux_tokio::Window::resize_by: async fn(&mut self, direction: libtmu
 function libtmux_tokio::Window::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, respawn_mode: libtmux_tokio::Respawn) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Window::rotate: async fn(&self, rotation: libtmux_tokio::Rotation) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Window::search_panes: async fn<M: crate::query::Matcher<libtmux_tokio::Pane>>(&self, matcher: M) -> Result<Vec<libtmux_tokio::Pane>, libtmux_tokio::Error>
-function libtmux_tokio::Window::select: async fn(&mut self) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Window::select_layout: async fn(&mut self, layout: impl Into<libtmux_tokio::LayoutSpec>) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Window::session: async fn(&self) -> Result<Option<libtmux_tokio::Session>, libtmux_tokio::Error>
 function libtmux_tokio::Window::session_id: const fn(&self) -> &libtmux_tokio::SessionId
@@ -673,20 +681,28 @@ function libtmux_tokio::Window::set_hook: async fn(&self, name: &str, command: i
 function libtmux_tokio::Window::set_hooks: async fn(&self, name: &str, hooks: &libtmux_tokio::IndexedHooks, replace: libtmux_tokio::ReplaceMode) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Window::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Window::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux_tokio::OptionValue>) -> Result<(), libtmux_tokio::Error>
+function libtmux_tokio::Window::snapshot: const fn(&self) -> &libtmux_tokio::WindowSnapshot
 function libtmux_tokio::Window::split: async fn(&self, options: impl Into<libtmux_tokio::SplitOptions>) -> Result<libtmux_tokio::Pane, libtmux_tokio::Error>
-function libtmux_tokio::Window::swap_with: async fn(&mut self, other: &Self) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::Window::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux_tokio::OptionValue>, libtmux_tokio::Error>
 function libtmux_tokio::Window::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Window::unset_option: async fn(&self, name: &str) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::Window::width: fn(&self) -> u32
 function libtmux_tokio::Window::with_pane: async fn<T, E>(&self, options: impl Into<libtmux_tokio::SplitOptions>, operation: impl AsyncFnOnce(&libtmux_tokio::Pane) -> Result<T, E>) -> Result<T, libtmux_tokio::ScopeError<T, E>>
+function libtmux_tokio::WindowLink::into_window: fn(self) -> libtmux_tokio::Window
+function libtmux_tokio::WindowLink::move_to: async fn(&mut self, session: &libtmux_tokio::Session, index: i32) -> Result<&mut Self, libtmux_tokio::Error>
+function libtmux_tokio::WindowLink::select: async fn(&mut self) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::WindowLink::snapshot: const fn(&self) -> &libtmux_tokio::WindowLinkSnapshot
+function libtmux_tokio::WindowLink::swap_with: async fn(&mut self, other: &Self) -> Result<&mut Self, libtmux_tokio::Error>
 function libtmux_tokio::WindowLink::unlink: async fn(self) -> Result<(), libtmux_tokio::Error>
+function libtmux_tokio::WindowLink::window: const fn(&self) -> &libtmux_tokio::Window
+function libtmux_tokio::control::BlockResult::blocks: fn(&self) -> &[libtmux_core::control::ControlBlock]
+function libtmux_tokio::control::BlockResult::hook_failures: const fn(&self) -> usize
 function libtmux_tokio::control::BlockResult::number: const fn(&self) -> u64
 function libtmux_tokio::control::BlockResult::output: fn(&self) -> &[libtmux_tokio::TmuxText]
 function libtmux_tokio::control::BlockResult::refusal_for: fn(&self, operation: &'static str) -> Option<libtmux_tokio::Error>
 function libtmux_tokio::control::BlockResult::succeeded: const fn(&self) -> bool
 function libtmux_tokio::control::ControlEvents::next_event: async fn(&mut self) -> Option<Result<libtmux_tokio::control::Event, libtmux_tokio::Error>>
+function libtmux_tokio::control::ControlEvents::next_notice: async fn(&mut self) -> Option<Result<libtmux_tokio::control::ControlNotice, libtmux_tokio::Error>>
 function libtmux_tokio::control::ControlEvents::shutdown: async fn(self) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::control::ControlMode::attach: async fn(server: &libtmux_tokio::Server, session: &libtmux_tokio::SessionId) -> Result<Self, libtmux_tokio::Error>
 function libtmux_tokio::control::ControlMode::attach_with_limits: async fn(server: &libtmux_tokio::Server, session: &libtmux_tokio::SessionId, limits: libtmux_tokio::ControlLimits) -> Result<Self, libtmux_tokio::Error>
@@ -706,11 +722,7 @@ function libtmux_tokio::control::ControlSender::subscribe: async fn(&self, name:
 function libtmux_tokio::control::ControlSender::unmute_pane: async fn(&self, pane: &libtmux_tokio::PaneId) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::control::ControlSender::unsubscribe: async fn(&self, name: &str) -> Result<(), libtmux_tokio::Error>
 function libtmux_tokio::control::ControlSender::watch_only: async fn(&self, panes: &[libtmux_tokio::PaneId]) -> Result<(), libtmux_tokio::Error>
-function libtmux_tokio::control::Event::invalidates_listings: const fn(&self) -> bool
-function libtmux_tokio::control::Event::may_have_added_a_pane: const fn(&self) -> bool
-function libtmux_tokio::control::Event::pane: const fn(&self) -> Option<&libtmux_tokio::PaneId>
-function libtmux_tokio::control::Event::window: const fn(&self) -> Option<&libtmux_tokio::WindowId>
-function libtmux_tokio::control::PaneOutput::next_chunk: async fn(&mut self) -> Option<Vec<u8>>
+function libtmux_tokio::control::PaneOutput::next_chunk: async fn(&mut self) -> Option<Result<Vec<u8>, libtmux_tokio::Error>>
 function libtmux_tokio::control::PaneOutput::pane: const fn(&self) -> &libtmux_tokio::PaneId
 function libtmux_tokio::control::PaneOutput::sender: const fn(&self) -> &libtmux_tokio::control::ControlSender
 function libtmux_tokio::control::PaneOutput::shutdown: async fn(self) -> Result<(), libtmux_tokio::Error>
@@ -788,7 +800,6 @@ impl Clone for libtmux_tokio::OptionValueRefusal
 impl Clone for libtmux_tokio::OutputLimits
 impl Clone for libtmux_tokio::Pane
 impl Clone for libtmux_tokio::PaneDirection
-impl Clone for libtmux_tokio::PaneProgressState
 impl Clone for libtmux_tokio::PaneSize
 impl Clone for libtmux_tokio::PaneWait
 impl Clone for libtmux_tokio::Principal
@@ -809,7 +820,7 @@ impl Clone for libtmux_tokio::WindowPlacement
 impl Clone for libtmux_tokio::WindowTree
 impl Clone for libtmux_tokio::control::BlockResult
 impl Clone for libtmux_tokio::control::ControlSender
-impl Clone for libtmux_tokio::control::Event
+impl Clone for libtmux_tokio::control::PaneOutputEnd
 impl Clone for libtmux_tokio::control::Subscription
 impl Clone for libtmux_tokio::plan::Attribution
 impl Clone for libtmux_tokio::plan::OperationReport
@@ -838,7 +849,6 @@ impl Copy for libtmux_tokio::OptionKind
 impl Copy for libtmux_tokio::OptionSchema
 impl Copy for libtmux_tokio::OutputLimits
 impl Copy for libtmux_tokio::PaneDirection
-impl Copy for libtmux_tokio::PaneProgressState
 impl Copy for libtmux_tokio::PaneSize
 impl Copy for libtmux_tokio::PaneWait
 impl Copy for libtmux_tokio::Principal
@@ -850,6 +860,7 @@ impl Copy for libtmux_tokio::Rotation
 impl Copy for libtmux_tokio::ServerConfigurationErrorKind
 impl Copy for libtmux_tokio::ServerGoneKind
 impl Copy for libtmux_tokio::WindowPlacement
+impl Copy for libtmux_tokio::control::PaneOutputEnd
 impl Copy for libtmux_tokio::plan::Attribution
 impl Copy for libtmux_tokio::plan::Outcome
 impl Copy for libtmux_tokio::test::DaemonState
@@ -887,7 +898,6 @@ impl Debug for libtmux_tokio::OptionValueRefusal
 impl Debug for libtmux_tokio::OutputLimits
 impl Debug for libtmux_tokio::Pane
 impl Debug for libtmux_tokio::PaneDirection
-impl Debug for libtmux_tokio::PaneProgressState
 impl Debug for libtmux_tokio::PaneSize
 impl Debug for libtmux_tokio::PaneWait
 impl Debug for libtmux_tokio::Principal
@@ -913,8 +923,8 @@ impl Debug for libtmux_tokio::control::BlockResult
 impl Debug for libtmux_tokio::control::ControlEvents
 impl Debug for libtmux_tokio::control::ControlMode
 impl Debug for libtmux_tokio::control::ControlSender
-impl Debug for libtmux_tokio::control::Event
 impl Debug for libtmux_tokio::control::PaneOutput
+impl Debug for libtmux_tokio::control::PaneOutputEnd
 impl Debug for libtmux_tokio::control::Subscription
 impl Debug for libtmux_tokio::plan::Attribution
 impl Debug for libtmux_tokio::plan::OperationReport
@@ -977,7 +987,6 @@ impl Eq for libtmux_tokio::OptionValueRefusal
 impl Eq for libtmux_tokio::OutputLimits
 impl Eq for libtmux_tokio::Pane
 impl Eq for libtmux_tokio::PaneDirection
-impl Eq for libtmux_tokio::PaneProgressState
 impl Eq for libtmux_tokio::PaneSize
 impl Eq for libtmux_tokio::PaneWait
 impl Eq for libtmux_tokio::Principal
@@ -993,7 +1002,7 @@ impl Eq for libtmux_tokio::Session
 impl Eq for libtmux_tokio::Window
 impl Eq for libtmux_tokio::WindowPlacement
 impl Eq for libtmux_tokio::control::BlockResult
-impl Eq for libtmux_tokio::control::Event
+impl Eq for libtmux_tokio::control::PaneOutputEnd
 impl Eq for libtmux_tokio::control::Subscription
 impl Eq for libtmux_tokio::plan::Attribution
 impl Eq for libtmux_tokio::plan::OperationReport
@@ -1006,7 +1015,6 @@ impl Error for libtmux_tokio::Error
 impl Error for libtmux_tokio::ListingDecodeError
 impl Error for libtmux_tokio::test::RetryTimeout
 impl Error for libtmux_tokio::test::TestServerError
-impl FilterEnum for libtmux_tokio::PaneProgressState
 impl FilterSchema for libtmux_tokio::Client
 impl FilterSchema for libtmux_tokio::Pane
 impl FilterSchema for libtmux_tokio::Session
@@ -1089,7 +1097,6 @@ impl PartialEq for libtmux_tokio::OptionValueRefusal
 impl PartialEq for libtmux_tokio::OutputLimits
 impl PartialEq for libtmux_tokio::Pane
 impl PartialEq for libtmux_tokio::PaneDirection
-impl PartialEq for libtmux_tokio::PaneProgressState
 impl PartialEq for libtmux_tokio::PaneSize
 impl PartialEq for libtmux_tokio::PaneWait
 impl PartialEq for libtmux_tokio::Principal
@@ -1105,7 +1112,7 @@ impl PartialEq for libtmux_tokio::Session
 impl PartialEq for libtmux_tokio::Window
 impl PartialEq for libtmux_tokio::WindowPlacement
 impl PartialEq for libtmux_tokio::control::BlockResult
-impl PartialEq for libtmux_tokio::control::Event
+impl PartialEq for libtmux_tokio::control::PaneOutputEnd
 impl PartialEq for libtmux_tokio::control::Subscription
 impl PartialEq for libtmux_tokio::plan::Attribution
 impl PartialEq for libtmux_tokio::plan::OperationReport
@@ -1114,52 +1121,58 @@ impl PartialEq for libtmux_tokio::plan::Outcome
 impl PartialEq for libtmux_tokio::test::DaemonState
 impl PartialEq for libtmux_tokio::test::RetryTimeout
 impl PartialEq for libtmux_tokio::test::TestServerErrorKind
+impl SnapshotFields for libtmux_tokio::Client
+impl SnapshotFields for libtmux_tokio::Pane
+impl SnapshotFields for libtmux_tokio::Session
+impl SnapshotFields for libtmux_tokio::Window
 impl Stream for libtmux_tokio::control::ControlEvents
 impl Stream for libtmux_tokio::control::PaneOutput
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Client> for crate::query::BoolField<libtmux_tokio::Client>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Client> for crate::query::IntegerField<libtmux_tokio::Client, i64>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Client> for crate::query::IntegerField<libtmux_tokio::Client, u32>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Client> for crate::query::IntegerField<libtmux_tokio::Client, u64>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Client> for crate::query::TextField<libtmux_tokio::Client, libtmux_tokio::TmuxText>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::BoolField<libtmux_tokio::Pane>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::EnumField<libtmux_tokio::Pane, libtmux_tokio::PaneProgressState>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::IntegerField<libtmux_tokio::Pane, i32>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::IntegerField<libtmux_tokio::Pane, i64>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::IntegerField<libtmux_tokio::Pane, u32>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::IntegerField<libtmux_tokio::Pane, u64>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::IntegerField<libtmux_tokio::Pane, u8>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::TextField<libtmux_tokio::Pane, libtmux_tokio::PaneId>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Pane> for crate::query::TextField<libtmux_tokio::Pane, libtmux_tokio::TmuxText>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Session> for crate::query::BoolField<libtmux_tokio::Session>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Session> for crate::query::IntegerField<libtmux_tokio::Session, i64>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Session> for crate::query::IntegerField<libtmux_tokio::Session, u32>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Session> for crate::query::TextField<libtmux_tokio::Session, libtmux_tokio::SessionId>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Session> for crate::query::TextField<libtmux_tokio::Session, libtmux_tokio::TmuxText>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Window> for crate::query::BoolField<libtmux_tokio::Window>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Window> for crate::query::IntegerField<libtmux_tokio::Window, i64>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Window> for crate::query::IntegerField<libtmux_tokio::Window, u32>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Window> for crate::query::TextField<libtmux_tokio::Window, libtmux_tokio::TmuxText>
-impl libtmux_tokio::query::ReadField<libtmux_tokio::Window> for crate::query::TextField<libtmux_tokio::Window, libtmux_tokio::WindowId>
+impl TrivialClone for libtmux_tokio::AccessMode
+impl TrivialClone for libtmux_tokio::CaptureOptions
+impl TrivialClone for libtmux_tokio::ChannelWait
+impl TrivialClone for libtmux_tokio::Chooser
+impl TrivialClone for libtmux_tokio::ControlClientLimits
+impl TrivialClone for libtmux_tokio::ControlLimits
+impl TrivialClone for libtmux_tokio::ControlModeErrorKind
+impl TrivialClone for libtmux_tokio::DispatchLimits
+impl TrivialClone for libtmux_tokio::ErrorKind
+impl TrivialClone for libtmux_tokio::JoinOptions
+impl TrivialClone for libtmux_tokio::Layout
+impl TrivialClone for libtmux_tokio::ListingDecodeError
+impl TrivialClone for libtmux_tokio::ObjectKind
+impl TrivialClone for libtmux_tokio::OptionErrorKind
+impl TrivialClone for libtmux_tokio::OptionKind
+impl TrivialClone for libtmux_tokio::OptionSchema
+impl TrivialClone for libtmux_tokio::OutputLimits
+impl TrivialClone for libtmux_tokio::PaneDirection
+impl TrivialClone for libtmux_tokio::PaneSize
+impl TrivialClone for libtmux_tokio::PaneWait
+impl TrivialClone for libtmux_tokio::Principal
+impl TrivialClone for libtmux_tokio::PromptKind
+impl TrivialClone for libtmux_tokio::ReplaceMode
+impl TrivialClone for libtmux_tokio::ResizeDirection
+impl TrivialClone for libtmux_tokio::Respawn
+impl TrivialClone for libtmux_tokio::Rotation
+impl TrivialClone for libtmux_tokio::ServerConfigurationErrorKind
+impl TrivialClone for libtmux_tokio::ServerGoneKind
+impl TrivialClone for libtmux_tokio::WindowPlacement
+impl TrivialClone for libtmux_tokio::control::PaneOutputEnd
+impl TrivialClone for libtmux_tokio::plan::Attribution
+impl TrivialClone for libtmux_tokio::plan::Outcome
+impl TrivialClone for libtmux_tokio::test::DaemonState
+impl TrivialClone for libtmux_tokio::test::RetryTimeout
+impl TrivialClone for libtmux_tokio::test::TestServerErrorKind
 impl<'values, T> IntoIterator for &'values libtmux_tokio::SparseValues<T>
 impl<T, E: fmt::Display> Display for libtmux_tokio::ScopeError<T, E>
-impl<T: Clone> Clone for libtmux_tokio::Availability<T>
 impl<T: Clone> Clone for libtmux_tokio::SparseValues<T>
-impl<T: Copy> Copy for libtmux_tokio::Availability<T>
-impl<T: Debug> Debug for libtmux_tokio::Availability<T>
 impl<T: Debug> Debug for libtmux_tokio::SparseValues<T>
 impl<T: Default> Default for libtmux_tokio::SparseValues<T>
-impl<T: Eq> Eq for libtmux_tokio::Availability<T>
 impl<T: Eq> Eq for libtmux_tokio::SparseValues<T>
 impl<T: Into<std::ffi::OsString>> From<T> for libtmux_tokio::NewWindowOptions
-impl<T: PartialEq> PartialEq for libtmux_tokio::Availability<T>
 impl<T: PartialEq> PartialEq for libtmux_tokio::SparseValues<T>
 impl<T: fmt::Debug, E: fmt::Debug + fmt::Display> Error for libtmux_tokio::ScopeError<T, E>
 impl<T: fmt::Debug, E: fmt::Debug> Debug for libtmux_tokio::ScopeError<T, E>
 impl<T> From<BTreeMap<u32, T>> for libtmux_tokio::SparseValues<T>
-impl<Target> Debug for libtmux_tokio::ClientFields<Target>
-impl<Target> Debug for libtmux_tokio::PaneFields<Target>
-impl<Target> Debug for libtmux_tokio::SessionFields<Target>
-impl<Target> Debug for libtmux_tokio::WindowFields<Target>
 module libtmux_tokio::control
 module libtmux_tokio::hooks
 module libtmux_tokio::option_names
@@ -1171,7 +1184,8 @@ struct libtmux_tokio::AccessRule
 struct libtmux_tokio::CaptureOptions
 struct libtmux_tokio::CapturedLine
 struct libtmux_tokio::Client
-struct libtmux_tokio::ClientFields<Target>
+struct libtmux_tokio::ClientFields = libtmux_core::snapshot::ClientFields
+struct libtmux_tokio::ClientSnapshot = libtmux_core::snapshot::ClientSnapshot
 struct libtmux_tokio::Command = libtmux_core::command::Command
 struct libtmux_tokio::CommandChain = libtmux_core::command::CommandChain
 struct libtmux_tokio::CommandResult
@@ -1191,8 +1205,9 @@ struct libtmux_tokio::NewWindowOptions
 struct libtmux_tokio::OptionSchema
 struct libtmux_tokio::OutputLimits
 struct libtmux_tokio::Pane
-struct libtmux_tokio::PaneFields<Target>
+struct libtmux_tokio::PaneFields = libtmux_core::snapshot::PaneFields
 struct libtmux_tokio::PaneId = libtmux_core::target::PaneId
+struct libtmux_tokio::PaneSnapshot = libtmux_core::snapshot::PaneSnapshot
 struct libtmux_tokio::ReleaseSuffix = libtmux_core::version::ReleaseSuffix
 struct libtmux_tokio::ReleaseVersion = libtmux_core::version::ReleaseVersion
 struct libtmux_tokio::Server
@@ -1200,9 +1215,10 @@ struct libtmux_tokio::ServerBuilder
 struct libtmux_tokio::ServerGeneration = libtmux_core::target::ServerGeneration
 struct libtmux_tokio::ServerIdentity = libtmux_core::target::ServerIdentity
 struct libtmux_tokio::Session
-struct libtmux_tokio::SessionFields<Target>
+struct libtmux_tokio::SessionFields = libtmux_core::snapshot::SessionFields
 struct libtmux_tokio::SessionId = libtmux_core::target::SessionId
 struct libtmux_tokio::SessionName = libtmux_core::target::SessionName
+struct libtmux_tokio::SessionSnapshot = libtmux_core::snapshot::SessionSnapshot
 struct libtmux_tokio::SessionTree
 struct libtmux_tokio::SessionTreeFields
 struct libtmux_tokio::SparseValues<T>
@@ -1211,10 +1227,11 @@ struct libtmux_tokio::TmuxArg = libtmux_core::target::TmuxArg
 struct libtmux_tokio::TmuxText = libtmux_core::text::TmuxText
 struct libtmux_tokio::TmuxVersion = libtmux_core::version::TmuxVersion
 struct libtmux_tokio::Window
-struct libtmux_tokio::WindowFields<Target>
+struct libtmux_tokio::WindowFields = libtmux_core::snapshot::WindowFields
 struct libtmux_tokio::WindowId = libtmux_core::target::WindowId
 struct libtmux_tokio::WindowLink
 struct libtmux_tokio::WindowLinkSnapshot = libtmux_core::window_link::WindowLinkSnapshot
+struct libtmux_tokio::WindowSnapshot = libtmux_core::snapshot::WindowSnapshot
 struct libtmux_tokio::WindowTree
 struct libtmux_tokio::WindowTreeFields
 struct libtmux_tokio::control::BlockResult
@@ -1229,33 +1246,10 @@ struct libtmux_tokio::test::RetryTimeout
 struct libtmux_tokio::test::TestServer
 struct libtmux_tokio::test::TestServerBuilder
 struct libtmux_tokio::test::TestServerError
-struct_field libtmux_tokio::Availability::Available::0: T
 struct_field libtmux_tokio::CapturedLine::starts_output: bool
 struct_field libtmux_tokio::CapturedLine::starts_prompt: bool
 struct_field libtmux_tokio::CapturedLine::text: libtmux_tokio::TmuxText
 struct_field libtmux_tokio::CapturedLine::wrapped: bool
-struct_field libtmux_tokio::ClientFields::client_activity: IntegerField<Target, i64>
-struct_field libtmux_tokio::ClientFields::client_cell_height: IntegerField<Target, u32>
-struct_field libtmux_tokio::ClientFields::client_cell_width: IntegerField<Target, u32>
-struct_field libtmux_tokio::ClientFields::client_control_mode: BoolField<Target>
-struct_field libtmux_tokio::ClientFields::client_created: IntegerField<Target, i64>
-struct_field libtmux_tokio::ClientFields::client_discarded: IntegerField<Target, u64>
-struct_field libtmux_tokio::ClientFields::client_flags: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_height: IntegerField<Target, u32>
-struct_field libtmux_tokio::ClientFields::client_key_table: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_name: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_pid: IntegerField<Target, u32>
-struct_field libtmux_tokio::ClientFields::client_prefix: BoolField<Target>
-struct_field libtmux_tokio::ClientFields::client_readonly: BoolField<Target>
-struct_field libtmux_tokio::ClientFields::client_termfeatures: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_termname: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_termtype: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_tty: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_uid: IntegerField<Target, u32>
-struct_field libtmux_tokio::ClientFields::client_user: TextField<Target>
-struct_field libtmux_tokio::ClientFields::client_utf8: BoolField<Target>
-struct_field libtmux_tokio::ClientFields::client_width: IntegerField<Target, u32>
-struct_field libtmux_tokio::ClientFields::client_written: IntegerField<Target, u64>
 struct_field libtmux_tokio::EnvironmentEntry::Set::0: libtmux_tokio::TmuxText
 struct_field libtmux_tokio::Error::AfterEffect::operation: &'static str
 struct_field libtmux_tokio::Error::AfterEffect::source: Box<libtmux_tokio::Error>
@@ -1269,10 +1263,13 @@ struct_field libtmux_tokio::Error::ClientSuspended::name: String
 struct_field libtmux_tokio::Error::CommandFailed::command: &'static str
 struct_field libtmux_tokio::Error::CommandFailed::exit_code: Option<i32>
 struct_field libtmux_tokio::Error::CommandFailed::stderr: String
+struct_field libtmux_tokio::Error::ControlGap::dropped: usize
+struct_field libtmux_tokio::Error::ControlGap::included_pause: bool
 struct_field libtmux_tokio::Error::ControlMode::kind: libtmux_tokio::ControlModeErrorKind
 struct_field libtmux_tokio::Error::ControlMode::source: Option<io::Error>
 struct_field libtmux_tokio::Error::ControlModeFrameTooLarge::frame: &'static str
 struct_field libtmux_tokio::Error::ControlModeFrameTooLarge::limit: usize
+struct_field libtmux_tokio::Error::ControlProtocol::fault: libtmux_core::control::ControlFault
 struct_field libtmux_tokio::Error::CoreOperation::source: Box<libtmux_core::Error>
 struct_field libtmux_tokio::Error::DecodeListing::detail: libtmux_tokio::ListingDecodeError
 struct_field libtmux_tokio::Error::DecodeListing::list_command: &'static str
@@ -1315,6 +1312,9 @@ struct_field libtmux_tokio::Error::OutputLimitExceeded::stream: &'static str
 struct_field libtmux_tokio::Error::Overloaded::command: libtmux_tokio::CommandSummary
 struct_field libtmux_tokio::Error::Overloaded::in_flight: usize
 struct_field libtmux_tokio::Error::Overloaded::request_id: u64
+struct_field libtmux_tokio::Error::PaneOutputEnded::cause: libtmux_tokio::control::PaneOutputEnd
+struct_field libtmux_tokio::Error::PlanInterrupted::completed: Box<[libtmux_tokio::plan::OperationReport]>
+struct_field libtmux_tokio::Error::PlanInterrupted::source: Box<libtmux_tokio::Error>
 struct_field libtmux_tokio::Error::ReadOutput::command: libtmux_tokio::CommandSummary
 struct_field libtmux_tokio::Error::ReadOutput::kind: io::ErrorKind
 struct_field libtmux_tokio::Error::ReadOutput::request_id: u64
@@ -1360,76 +1360,6 @@ struct_field libtmux_tokio::OptionValue::Text::0: libtmux_tokio::TmuxText
 struct_field libtmux_tokio::OptionValueRefusal::NotAChoice::choices: &'static [&'static str]
 struct_field libtmux_tokio::OptionValueRefusal::OutOfRange::range: std::ops::RangeInclusive<i64>
 struct_field libtmux_tokio::OptionValueRefusal::WrongKind::expected: libtmux_tokio::OptionKind
-struct_field libtmux_tokio::PaneFields::alternate_saved_x: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::alternate_saved_y: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::bracket_paste_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::cursor_character: TextField<Target>
-struct_field libtmux_tokio::PaneFields::cursor_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::cursor_x: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::cursor_y: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::history_bytes: IntegerField<Target, u64>
-struct_field libtmux_tokio::PaneFields::history_limit: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::history_size: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::insert_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::keypad_cursor_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::keypad_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::mouse_all_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::mouse_any_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::mouse_button_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::mouse_sgr_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::mouse_standard_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::origin_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_active: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_at_bottom: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_at_left: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_at_right: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_at_top: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_bg: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_bottom: IntegerField<Target, i32>
-struct_field libtmux_tokio::PaneFields::pane_current_command: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_current_path: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_dead: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_dead_signal: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_dead_status: IntegerField<Target, u8>
-struct_field libtmux_tokio::PaneFields::pane_dead_time: IntegerField<Target, i64>
-struct_field libtmux_tokio::PaneFields::pane_fg: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_flags: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_floating_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_height: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::pane_id: TextField<Target, libtmux_tokio::PaneId>
-struct_field libtmux_tokio::PaneFields::pane_in_mode: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::pane_index: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::pane_input_off: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_last: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_left: IntegerField<Target, i32>
-struct_field libtmux_tokio::PaneFields::pane_marked: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_mode: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_path: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_pb_progress: IntegerField<Target, u8>
-struct_field libtmux_tokio::PaneFields::pane_pb_state: EnumField<Target, libtmux_tokio::PaneProgressState>
-struct_field libtmux_tokio::PaneFields::pane_pid: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::pane_pipe: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_pipe_pid: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::pane_right: IntegerField<Target, i32>
-struct_field libtmux_tokio::PaneFields::pane_search_string: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_start_command: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_start_path: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_synchronized: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_tabs: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_title: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_top: IntegerField<Target, i32>
-struct_field libtmux_tokio::PaneFields::pane_tty: TextField<Target>
-struct_field libtmux_tokio::PaneFields::pane_unseen_changes: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::pane_width: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::pane_x: IntegerField<Target, i32>
-struct_field libtmux_tokio::PaneFields::pane_y: IntegerField<Target, i32>
-struct_field libtmux_tokio::PaneFields::pane_z: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::pane_zoomed_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::scroll_position: IntegerField<Target, i32>
-struct_field libtmux_tokio::PaneFields::scroll_region_lower: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::scroll_region_upper: IntegerField<Target, u32>
-struct_field libtmux_tokio::PaneFields::synchronized_output_flag: BoolField<Target>
-struct_field libtmux_tokio::PaneFields::wrap_flag: BoolField<Target>
 struct_field libtmux_tokio::PaneSize::Cells::0: u32
 struct_field libtmux_tokio::PaneSize::Percent::0: u32
 struct_field libtmux_tokio::ScopeError::Cleanup::cleanup: libtmux_tokio::Error
@@ -1438,78 +1368,14 @@ struct_field libtmux_tokio::ScopeError::Creation::0: libtmux_tokio::Error
 struct_field libtmux_tokio::ScopeError::Operation::0: E
 struct_field libtmux_tokio::ScopeError::OperationAndCleanup::cleanup: libtmux_tokio::Error
 struct_field libtmux_tokio::ScopeError::OperationAndCleanup::operation: E
-struct_field libtmux_tokio::SessionFields::session_activity: IntegerField<Target, i64>
-struct_field libtmux_tokio::SessionFields::session_attached: IntegerField<Target, u32>
-struct_field libtmux_tokio::SessionFields::session_created: IntegerField<Target, i64>
-struct_field libtmux_tokio::SessionFields::session_id: TextField<Target, libtmux_tokio::SessionId>
-struct_field libtmux_tokio::SessionFields::session_last_attached: IntegerField<Target, i64>
-struct_field libtmux_tokio::SessionFields::session_many_attached: BoolField<Target>
-struct_field libtmux_tokio::SessionFields::session_name: TextField<Target>
-struct_field libtmux_tokio::SessionFields::session_path: TextField<Target>
-struct_field libtmux_tokio::SessionFields::session_windows: IntegerField<Target, u32>
 struct_field libtmux_tokio::SessionTree::session: libtmux_tokio::Session
 struct_field libtmux_tokio::SessionTree::windows: Vec<libtmux_tokio::WindowTree>
 struct_field libtmux_tokio::SessionTreeFields::session: libtmux_tokio::SessionFields<libtmux_tokio::SessionTree>
 struct_field libtmux_tokio::SessionTreeFields::windows: crate::query::ManyRelation<libtmux_tokio::SessionTree, libtmux_tokio::WindowTree>
-struct_field libtmux_tokio::WindowFields::window_activity: IntegerField<Target, i64>
-struct_field libtmux_tokio::WindowFields::window_cell_height: IntegerField<Target, u32>
-struct_field libtmux_tokio::WindowFields::window_cell_width: IntegerField<Target, u32>
-struct_field libtmux_tokio::WindowFields::window_height: IntegerField<Target, u32>
-struct_field libtmux_tokio::WindowFields::window_id: TextField<Target, libtmux_tokio::WindowId>
-struct_field libtmux_tokio::WindowFields::window_layout: TextField<Target>
-struct_field libtmux_tokio::WindowFields::window_name: TextField<Target>
-struct_field libtmux_tokio::WindowFields::window_panes: IntegerField<Target, u32>
-struct_field libtmux_tokio::WindowFields::window_visible_layout: TextField<Target>
-struct_field libtmux_tokio::WindowFields::window_width: IntegerField<Target, u32>
-struct_field libtmux_tokio::WindowFields::window_zoomed_flag: BoolField<Target>
 struct_field libtmux_tokio::WindowTree::panes: Vec<libtmux_tokio::Pane>
 struct_field libtmux_tokio::WindowTree::window: libtmux_tokio::Window
 struct_field libtmux_tokio::WindowTreeFields::panes: crate::query::ManyRelation<libtmux_tokio::WindowTree, libtmux_tokio::Pane>
 struct_field libtmux_tokio::WindowTreeFields::window: libtmux_tokio::WindowFields<libtmux_tokio::WindowTree>
-struct_field libtmux_tokio::control::Event::ClientDetached::client: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::ClientSessionChanged::client: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::ClientSessionChanged::name: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::ClientSessionChanged::session: libtmux_tokio::SessionId
-struct_field libtmux_tokio::control::Event::ConfigError::message: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::Continued::pane: libtmux_tokio::PaneId
-struct_field libtmux_tokio::control::Event::Exit::reason: Option<libtmux_tokio::TmuxText>
-struct_field libtmux_tokio::control::Event::ExtendedOutput::age: std::time::Duration
-struct_field libtmux_tokio::control::Event::ExtendedOutput::bytes: Vec<u8>
-struct_field libtmux_tokio::control::Event::ExtendedOutput::pane: libtmux_tokio::PaneId
-struct_field libtmux_tokio::control::Event::LayoutChanged::flags: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::LayoutChanged::layout: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::LayoutChanged::visible_layout: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::LayoutChanged::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::Message::message: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::Other::name: String
-struct_field libtmux_tokio::control::Event::Other::rest: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::Output::bytes: Vec<u8>
-struct_field libtmux_tokio::control::Event::Output::pane: libtmux_tokio::PaneId
-struct_field libtmux_tokio::control::Event::PaneModeChanged::pane: libtmux_tokio::PaneId
-struct_field libtmux_tokio::control::Event::PasteBufferChanged::name: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::PasteBufferDeleted::name: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::Paused::pane: libtmux_tokio::PaneId
-struct_field libtmux_tokio::control::Event::SessionChanged::session: libtmux_tokio::SessionId
-struct_field libtmux_tokio::control::Event::SessionRenamed::name: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::SessionRenamed::session: libtmux_tokio::SessionId
-struct_field libtmux_tokio::control::Event::SessionWindowChanged::session: libtmux_tokio::SessionId
-struct_field libtmux_tokio::control::Event::SessionWindowChanged::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::SubscriptionChanged::index: Option<u32>
-struct_field libtmux_tokio::control::Event::SubscriptionChanged::name: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::SubscriptionChanged::pane: Option<libtmux_tokio::PaneId>
-struct_field libtmux_tokio::control::Event::SubscriptionChanged::session: libtmux_tokio::SessionId
-struct_field libtmux_tokio::control::Event::SubscriptionChanged::value: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::SubscriptionChanged::window: Option<libtmux_tokio::WindowId>
-struct_field libtmux_tokio::control::Event::UnlinkedWindowAdded::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::UnlinkedWindowClosed::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::UnlinkedWindowRenamed::name: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::UnlinkedWindowRenamed::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::WindowAdded::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::WindowClosed::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::WindowPaneChanged::pane: libtmux_tokio::PaneId
-struct_field libtmux_tokio::control::Event::WindowPaneChanged::window: libtmux_tokio::WindowId
-struct_field libtmux_tokio::control::Event::WindowRenamed::name: libtmux_tokio::TmuxText
-struct_field libtmux_tokio::control::Event::WindowRenamed::window: libtmux_tokio::WindowId
 struct_field libtmux_tokio::control::Subscription::Pane::0: libtmux_tokio::PaneId
 struct_field libtmux_tokio::control::Subscription::Window::0: libtmux_tokio::WindowId
 struct_field libtmux_tokio::plan::OperationValue::CapturedPane::0: libtmux_tokio::TmuxText
@@ -1518,8 +1384,7 @@ struct_field libtmux_tokio::plan::OperationValue::CreatedSession::0: libtmux_tok
 struct_field libtmux_tokio::plan::OperationValue::CreatedWindow::pane: libtmux_tokio::PaneId
 struct_field libtmux_tokio::plan::OperationValue::CreatedWindow::window: libtmux_tokio::WindowId
 struct_field libtmux_tokio::test::DaemonState::Gone::0: std::process::ExitStatus
-trait libtmux_tokio::query::ReadField<Target>: Copy + sealed::Sealed
-trait libtmux_tokio::snapshot::sealed::Sealed
+trait libtmux_tokio::query::ReadField = libtmux_core::snapshot::ReadField
 type_alias libtmux_tokio::IndexedHooks = libtmux_tokio::SparseValues<libtmux_tokio::TmuxText>
 type_alias libtmux_tokio::PaneKey = libtmux_core::receipt::PaneKey
 type_alias libtmux_tokio::SessionKey = libtmux_core::receipt::SessionKey
@@ -1528,10 +1393,6 @@ use libtmux_tokio::plan::* = libtmux_core::plan::*
 use libtmux_tokio::query::* = libtmux_core::query::*
 variant libtmux_tokio::AccessMode::ReadOnly
 variant libtmux_tokio::AccessMode::Write
-variant libtmux_tokio::Availability::Absent
-variant libtmux_tokio::Availability::Available
-variant libtmux_tokio::Availability::Unproven
-variant libtmux_tokio::Availability::Unsupported
 variant libtmux_tokio::ChannelWait::Signalled
 variant libtmux_tokio::ChannelWait::TimedOut
 variant libtmux_tokio::Chooser::Buffer
@@ -1554,8 +1415,10 @@ variant libtmux_tokio::Error::AmbiguousLayout
 variant libtmux_tokio::Error::CapabilityDefective
 variant libtmux_tokio::Error::ClientSuspended
 variant libtmux_tokio::Error::CommandFailed
+variant libtmux_tokio::Error::ControlGap
 variant libtmux_tokio::Error::ControlMode
 variant libtmux_tokio::Error::ControlModeFrameTooLarge
+variant libtmux_tokio::Error::ControlProtocol
 variant libtmux_tokio::Error::CoreOperation
 variant libtmux_tokio::Error::DecodeListing
 variant libtmux_tokio::Error::DuplicateRequest
@@ -1577,6 +1440,8 @@ variant libtmux_tokio::Error::OptionScopeMismatch
 variant libtmux_tokio::Error::OptionValueRefused
 variant libtmux_tokio::Error::OutputLimitExceeded
 variant libtmux_tokio::Error::Overloaded
+variant libtmux_tokio::Error::PaneOutputEnded
+variant libtmux_tokio::Error::PlanInterrupted
 variant libtmux_tokio::Error::ReadOutput
 variant libtmux_tokio::Error::ServerGenerationChanged
 variant libtmux_tokio::Error::ServerGone
@@ -1637,11 +1502,6 @@ variant libtmux_tokio::PaneDirection::Above
 variant libtmux_tokio::PaneDirection::Below
 variant libtmux_tokio::PaneDirection::Left
 variant libtmux_tokio::PaneDirection::Right
-variant libtmux_tokio::PaneProgressState::Error
-variant libtmux_tokio::PaneProgressState::Hidden
-variant libtmux_tokio::PaneProgressState::Indeterminate
-variant libtmux_tokio::PaneProgressState::Normal
-variant libtmux_tokio::PaneProgressState::Paused
 variant libtmux_tokio::PaneSize::Cells
 variant libtmux_tokio::PaneSize::Percent
 variant libtmux_tokio::PaneWait::Arrived
@@ -1682,32 +1542,8 @@ variant libtmux_tokio::ServerGoneKind::Stopped
 variant libtmux_tokio::ServerGoneKind::Unreachable
 variant libtmux_tokio::WindowPlacement::After
 variant libtmux_tokio::WindowPlacement::Before
-variant libtmux_tokio::control::Event::ClientDetached
-variant libtmux_tokio::control::Event::ClientSessionChanged
-variant libtmux_tokio::control::Event::ConfigError
-variant libtmux_tokio::control::Event::Continued
-variant libtmux_tokio::control::Event::Exit
-variant libtmux_tokio::control::Event::ExtendedOutput
-variant libtmux_tokio::control::Event::LayoutChanged
-variant libtmux_tokio::control::Event::Message
-variant libtmux_tokio::control::Event::Other
-variant libtmux_tokio::control::Event::Output
-variant libtmux_tokio::control::Event::PaneModeChanged
-variant libtmux_tokio::control::Event::PasteBufferChanged
-variant libtmux_tokio::control::Event::PasteBufferDeleted
-variant libtmux_tokio::control::Event::Paused
-variant libtmux_tokio::control::Event::SessionChanged
-variant libtmux_tokio::control::Event::SessionRenamed
-variant libtmux_tokio::control::Event::SessionWindowChanged
-variant libtmux_tokio::control::Event::SessionsChanged
-variant libtmux_tokio::control::Event::SubscriptionChanged
-variant libtmux_tokio::control::Event::UnlinkedWindowAdded
-variant libtmux_tokio::control::Event::UnlinkedWindowClosed
-variant libtmux_tokio::control::Event::UnlinkedWindowRenamed
-variant libtmux_tokio::control::Event::WindowAdded
-variant libtmux_tokio::control::Event::WindowClosed
-variant libtmux_tokio::control::Event::WindowPaneChanged
-variant libtmux_tokio::control::Event::WindowRenamed
+variant libtmux_tokio::control::PaneOutputEnd::ConnectionEnded
+variant libtmux_tokio::control::PaneOutputEnd::PaneGone
 variant libtmux_tokio::control::Subscription::AllPanes
 variant libtmux_tokio::control::Subscription::AllWindows
 variant libtmux_tokio::control::Subscription::Pane

@@ -1,23 +1,72 @@
+enum libtmux_blocking::control::ControlCommandRefusal = libtmux_core::control::policy::ControlCommandRefusal
+enum libtmux_blocking::control::ControlFault = libtmux_core::control::ControlFault
+enum libtmux_blocking::control::ControlNotice = libtmux_core::control::ControlNotice
+enum libtmux_blocking::control::Event = libtmux_core::control::events::Event
 function libtmux_blocking::CancellationToken::cancel: fn(&self)
 function libtmux_blocking::CancellationToken::is_cancelled: fn(&self) -> bool
 function libtmux_blocking::Server::at: fn(socket: impl AsRef<Path>) -> Result<Self, std::io::Error>
 function libtmux_blocking::Server::capture: fn(&self, pane: &PaneKey) -> Result<Vec<u8>, Error>
 function libtmux_blocking::Server::capture_with: fn(&self, pane: &PaneKey, options: libtmux_blocking::RequestOptions) -> Result<Vec<u8>, Error>
+function libtmux_blocking::Server::generation: fn(&self) -> Result<libtmux_core::ServerGeneration, Error>
+function libtmux_blocking::Server::generation_with: fn(&self, options: libtmux_blocking::RequestOptions) -> Result<libtmux_core::ServerGeneration, Error>
+function libtmux_blocking::Server::kill_created_session: fn(&self, receipt: &CreatedSession) -> Result<(), Error>
 function libtmux_blocking::Server::new_session: fn(&self, request: NewSession) -> Result<CreatedSession, Error>
 function libtmux_blocking::Server::new_session_with: fn(&self, request: NewSession, options: libtmux_blocking::RequestOptions) -> Result<CreatedSession, Error>
 function libtmux_blocking::Server::observe_pane: fn(&self, pane: PaneId) -> Result<PaneKey, Error>
 function libtmux_blocking::Server::observe_pane_with: fn(&self, pane: PaneId, options: libtmux_blocking::RequestOptions) -> Result<PaneKey, Error>
+function libtmux_blocking::Server::snapshots: fn<S: libtmux_core::Snapshot>(&self) -> Result<Vec<S>, Error>
+function libtmux_blocking::Server::snapshots_with: fn<S: libtmux_core::Snapshot>(&self, options: libtmux_blocking::RequestOptions) -> Result<Vec<S>, Error>
+function libtmux_blocking::Server::unlink_window: fn(&self, link: &WindowLinkSnapshot) -> Result<(), Error>
 function libtmux_blocking::Server::with_executable: fn(self, executable: impl Into<OsString>) -> Self
+function libtmux_blocking::control::ControlError::cleanup_errors: fn(&self) -> Option<&CleanupErrors>
+function libtmux_blocking::control::ControlError::effect: fn(&self) -> Effect
+function libtmux_blocking::control::ControlError::fault: fn(&self) -> Option<libtmux_blocking::control::ControlFault>
+function libtmux_blocking::control::ControlError::is_cleanup_pending: fn(&self) -> bool
+function libtmux_blocking::control::ControlError::policy_refusal: fn(&self) -> Option<libtmux_blocking::control::ControlCommandRefusal>
+function libtmux_blocking::control::ControlEvents::next_event: fn(&mut self) -> Result<Option<libtmux_blocking::control::ControlNotice>, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlEvents::shutdown: fn(&self) -> Result<(), libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlMode::attach: fn(server: &libtmux_blocking::Server, session: SessionId) -> Result<Self, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlMode::attach_with_limits: fn(server: &libtmux_blocking::Server, session: SessionId, limits: libtmux_blocking::control::ControlLimits) -> Result<Self, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlMode::attach_with_options: fn(server: &libtmux_blocking::Server, session: SessionId, limits: libtmux_blocking::control::ControlLimits, options: libtmux_blocking::RequestOptions) -> Result<Self, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlMode::next_event: fn(&mut self) -> Result<Option<libtmux_blocking::control::ControlNotice>, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlMode::send: fn(&self, command: Command) -> Result<libtmux_blocking::control::ControlReply, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlMode::shutdown: fn(&self) -> Result<(), libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlMode::split: fn(self) -> (libtmux_blocking::control::ControlSender, libtmux_blocking::control::ControlEvents)
+function libtmux_blocking::control::ControlSender::continue_pane: fn(&self, pane: libtmux_core::PaneId) -> Result<libtmux_blocking::control::ControlReply, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlSender::pause_pane: fn(&self, pane: libtmux_core::PaneId) -> Result<libtmux_blocking::control::ControlReply, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlSender::send: fn(&self, command: Command) -> Result<libtmux_blocking::control::ControlReply, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlSender::send_with: fn(&self, command: Command, options: libtmux_blocking::RequestOptions) -> Result<libtmux_blocking::control::ControlReply, libtmux_blocking::control::ControlError>
+function libtmux_blocking::control::ControlSender::shutdown: fn(&self) -> Result<(), libtmux_blocking::control::ControlError>
 impl Clone for libtmux_blocking::CancellationToken
 impl Clone for libtmux_blocking::RequestOptions
 impl Clone for libtmux_blocking::Server
+impl Clone for libtmux_blocking::control::ControlError
+impl Clone for libtmux_blocking::control::ControlSender
 impl Debug for libtmux_blocking::CancellationToken
 impl Debug for libtmux_blocking::RequestOptions
 impl Debug for libtmux_blocking::Server
+impl Debug for libtmux_blocking::control::ControlError
+impl Debug for libtmux_blocking::control::ControlEvents
+impl Debug for libtmux_blocking::control::ControlMode
+impl Debug for libtmux_blocking::control::ControlSender
 impl Default for libtmux_blocking::CancellationToken
 impl Default for libtmux_blocking::RequestOptions
+impl Display for libtmux_blocking::control::ControlError
+impl Drop for libtmux_blocking::control::ControlEvents
+impl Drop for libtmux_blocking::control::ControlSender
+impl Error for libtmux_blocking::control::ControlError
+impl From<Error> for libtmux_blocking::control::ControlError
+impl From<libtmux_blocking::control::ControlCommandRefusal> for libtmux_blocking::control::ControlError
+module libtmux_blocking::control
 struct libtmux_blocking::CancellationToken
 struct libtmux_blocking::RequestOptions
 struct libtmux_blocking::Server
+struct libtmux_blocking::control::ControlBlock = libtmux_core::control::ControlBlock
+struct libtmux_blocking::control::ControlError
+struct libtmux_blocking::control::ControlEvents
+struct libtmux_blocking::control::ControlLimits = libtmux_core::control::ControlLimits
+struct libtmux_blocking::control::ControlMode
+struct libtmux_blocking::control::ControlReply = libtmux_core::control::ControlReply
+struct libtmux_blocking::control::ControlSender
 struct_field libtmux_blocking::RequestOptions::budget: libtmux_core::supervision::Budget
 struct_field libtmux_blocking::RequestOptions::cancellation: libtmux_blocking::CancellationToken

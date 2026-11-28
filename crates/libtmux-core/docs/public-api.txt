@@ -10,6 +10,7 @@ assoc_const libtmux_core::query::FilterEnum::FILTER_VARIANTS: &'static [&'static
 assoc_const libtmux_core::query::Filterable::FILTER_TARGET: &'static str
 assoc_type libtmux_core::plan::Operation::Creates: libtmux_core::plan::FromStep
 assoc_type libtmux_core::query::Filterable::Fields
+assoc_type libtmux_core::query::ReadField::Value<'a> where Target: 'a
 constant libtmux_core::since::CAPTURE_LINE_FLAGS: libtmux_core::ReleaseVersion
 constant libtmux_core::since::CAPTURE_TRIM_BLANK_CELLS: libtmux_core::ReleaseVersion
 constant libtmux_core::since::CLIENTS_HIDE_STOPPED: libtmux_core::ReleaseVersion
@@ -21,20 +22,31 @@ constant libtmux_core::since::LIST_KEYS_FORMAT: libtmux_core::ReleaseVersion
 constant libtmux_core::since::MIRRORED_LAYOUTS: libtmux_core::ReleaseVersion
 constant libtmux_core::since::NAMED_BUFFER_IDENTITY: libtmux_core::ReleaseVersion
 constant libtmux_core::since::PANE_BORDER_STYLE_PER_PANE: libtmux_core::ReleaseVersion
+enum libtmux_core::Availability<T>
 enum libtmux_core::CommandKind
 enum libtmux_core::Effect
 enum libtmux_core::Error
 enum libtmux_core::OperandKind
 enum libtmux_core::OptionScope
+enum libtmux_core::PaneProgressState
 enum libtmux_core::PaneTarget
 enum libtmux_core::SessionNameError
 enum libtmux_core::SessionTarget
 enum libtmux_core::SplitDirection
 enum libtmux_core::VersionError
 enum libtmux_core::WindowTarget
+enum libtmux_core::control::ControlCommandRefusal
 enum libtmux_core::control::ControlFault
 enum libtmux_core::control::ControlNotice
 enum libtmux_core::control::Event
+enum libtmux_core::formats::DecoderKind
+enum libtmux_core::formats::EmptyPolicy
+enum libtmux_core::formats::InfoPlacement
+enum libtmux_core::formats::ListProfile
+enum libtmux_core::formats::RequiredContext
+enum libtmux_core::formats::SemanticOwner
+enum libtmux_core::formats::row::FormatCodecErrorKind
+enum libtmux_core::formats::row::FormatCodecPhase
 enum libtmux_core::plan::Op
 enum libtmux_core::plan::OperationKind
 enum libtmux_core::plan::PaneTarget
@@ -48,7 +60,36 @@ enum libtmux_core::plan::StepReason
 enum libtmux_core::plan::WindowTarget
 enum libtmux_core::query::ExactlyOneError
 enum libtmux_core::query::FilterExpressionErrorKind
+function libtmux_core::Availability::as_ref: const fn(&self) -> libtmux_core::Availability<&T>
+function libtmux_core::Availability::available: fn(self) -> Option<T>
+function libtmux_core::Availability::copied: const fn(self) -> libtmux_core::Availability<T>
+function libtmux_core::Availability::is_available: const fn(&self) -> bool
+function libtmux_core::Availability::map: fn<U>(self, transform: impl FnOnce(T) -> U) -> libtmux_core::Availability<U>
 function libtmux_core::Capture::arguments: fn(socket: &Path, key: &libtmux_core::PaneKey) -> Result<Vec<OsString>, libtmux_core::Error>
+function libtmux_core::ClientFields::for_target: fn(target: &'static str) -> Self
+function libtmux_core::ClientSnapshot::client_activity: const fn(&self) -> &i64
+function libtmux_core::ClientSnapshot::client_cell_height: const fn(&self) -> libtmux_core::Availability<&u32>
+function libtmux_core::ClientSnapshot::client_cell_width: const fn(&self) -> libtmux_core::Availability<&u32>
+function libtmux_core::ClientSnapshot::client_control_mode: const fn(&self) -> &bool
+function libtmux_core::ClientSnapshot::client_created: const fn(&self) -> &i64
+function libtmux_core::ClientSnapshot::client_discarded: const fn(&self) -> &u64
+function libtmux_core::ClientSnapshot::client_flags: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::ClientSnapshot::client_height: const fn(&self) -> libtmux_core::Availability<&u32>
+function libtmux_core::ClientSnapshot::client_key_table: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::ClientSnapshot::client_name: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::ClientSnapshot::client_pid: const fn(&self) -> &u32
+function libtmux_core::ClientSnapshot::client_prefix: const fn(&self) -> &bool
+function libtmux_core::ClientSnapshot::client_readonly: const fn(&self) -> &bool
+function libtmux_core::ClientSnapshot::client_termfeatures: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::ClientSnapshot::client_termname: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::ClientSnapshot::client_termtype: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::ClientSnapshot::client_tty: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::ClientSnapshot::client_uid: const fn(&self) -> libtmux_core::Availability<&u32>
+function libtmux_core::ClientSnapshot::client_user: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::ClientSnapshot::client_utf8: const fn(&self) -> &bool
+function libtmux_core::ClientSnapshot::client_width: const fn(&self) -> &u32
+function libtmux_core::ClientSnapshot::client_written: const fn(&self) -> &u64
+function libtmux_core::ClientSnapshot::get: fn<F: libtmux_core::query::ReadField<Self>>(&self, field: F) -> libtmux_core::Availability<<F as libtmux_core::query::ReadField>::Value<'_>>
 function libtmux_core::Command::arg: fn(self, argument: impl Into<OsString>) -> Self
 function libtmux_core::Command::new: fn(subcommand: impl Into<OsString>) -> Self
 function libtmux_core::Command::requires_tmux: fn(self, capability: &'static str, needs: libtmux_core::ReleaseVersion) -> Self
@@ -62,6 +103,7 @@ function libtmux_core::CommandSummary::argument_count: const fn(&self) -> usize
 function libtmux_core::CommandSummary::public_argument_count: const fn(&self) -> usize
 function libtmux_core::CommandSummary::sensitive_argument_count: const fn(&self) -> usize
 function libtmux_core::CreatedSession::generation: const fn(&self) -> libtmux_core::ServerGeneration
+function libtmux_core::CreatedSession::kill_session_command: fn(&self) -> libtmux_core::CommandChain
 function libtmux_core::CreatedSession::pane: const fn(&self) -> &libtmux_core::PaneKey
 function libtmux_core::CreatedSession::session: fn(&self) -> libtmux_core::SessionId
 function libtmux_core::CreatedSession::session_key: fn(&self) -> libtmux_core::SessionKey
@@ -70,6 +112,18 @@ function libtmux_core::CreatedSession::window_key: fn(&self) -> libtmux_core::Wi
 function libtmux_core::CreationNonce::from_bytes: const fn(bytes: [u8; 16]) -> Self
 function libtmux_core::Effect::as_str: const fn(self) -> &'static str
 function libtmux_core::Error::effect: fn(&self) -> libtmux_core::Effect
+function libtmux_core::FormatCodecError::expected: const fn(&self) -> Option<libtmux_core::formats::DecoderKind>
+function libtmux_core::FormatCodecError::field: const fn(&self) -> Option<usize>
+function libtmux_core::FormatCodecError::field_name: const fn(&self) -> Option<&'static str>
+function libtmux_core::FormatCodecError::kind: const fn(&self) -> libtmux_core::formats::row::FormatCodecErrorKind
+function libtmux_core::FormatCodecError::offset: const fn(&self) -> Option<usize>
+function libtmux_core::FormatCodecError::phase: const fn(&self) -> libtmux_core::formats::row::FormatCodecPhase
+function libtmux_core::FormatCodecError::profile: const fn(&self) -> Option<libtmux_core::formats::ListProfile>
+function libtmux_core::FormatCodecError::purpose_mismatch: const fn(profile: libtmux_core::formats::ListProfile, row: usize) -> Self
+function libtmux_core::FormatCodecError::row: const fn(&self) -> Option<usize>
+function libtmux_core::FormatCodecError::row_mismatch: const fn(row: usize, field: Option<usize>, field_name: Option<&'static str>, offset: Option<usize>) -> Self
+function libtmux_core::FormatCodecError::typed: const fn(kind: libtmux_core::formats::row::FormatCodecErrorKind, slot: &libtmux_core::formats::row::ParsedSlot<'_>) -> Self
+function libtmux_core::FormatCodecError::uncatalogued: const fn(kind: libtmux_core::formats::row::FormatCodecErrorKind, phase: libtmux_core::formats::row::FormatCodecPhase, row: usize, field: usize, field_name: &'static str, offset: Option<usize>) -> Self
 function libtmux_core::IdParseError::expected_sigil: const fn(self) -> char
 function libtmux_core::NewSession::arguments: fn(&self) -> Vec<OsString>
 function libtmux_core::NewSession::command: fn(self, command: impl Into<OsString>) -> Self
@@ -91,6 +145,9 @@ function libtmux_core::Operand::as_os_str: fn(&self) -> &OsStr
 function libtmux_core::Operand::into_os_string: fn(self) -> OsString
 function libtmux_core::Operand::into_parts: fn(self) -> (libtmux_core::OperandKind, OsString)
 function libtmux_core::Operand::kind: const fn(&self) -> libtmux_core::OperandKind
+function libtmux_core::OrdinaryGenerationProbe::arguments: fn(&self) -> Vec<OsString>
+function libtmux_core::OrdinaryGenerationProbe::decode: fn(&self, status: Option<i32>, stdout: &[u8], stderr: &[u8], late: bool) -> Result<libtmux_core::ServerGeneration, libtmux_core::Error>
+function libtmux_core::OrdinaryGenerationProbe::new: fn(nonce: libtmux_core::CreationNonce) -> Self
 function libtmux_core::OrdinaryPaneObservation::capture_arguments: fn(&self, socket: &Path, key: &libtmux_core::PaneKey) -> Result<Vec<OsString>, libtmux_core::Error>
 function libtmux_core::OrdinaryPaneObservation::decode_capture: fn(&self, status: Option<i32>, stdout: Vec<u8>, stderr: &[u8], late: bool) -> Result<Vec<u8>, libtmux_core::Error>
 function libtmux_core::OrdinaryPaneObservation::key: const fn(&self) -> &libtmux_core::PaneKey
@@ -100,6 +157,78 @@ function libtmux_core::OrdinaryPaneProbe::new: fn(pane: libtmux_core::PaneId, no
 function libtmux_core::OrdinaryVersionProbe::arguments: fn(&self) -> Vec<std::ffi::OsString>
 function libtmux_core::OrdinaryVersionProbe::decode: fn(&self, status: Option<i32>, stdout: &[u8], stderr: &[u8], late: bool) -> Result<Option<libtmux_core::TmuxVersion>, libtmux_core::Error>
 function libtmux_core::OrdinaryVersionProbe::new: fn(nonce: libtmux_core::CreationNonce) -> Self
+function libtmux_core::PaneFields::for_target: fn(target: &'static str) -> Self
+function libtmux_core::PaneSnapshot::alternate_saved_x: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::alternate_saved_y: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::bracket_paste_flag: const fn(&self) -> libtmux_core::Availability<&bool>
+function libtmux_core::PaneSnapshot::cursor_character: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::PaneSnapshot::cursor_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::cursor_x: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::cursor_y: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::get: fn<F: libtmux_core::query::ReadField<Self>>(&self, field: F) -> libtmux_core::Availability<<F as libtmux_core::query::ReadField>::Value<'_>>
+function libtmux_core::PaneSnapshot::history_bytes: const fn(&self) -> &u64
+function libtmux_core::PaneSnapshot::history_limit: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::history_size: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::insert_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::keypad_cursor_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::keypad_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::mouse_all_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::mouse_any_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::mouse_button_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::mouse_sgr_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::mouse_standard_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::origin_flag: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_active: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_at_bottom: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_at_left: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_at_right: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_at_top: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_bg: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_bottom: const fn(&self) -> &i32
+function libtmux_core::PaneSnapshot::pane_current_command: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::PaneSnapshot::pane_current_path: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::PaneSnapshot::pane_dead: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_dead_signal: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::PaneSnapshot::pane_dead_status: const fn(&self) -> libtmux_core::Availability<&u8>
+function libtmux_core::PaneSnapshot::pane_dead_time: const fn(&self) -> libtmux_core::Availability<&i64>
+function libtmux_core::PaneSnapshot::pane_fg: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_flags: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::PaneSnapshot::pane_floating_flag: const fn(&self) -> libtmux_core::Availability<&bool>
+function libtmux_core::PaneSnapshot::pane_height: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::pane_id: const fn(&self) -> &libtmux_core::PaneId
+function libtmux_core::PaneSnapshot::pane_in_mode: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::pane_index: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::pane_input_off: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_last: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_left: const fn(&self) -> &i32
+function libtmux_core::PaneSnapshot::pane_marked: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_mode: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::PaneSnapshot::pane_path: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_pb_progress: const fn(&self) -> libtmux_core::Availability<&u8>
+function libtmux_core::PaneSnapshot::pane_pb_state: const fn(&self) -> libtmux_core::Availability<&libtmux_core::PaneProgressState>
+function libtmux_core::PaneSnapshot::pane_pid: const fn(&self) -> libtmux_core::Availability<&u32>
+function libtmux_core::PaneSnapshot::pane_pipe: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_pipe_pid: const fn(&self) -> libtmux_core::Availability<&u32>
+function libtmux_core::PaneSnapshot::pane_right: const fn(&self) -> &i32
+function libtmux_core::PaneSnapshot::pane_search_string: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_start_command: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_start_path: const fn(&self) -> libtmux_core::Availability<&libtmux_core::TmuxText>
+function libtmux_core::PaneSnapshot::pane_synchronized: const fn(&self) -> &bool
+function libtmux_core::PaneSnapshot::pane_tabs: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_title: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_top: const fn(&self) -> &i32
+function libtmux_core::PaneSnapshot::pane_tty: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::PaneSnapshot::pane_unseen_changes: const fn(&self) -> libtmux_core::Availability<&bool>
+function libtmux_core::PaneSnapshot::pane_width: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::pane_x: const fn(&self) -> libtmux_core::Availability<&i32>
+function libtmux_core::PaneSnapshot::pane_y: const fn(&self) -> libtmux_core::Availability<&i32>
+function libtmux_core::PaneSnapshot::pane_z: const fn(&self) -> libtmux_core::Availability<&u32>
+function libtmux_core::PaneSnapshot::pane_zoomed_flag: const fn(&self) -> libtmux_core::Availability<&bool>
+function libtmux_core::PaneSnapshot::scroll_position: const fn(&self) -> libtmux_core::Availability<&i32>
+function libtmux_core::PaneSnapshot::scroll_region_lower: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::scroll_region_upper: const fn(&self) -> &u32
+function libtmux_core::PaneSnapshot::synchronized_output_flag: const fn(&self) -> libtmux_core::Availability<&bool>
+function libtmux_core::PaneSnapshot::wrap_flag: const fn(&self) -> &bool
 function libtmux_core::ReleaseSuffix::is_final: const fn(self) -> bool
 function libtmux_core::ReleaseSuffix::is_release_candidate: const fn(self) -> bool
 function libtmux_core::ReleaseSuffix::patch: fn(letter: char) -> Option<Self>
@@ -113,8 +242,22 @@ function libtmux_core::ReleaseVersion::suffix: const fn(self) -> libtmux_core::R
 function libtmux_core::ServerGeneration::pid: const fn(self) -> u32
 function libtmux_core::ServerGeneration::queue_guard: fn(self) -> libtmux_core::Command
 function libtmux_core::ServerGeneration::start_time: fn(self) -> SystemTime
+function libtmux_core::SessionFields::for_target: fn(target: &'static str) -> Self
 function libtmux_core::SessionName::as_str: fn(&self) -> &str
 function libtmux_core::SessionName::new: fn(name: impl Into<String>) -> Result<Self, libtmux_core::SessionNameError>
+function libtmux_core::SessionSnapshot::get: fn<F: libtmux_core::query::ReadField<Self>>(&self, field: F) -> libtmux_core::Availability<<F as libtmux_core::query::ReadField>::Value<'_>>
+function libtmux_core::SessionSnapshot::session_activity: const fn(&self) -> &i64
+function libtmux_core::SessionSnapshot::session_attached: const fn(&self) -> &u32
+function libtmux_core::SessionSnapshot::session_created: const fn(&self) -> &i64
+function libtmux_core::SessionSnapshot::session_id: const fn(&self) -> &libtmux_core::SessionId
+function libtmux_core::SessionSnapshot::session_last_attached: const fn(&self) -> libtmux_core::Availability<&i64>
+function libtmux_core::SessionSnapshot::session_many_attached: const fn(&self) -> &bool
+function libtmux_core::SessionSnapshot::session_name: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::SessionSnapshot::session_path: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::SessionSnapshot::session_windows: const fn(&self) -> &u32
+function libtmux_core::SnapshotList::arguments: fn(&self) -> Vec<OsString>
+function libtmux_core::SnapshotList::decode: fn(&self, status: Option<i32>, stdout: &[u8], diagnostic_len: usize, late: bool) -> Result<Vec<S>, libtmux_core::Error>
+function libtmux_core::SnapshotList::new: fn(version: &libtmux_core::TmuxVersion, nonce: libtmux_core::CreationNonce) -> Self
 function libtmux_core::SplitDirection::before: const fn(self) -> bool
 function libtmux_core::SplitDirection::flags: const fn(self) -> (&'static str, bool)
 function libtmux_core::SplitDirection::is_vertical: const fn(self) -> bool
@@ -140,12 +283,26 @@ function libtmux_core::TmuxVersion::release: const fn(&self) -> Option<&libtmux_
 function libtmux_core::VersionError::found_version: const fn(&self) -> Option<&libtmux_core::TmuxVersion>
 function libtmux_core::VersionError::invalid_version_output_len: const fn(&self) -> Option<usize>
 function libtmux_core::VersionError::minimum_version: const fn(&self) -> Option<&libtmux_core::ReleaseVersion>
+function libtmux_core::WindowFields::for_target: fn(target: &'static str) -> Self
+function libtmux_core::WindowLinkSnapshot::guard_command: fn(&self) -> libtmux_core::Command
 function libtmux_core::WindowLinkSnapshot::index: const fn(&self) -> i32
 function libtmux_core::WindowLinkSnapshot::new: const fn(session: libtmux_core::SessionId, index: i32, window: libtmux_core::WindowKey) -> Self
 function libtmux_core::WindowLinkSnapshot::session: const fn(&self) -> &libtmux_core::SessionId
 function libtmux_core::WindowLinkSnapshot::target: fn(&self) -> String
 function libtmux_core::WindowLinkSnapshot::unlink_command: fn(&self) -> libtmux_core::CommandChain
 function libtmux_core::WindowLinkSnapshot::window: const fn(&self) -> &libtmux_core::WindowKey
+function libtmux_core::WindowSnapshot::get: fn<F: libtmux_core::query::ReadField<Self>>(&self, field: F) -> libtmux_core::Availability<<F as libtmux_core::query::ReadField>::Value<'_>>
+function libtmux_core::WindowSnapshot::window_activity: const fn(&self) -> &i64
+function libtmux_core::WindowSnapshot::window_cell_height: const fn(&self) -> &u32
+function libtmux_core::WindowSnapshot::window_cell_width: const fn(&self) -> &u32
+function libtmux_core::WindowSnapshot::window_height: const fn(&self) -> &u32
+function libtmux_core::WindowSnapshot::window_id: const fn(&self) -> &libtmux_core::WindowId
+function libtmux_core::WindowSnapshot::window_layout: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::WindowSnapshot::window_name: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::WindowSnapshot::window_panes: const fn(&self) -> &u32
+function libtmux_core::WindowSnapshot::window_visible_layout: const fn(&self) -> &libtmux_core::TmuxText
+function libtmux_core::WindowSnapshot::window_width: const fn(&self) -> &u32
+function libtmux_core::WindowSnapshot::window_zoomed_flag: const fn(&self) -> &bool
 function libtmux_core::argv_operand: fn(value: &std::ffi::OsStr) -> std::ffi::OsString
 function libtmux_core::control::ControlBlock::header: const fn(&self) -> libtmux_core::control::FrameHeader
 function libtmux_core::control::ControlBlock::output: fn(&self) -> &[u8]
@@ -159,13 +316,27 @@ function libtmux_core::control::ControlProbe::decode_control_report: fn(&self, b
 function libtmux_core::control::ControlProbe::decode_ordinary: fn(&self, status: Option<i32>, stdout: &[u8], stderr: &[u8], late: bool) -> Result<libtmux_core::control::ControlIdentity, libtmux_core::Error>
 function libtmux_core::control::ControlProbe::new: fn(session: libtmux_core::SessionId, nonce: libtmux_core::CreationNonce) -> Self
 function libtmux_core::control::ControlReply::blocks: fn(&self) -> &[libtmux_core::control::ControlBlock]
+function libtmux_core::control::ControlReply::hook_failures: const fn(&self) -> usize
+function libtmux_core::control::ControlReply::into_blocks: fn(self) -> Vec<libtmux_core::control::ControlBlock>
 function libtmux_core::control::ControlReply::succeeded: fn(&self) -> bool
 function libtmux_core::control::Event::invalidates_listings: const fn(&self) -> bool
 function libtmux_core::control::Event::may_have_added_a_pane: const fn(&self) -> bool
 function libtmux_core::control::Event::pane: const fn(&self) -> Option<&libtmux_core::PaneId>
 function libtmux_core::control::Event::window: const fn(&self) -> Option<&libtmux_core::WindowId>
+function libtmux_core::control::require_shared_control: fn(command: &[impl AsRef<std::ffi::OsStr>]) -> Result<(), libtmux_core::control::ControlCommandRefusal>
 function libtmux_core::escape_format: fn(text: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
-function libtmux_core::placement::assignment: fn(name: &std::ffi::OsStr, value: &std::ffi::OsStr) -> std::ffi::OsString
+function libtmux_core::formats::FormatDescriptor::decoder: const fn(&self) -> libtmux_core::formats::DecoderKind
+function libtmux_core::formats::FormatDescriptor::empty_policy: const fn(&self) -> libtmux_core::formats::EmptyPolicy
+function libtmux_core::formats::FormatDescriptor::for_codec_test: const fn(name: &'static str, decoder: libtmux_core::formats::DecoderKind) -> Self
+function libtmux_core::formats::FormatDescriptor::minimum_release: const fn(&self) -> libtmux_core::ReleaseVersion
+function libtmux_core::formats::FormatDescriptor::name: fn(&self) -> &'static str
+function libtmux_core::formats::FormatDescriptor::owner: const fn(&self) -> libtmux_core::formats::SemanticOwner
+function libtmux_core::formats::FormatDescriptor::placement: const fn(&self) -> libtmux_core::formats::InfoPlacement
+function libtmux_core::formats::FormatDescriptor::required_context: const fn(&self) -> libtmux_core::formats::RequiredContext
+function libtmux_core::formats::row::ParsedSlot::as_bytes: const fn(&self) -> &'row [u8]
+function libtmux_core::formats::row::ParsedSlot::descriptor: const fn(&self) -> &'static libtmux_core::formats::FormatDescriptor
+function libtmux_core::formats::row::ParsedSlot::field: const fn(&self) -> usize
+function libtmux_core::formats::row::ParsedSlot::raw_start: const fn(&self) -> usize
 function libtmux_core::plan::CapturePane::escape_sequences: const fn(self) -> Self
 function libtmux_core::plan::CapturePane::new: fn(target: impl Into<libtmux_core::plan::PaneTarget>) -> Self
 function libtmux_core::plan::FromStep::from_step: fn(index: usize, plan: &libtmux_core::plan::Plan) -> Self
@@ -345,11 +516,13 @@ function libtmux_core::query::TextField::regex: fn(self, pattern: impl Into<Stri
 function libtmux_core::query::TextField::regex_ignore_case: fn(self, pattern: impl Into<String>) -> Result<libtmux_core::query::FilterExpr<T>, libtmux_core::query::FilterExpressionError>
 function libtmux_core::query::TextField::starts_with: fn(self, value: impl Into<String>) -> libtmux_core::query::FilterExpr<T>
 function libtmux_core::query::TextField::starts_with_ignore_case: fn(self, value: impl Into<String>) -> libtmux_core::query::FilterExpr<T>
+function libtmux_core::supervision::CleanupErrors::after: fn(kill: std::io::Result<()>, reap: std::io::Result<()>) -> Result<(), Self>
 impl AsRef<[u8]> for libtmux_core::TmuxText
 impl AsRef<str> for libtmux_core::PaneId
 impl AsRef<str> for libtmux_core::SessionId
 impl AsRef<str> for libtmux_core::WindowId
 impl Clone for libtmux_core::Capture
+impl Clone for libtmux_core::ClientSnapshot
 impl Clone for libtmux_core::Command
 impl Clone for libtmux_core::CommandChain
 impl Clone for libtmux_core::CommandKind
@@ -357,6 +530,7 @@ impl Clone for libtmux_core::CommandSummary
 impl Clone for libtmux_core::CreatedSession
 impl Clone for libtmux_core::CreationNonce
 impl Clone for libtmux_core::Effect
+impl Clone for libtmux_core::FormatCodecError
 impl Clone for libtmux_core::IdParseError
 impl Clone for libtmux_core::NewSession
 impl Clone for libtmux_core::ObservePane
@@ -365,6 +539,8 @@ impl Clone for libtmux_core::OperandKind
 impl Clone for libtmux_core::OptionScope
 impl Clone for libtmux_core::OrdinaryPaneObservation
 impl Clone for libtmux_core::PaneId
+impl Clone for libtmux_core::PaneProgressState
+impl Clone for libtmux_core::PaneSnapshot
 impl Clone for libtmux_core::PaneTarget
 impl Clone for libtmux_core::ReleaseSuffix
 impl Clone for libtmux_core::ReleaseVersion
@@ -373,6 +549,7 @@ impl Clone for libtmux_core::ServerIdentity
 impl Clone for libtmux_core::SessionId
 impl Clone for libtmux_core::SessionName
 impl Clone for libtmux_core::SessionNameError
+impl Clone for libtmux_core::SessionSnapshot
 impl Clone for libtmux_core::SessionTarget
 impl Clone for libtmux_core::SplitDirection
 impl Clone for libtmux_core::TmuxArg
@@ -381,8 +558,10 @@ impl Clone for libtmux_core::TmuxVersion
 impl Clone for libtmux_core::VersionError
 impl Clone for libtmux_core::WindowId
 impl Clone for libtmux_core::WindowLinkSnapshot
+impl Clone for libtmux_core::WindowSnapshot
 impl Clone for libtmux_core::WindowTarget
 impl Clone for libtmux_core::control::ControlBlock
+impl Clone for libtmux_core::control::ControlCommandRefusal
 impl Clone for libtmux_core::control::ControlFault
 impl Clone for libtmux_core::control::ControlIdentity
 impl Clone for libtmux_core::control::ControlLimits
@@ -390,6 +569,15 @@ impl Clone for libtmux_core::control::ControlNotice
 impl Clone for libtmux_core::control::ControlReply
 impl Clone for libtmux_core::control::Event
 impl Clone for libtmux_core::control::FrameHeader
+impl Clone for libtmux_core::formats::DecoderKind
+impl Clone for libtmux_core::formats::EmptyPolicy
+impl Clone for libtmux_core::formats::FormatDescriptor
+impl Clone for libtmux_core::formats::InfoPlacement
+impl Clone for libtmux_core::formats::ListProfile
+impl Clone for libtmux_core::formats::RequiredContext
+impl Clone for libtmux_core::formats::SemanticOwner
+impl Clone for libtmux_core::formats::row::FormatCodecErrorKind
+impl Clone for libtmux_core::formats::row::FormatCodecPhase
 impl Clone for libtmux_core::plan::CapturePane
 impl Clone for libtmux_core::plan::Effects
 impl Clone for libtmux_core::plan::KillPane
@@ -429,18 +617,30 @@ impl Copy for libtmux_core::Capture
 impl Copy for libtmux_core::CommandKind
 impl Copy for libtmux_core::CreationNonce
 impl Copy for libtmux_core::Effect
+impl Copy for libtmux_core::FormatCodecError
 impl Copy for libtmux_core::IdParseError
 impl Copy for libtmux_core::ObservePane
 impl Copy for libtmux_core::OperandKind
 impl Copy for libtmux_core::OptionScope
+impl Copy for libtmux_core::PaneProgressState
 impl Copy for libtmux_core::ReleaseSuffix
 impl Copy for libtmux_core::ReleaseVersion
 impl Copy for libtmux_core::ServerGeneration
 impl Copy for libtmux_core::SessionNameError
 impl Copy for libtmux_core::SplitDirection
+impl Copy for libtmux_core::control::ControlCommandRefusal
 impl Copy for libtmux_core::control::ControlFault
 impl Copy for libtmux_core::control::ControlLimits
 impl Copy for libtmux_core::control::FrameHeader
+impl Copy for libtmux_core::formats::DecoderKind
+impl Copy for libtmux_core::formats::EmptyPolicy
+impl Copy for libtmux_core::formats::FormatDescriptor
+impl Copy for libtmux_core::formats::InfoPlacement
+impl Copy for libtmux_core::formats::ListProfile
+impl Copy for libtmux_core::formats::RequiredContext
+impl Copy for libtmux_core::formats::SemanticOwner
+impl Copy for libtmux_core::formats::row::FormatCodecErrorKind
+impl Copy for libtmux_core::formats::row::FormatCodecPhase
 impl Copy for libtmux_core::plan::Effects
 impl Copy for libtmux_core::plan::OperationKind
 impl Copy for libtmux_core::plan::PaneSlot
@@ -457,6 +657,7 @@ impl Copy for libtmux_core::query::FilterExpressionError
 impl Copy for libtmux_core::query::FilterExpressionErrorKind
 impl Copy for libtmux_core::query::MultipleItemsError
 impl Debug for libtmux_core::Capture
+impl Debug for libtmux_core::ClientSnapshot
 impl Debug for libtmux_core::Command
 impl Debug for libtmux_core::CommandChain
 impl Debug for libtmux_core::CommandKind
@@ -465,16 +666,20 @@ impl Debug for libtmux_core::CreatedSession
 impl Debug for libtmux_core::CreationNonce
 impl Debug for libtmux_core::Effect
 impl Debug for libtmux_core::Error
+impl Debug for libtmux_core::FormatCodecError
 impl Debug for libtmux_core::IdParseError
 impl Debug for libtmux_core::NewSession
 impl Debug for libtmux_core::ObservePane
 impl Debug for libtmux_core::Operand
 impl Debug for libtmux_core::OperandKind
 impl Debug for libtmux_core::OptionScope
+impl Debug for libtmux_core::OrdinaryGenerationProbe
 impl Debug for libtmux_core::OrdinaryPaneObservation
 impl Debug for libtmux_core::OrdinaryPaneProbe
 impl Debug for libtmux_core::OrdinaryVersionProbe
 impl Debug for libtmux_core::PaneId
+impl Debug for libtmux_core::PaneProgressState
+impl Debug for libtmux_core::PaneSnapshot
 impl Debug for libtmux_core::PaneTarget
 impl Debug for libtmux_core::ReleaseSuffix
 impl Debug for libtmux_core::ReleaseVersion
@@ -483,6 +688,7 @@ impl Debug for libtmux_core::ServerIdentity
 impl Debug for libtmux_core::SessionId
 impl Debug for libtmux_core::SessionName
 impl Debug for libtmux_core::SessionNameError
+impl Debug for libtmux_core::SessionSnapshot
 impl Debug for libtmux_core::SessionTarget
 impl Debug for libtmux_core::SplitDirection
 impl Debug for libtmux_core::TmuxArg
@@ -491,8 +697,10 @@ impl Debug for libtmux_core::TmuxVersion
 impl Debug for libtmux_core::VersionError
 impl Debug for libtmux_core::WindowId
 impl Debug for libtmux_core::WindowLinkSnapshot
+impl Debug for libtmux_core::WindowSnapshot
 impl Debug for libtmux_core::WindowTarget
 impl Debug for libtmux_core::control::ControlBlock
+impl Debug for libtmux_core::control::ControlCommandRefusal
 impl Debug for libtmux_core::control::ControlFault
 impl Debug for libtmux_core::control::ControlIdentity
 impl Debug for libtmux_core::control::ControlLimits
@@ -501,6 +709,16 @@ impl Debug for libtmux_core::control::ControlProbe
 impl Debug for libtmux_core::control::ControlReply
 impl Debug for libtmux_core::control::Event
 impl Debug for libtmux_core::control::FrameHeader
+impl Debug for libtmux_core::formats::DecoderKind
+impl Debug for libtmux_core::formats::EmptyPolicy
+impl Debug for libtmux_core::formats::FormatDescriptor
+impl Debug for libtmux_core::formats::InfoPlacement
+impl Debug for libtmux_core::formats::ListProfile
+impl Debug for libtmux_core::formats::RequiredContext
+impl Debug for libtmux_core::formats::SemanticOwner
+impl Debug for libtmux_core::formats::row::FormatCodecErrorKind
+impl Debug for libtmux_core::formats::row::FormatCodecPhase
+impl Debug for libtmux_core::formats::row::ParsedSlot<'_>
 impl Debug for libtmux_core::plan::CapturePane
 impl Debug for libtmux_core::plan::Effects
 impl Debug for libtmux_core::plan::KillPane
@@ -536,12 +754,14 @@ impl Debug for libtmux_core::query::ExactlyOneError
 impl Debug for libtmux_core::query::FilterExpressionError
 impl Debug for libtmux_core::query::FilterExpressionErrorKind
 impl Debug for libtmux_core::query::MultipleItemsError
+impl Debug for libtmux_core::supervision::CleanupErrors
 impl Default for libtmux_core::control::ControlLimits
 impl Default for libtmux_core::plan::Plan
 impl Default for libtmux_core::plan::Planner
 impl Display for libtmux_core::CommandKind
 impl Display for libtmux_core::CommandSummary
 impl Display for libtmux_core::Error
+impl Display for libtmux_core::FormatCodecError
 impl Display for libtmux_core::IdParseError
 impl Display for libtmux_core::PaneId
 impl Display for libtmux_core::ReleaseSuffix
@@ -553,22 +773,28 @@ impl Display for libtmux_core::SessionNameError
 impl Display for libtmux_core::TmuxVersion
 impl Display for libtmux_core::VersionError
 impl Display for libtmux_core::WindowId
+impl Display for libtmux_core::control::ControlCommandRefusal
 impl Display for libtmux_core::control::ControlFault
 impl Display for libtmux_core::plan::PlanValidationError
 impl Display for libtmux_core::query::ExactlyOneError
 impl Display for libtmux_core::query::FilterExpressionError
 impl Display for libtmux_core::query::MultipleItemsError
+impl Display for libtmux_core::supervision::CleanupErrors
+impl Eq for libtmux_core::ClientSnapshot
 impl Eq for libtmux_core::CommandKind
 impl Eq for libtmux_core::CommandSummary
 impl Eq for libtmux_core::CreatedSession
 impl Eq for libtmux_core::CreationNonce
 impl Eq for libtmux_core::Effect
+impl Eq for libtmux_core::FormatCodecError
 impl Eq for libtmux_core::IdParseError
 impl Eq for libtmux_core::NewSession
 impl Eq for libtmux_core::Operand
 impl Eq for libtmux_core::OperandKind
 impl Eq for libtmux_core::OptionScope
 impl Eq for libtmux_core::PaneId
+impl Eq for libtmux_core::PaneProgressState
+impl Eq for libtmux_core::PaneSnapshot
 impl Eq for libtmux_core::PaneTarget
 impl Eq for libtmux_core::ReleaseSuffix
 impl Eq for libtmux_core::ReleaseVersion
@@ -577,6 +803,7 @@ impl Eq for libtmux_core::ServerIdentity
 impl Eq for libtmux_core::SessionId
 impl Eq for libtmux_core::SessionName
 impl Eq for libtmux_core::SessionNameError
+impl Eq for libtmux_core::SessionSnapshot
 impl Eq for libtmux_core::SessionTarget
 impl Eq for libtmux_core::SplitDirection
 impl Eq for libtmux_core::TmuxArg
@@ -585,14 +812,25 @@ impl Eq for libtmux_core::TmuxVersion
 impl Eq for libtmux_core::VersionError
 impl Eq for libtmux_core::WindowId
 impl Eq for libtmux_core::WindowLinkSnapshot
+impl Eq for libtmux_core::WindowSnapshot
 impl Eq for libtmux_core::WindowTarget
 impl Eq for libtmux_core::control::ControlBlock
+impl Eq for libtmux_core::control::ControlCommandRefusal
 impl Eq for libtmux_core::control::ControlFault
 impl Eq for libtmux_core::control::ControlIdentity
 impl Eq for libtmux_core::control::ControlNotice
 impl Eq for libtmux_core::control::ControlReply
 impl Eq for libtmux_core::control::Event
 impl Eq for libtmux_core::control::FrameHeader
+impl Eq for libtmux_core::formats::DecoderKind
+impl Eq for libtmux_core::formats::EmptyPolicy
+impl Eq for libtmux_core::formats::FormatDescriptor
+impl Eq for libtmux_core::formats::InfoPlacement
+impl Eq for libtmux_core::formats::ListProfile
+impl Eq for libtmux_core::formats::RequiredContext
+impl Eq for libtmux_core::formats::SemanticOwner
+impl Eq for libtmux_core::formats::row::FormatCodecErrorKind
+impl Eq for libtmux_core::formats::row::FormatCodecPhase
 impl Eq for libtmux_core::plan::Effects
 impl Eq for libtmux_core::plan::OperationKind
 impl Eq for libtmux_core::plan::PaneSlot
@@ -613,14 +851,17 @@ impl Eq for libtmux_core::query::FilterExpressionError
 impl Eq for libtmux_core::query::FilterExpressionErrorKind
 impl Eq for libtmux_core::query::MultipleItemsError
 impl Error for libtmux_core::Error
+impl Error for libtmux_core::FormatCodecError
 impl Error for libtmux_core::IdParseError
 impl Error for libtmux_core::SessionNameError
 impl Error for libtmux_core::VersionError
+impl Error for libtmux_core::control::ControlCommandRefusal
 impl Error for libtmux_core::control::ControlFault
 impl Error for libtmux_core::plan::PlanValidationError
 impl Error for libtmux_core::query::ExactlyOneError
 impl Error for libtmux_core::query::FilterExpressionError
 impl Error for libtmux_core::query::MultipleItemsError
+impl Error for libtmux_core::supervision::CleanupErrors
 impl From<&OsStr> for libtmux_core::TmuxArg
 impl From<&OsString> for libtmux_core::TmuxArg
 impl From<&Path> for libtmux_core::TmuxArg
@@ -634,6 +875,7 @@ impl From<PathBuf> for libtmux_core::TmuxArg
 impl From<String> for libtmux_core::TmuxArg
 impl From<String> for libtmux_core::TmuxText
 impl From<Vec<u8>> for libtmux_core::TmuxText
+impl From<libtmux_core::FormatCodecError> for libtmux_core::Error
 impl From<libtmux_core::NewSession> for libtmux_core::plan::Op
 impl From<libtmux_core::PaneId> for libtmux_core::PaneTarget
 impl From<libtmux_core::PaneId> for libtmux_core::plan::PaneTarget
@@ -711,17 +953,21 @@ impl Ord for libtmux_core::TmuxText
 impl Ord for libtmux_core::WindowId
 impl Ord for libtmux_core::WindowTarget
 impl Ord for libtmux_core::plan::Safety
+impl PartialEq for libtmux_core::ClientSnapshot
 impl PartialEq for libtmux_core::CommandKind
 impl PartialEq for libtmux_core::CommandSummary
 impl PartialEq for libtmux_core::CreatedSession
 impl PartialEq for libtmux_core::CreationNonce
 impl PartialEq for libtmux_core::Effect
+impl PartialEq for libtmux_core::FormatCodecError
 impl PartialEq for libtmux_core::IdParseError
 impl PartialEq for libtmux_core::NewSession
 impl PartialEq for libtmux_core::Operand
 impl PartialEq for libtmux_core::OperandKind
 impl PartialEq for libtmux_core::OptionScope
 impl PartialEq for libtmux_core::PaneId
+impl PartialEq for libtmux_core::PaneProgressState
+impl PartialEq for libtmux_core::PaneSnapshot
 impl PartialEq for libtmux_core::PaneTarget
 impl PartialEq for libtmux_core::ReleaseSuffix
 impl PartialEq for libtmux_core::ReleaseVersion
@@ -730,6 +976,7 @@ impl PartialEq for libtmux_core::ServerIdentity
 impl PartialEq for libtmux_core::SessionId
 impl PartialEq for libtmux_core::SessionName
 impl PartialEq for libtmux_core::SessionNameError
+impl PartialEq for libtmux_core::SessionSnapshot
 impl PartialEq for libtmux_core::SessionTarget
 impl PartialEq for libtmux_core::SplitDirection
 impl PartialEq for libtmux_core::TmuxArg
@@ -738,14 +985,25 @@ impl PartialEq for libtmux_core::TmuxVersion
 impl PartialEq for libtmux_core::VersionError
 impl PartialEq for libtmux_core::WindowId
 impl PartialEq for libtmux_core::WindowLinkSnapshot
+impl PartialEq for libtmux_core::WindowSnapshot
 impl PartialEq for libtmux_core::WindowTarget
 impl PartialEq for libtmux_core::control::ControlBlock
+impl PartialEq for libtmux_core::control::ControlCommandRefusal
 impl PartialEq for libtmux_core::control::ControlFault
 impl PartialEq for libtmux_core::control::ControlIdentity
 impl PartialEq for libtmux_core::control::ControlNotice
 impl PartialEq for libtmux_core::control::ControlReply
 impl PartialEq for libtmux_core::control::Event
 impl PartialEq for libtmux_core::control::FrameHeader
+impl PartialEq for libtmux_core::formats::DecoderKind
+impl PartialEq for libtmux_core::formats::EmptyPolicy
+impl PartialEq for libtmux_core::formats::FormatDescriptor
+impl PartialEq for libtmux_core::formats::InfoPlacement
+impl PartialEq for libtmux_core::formats::ListProfile
+impl PartialEq for libtmux_core::formats::RequiredContext
+impl PartialEq for libtmux_core::formats::SemanticOwner
+impl PartialEq for libtmux_core::formats::row::FormatCodecErrorKind
+impl PartialEq for libtmux_core::formats::row::FormatCodecPhase
 impl PartialEq for libtmux_core::plan::Effects
 impl PartialEq for libtmux_core::plan::OperationKind
 impl PartialEq for libtmux_core::plan::PaneSlot
@@ -808,6 +1066,57 @@ impl Serialize for libtmux_core::plan::SplitTarget
 impl Serialize for libtmux_core::plan::SplitWindow
 impl Serialize for libtmux_core::plan::WindowSlot
 impl Serialize for libtmux_core::plan::WindowTarget
+impl SnapshotFields for libtmux_core::ClientSnapshot
+impl SnapshotFields for libtmux_core::PaneSnapshot
+impl SnapshotFields for libtmux_core::SessionSnapshot
+impl SnapshotFields for libtmux_core::WindowSnapshot
+impl TrivialClone for libtmux_core::Capture
+impl TrivialClone for libtmux_core::CommandKind
+impl TrivialClone for libtmux_core::CreationNonce
+impl TrivialClone for libtmux_core::Effect
+impl TrivialClone for libtmux_core::FormatCodecError
+impl TrivialClone for libtmux_core::IdParseError
+impl TrivialClone for libtmux_core::ObservePane
+impl TrivialClone for libtmux_core::OperandKind
+impl TrivialClone for libtmux_core::OptionScope
+impl TrivialClone for libtmux_core::PaneProgressState
+impl TrivialClone for libtmux_core::ReleaseSuffix
+impl TrivialClone for libtmux_core::ReleaseVersion
+impl TrivialClone for libtmux_core::ServerGeneration
+impl TrivialClone for libtmux_core::SessionNameError
+impl TrivialClone for libtmux_core::SplitDirection
+impl TrivialClone for libtmux_core::control::ControlCommandRefusal
+impl TrivialClone for libtmux_core::control::ControlFault
+impl TrivialClone for libtmux_core::control::ControlLimits
+impl TrivialClone for libtmux_core::control::FrameHeader
+impl TrivialClone for libtmux_core::formats::DecoderKind
+impl TrivialClone for libtmux_core::formats::EmptyPolicy
+impl TrivialClone for libtmux_core::formats::FormatDescriptor
+impl TrivialClone for libtmux_core::formats::InfoPlacement
+impl TrivialClone for libtmux_core::formats::ListProfile
+impl TrivialClone for libtmux_core::formats::RequiredContext
+impl TrivialClone for libtmux_core::formats::SemanticOwner
+impl TrivialClone for libtmux_core::formats::row::FormatCodecErrorKind
+impl TrivialClone for libtmux_core::formats::row::FormatCodecPhase
+impl TrivialClone for libtmux_core::plan::Effects
+impl TrivialClone for libtmux_core::plan::OperationKind
+impl TrivialClone for libtmux_core::plan::PaneSlot
+impl TrivialClone for libtmux_core::plan::PlanValidationError
+impl TrivialClone for libtmux_core::plan::PlanValidationErrorKind
+impl TrivialClone for libtmux_core::plan::Planner
+impl TrivialClone for libtmux_core::plan::Safety
+impl TrivialClone for libtmux_core::plan::Scope
+impl TrivialClone for libtmux_core::plan::SessionSlot
+impl TrivialClone for libtmux_core::plan::StepReason
+impl TrivialClone for libtmux_core::plan::WindowSlot
+impl TrivialClone for libtmux_core::query::ExactlyOneError
+impl TrivialClone for libtmux_core::query::FilterExpressionError
+impl TrivialClone for libtmux_core::query::FilterExpressionErrorKind
+impl TrivialClone for libtmux_core::query::MultipleItemsError
+impl libtmux_core::Snapshot for libtmux_core::ClientSnapshot
+impl libtmux_core::Snapshot for libtmux_core::PaneSnapshot
+impl libtmux_core::Snapshot for libtmux_core::SessionSnapshot
+impl libtmux_core::Snapshot for libtmux_core::WindowSnapshot
 impl libtmux_core::plan::Chainable for libtmux_core::plan::KillPane
 impl libtmux_core::plan::Chainable for libtmux_core::plan::KillWindow
 impl libtmux_core::plan::Chainable for libtmux_core::plan::Pause
@@ -833,6 +1142,15 @@ impl libtmux_core::plan::Operation for libtmux_core::plan::SendKeys
 impl libtmux_core::plan::Operation for libtmux_core::plan::SetEnvironment
 impl libtmux_core::plan::Operation for libtmux_core::plan::SetOption
 impl libtmux_core::plan::Operation for libtmux_core::plan::SplitWindow
+impl libtmux_core::query::FilterEnum for libtmux_core::PaneProgressState
+impl libtmux_core::query::FilterSchema for libtmux_core::ClientSnapshot
+impl libtmux_core::query::FilterSchema for libtmux_core::PaneSnapshot
+impl libtmux_core::query::FilterSchema for libtmux_core::SessionSnapshot
+impl libtmux_core::query::FilterSchema for libtmux_core::WindowSnapshot
+impl libtmux_core::query::Filterable for libtmux_core::ClientSnapshot
+impl libtmux_core::query::Filterable for libtmux_core::PaneSnapshot
+impl libtmux_core::query::Filterable for libtmux_core::SessionSnapshot
+impl libtmux_core::query::Filterable for libtmux_core::WindowSnapshot
 impl<'de, T: libtmux_core::query::Filterable> Deserialize<'de> for libtmux_core::query::FilterExpr<T>
 impl<'de, T> Deserialize<'de> for libtmux_core::plan::Slot<T>
 impl<'de> Deserialize<'de> for libtmux_core::NewSession
@@ -861,6 +1179,9 @@ impl<'de> Deserialize<'de> for libtmux_core::plan::SplitTarget
 impl<'de> Deserialize<'de> for libtmux_core::plan::SplitWindow
 impl<'de> Deserialize<'de> for libtmux_core::plan::WindowSlot
 impl<'de> Deserialize<'de> for libtmux_core::plan::WindowTarget
+impl<'row> Clone for libtmux_core::formats::row::ParsedSlot<'row>
+impl<'row> Copy for libtmux_core::formats::row::ParsedSlot<'row>
+impl<'row> TrivialClone for libtmux_core::formats::row::ParsedSlot<'row>
 impl<From, To> Clone for libtmux_core::query::ManyRelation<From, To>
 impl<From, To> Clone for libtmux_core::query::OneRelation<From, To>
 impl<From, To> Copy for libtmux_core::query::ManyRelation<From, To>
@@ -877,6 +1198,7 @@ impl<I: Eq> Eq for libtmux_core::ObjectKey<I>
 impl<I: Hash> Hash for libtmux_core::ObjectKey<I>
 impl<I: Iterator> libtmux_core::query::QueryIteratorExt for I
 impl<I: PartialEq> PartialEq for libtmux_core::ObjectKey<I>
+impl<S: libtmux_core::Snapshot> Debug for libtmux_core::SnapshotList<S>
 impl<T, E> Clone for libtmux_core::query::EnumField<T, E>
 impl<T, E> Copy for libtmux_core::query::EnumField<T, E>
 impl<T, E> Debug for libtmux_core::query::EnumField<T, E>
@@ -893,7 +1215,23 @@ impl<T, V> Copy for libtmux_core::query::TextField<T, V>
 impl<T, V> Debug for libtmux_core::query::TextField<T, V>
 impl<T, V> Eq for libtmux_core::query::TextField<T, V>
 impl<T, V> PartialEq for libtmux_core::query::TextField<T, V>
+impl<T: Clone> Clone for libtmux_core::Availability<T>
+impl<T: Copy> Copy for libtmux_core::Availability<T>
+impl<T: Debug> Debug for libtmux_core::Availability<T>
+impl<T: Eq> Eq for libtmux_core::Availability<T>
 impl<T: Into<std::ffi::OsString>> From<T> for libtmux_core::NewSession
+impl<T: PartialEq> PartialEq for libtmux_core::Availability<T>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::BoolField<T>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::EnumField<T, libtmux_core::PaneProgressState>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::IntegerField<T, i32>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::IntegerField<T, i64>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::IntegerField<T, u32>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::IntegerField<T, u64>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::IntegerField<T, u8>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::TextField<T, libtmux_core::PaneId>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::TextField<T, libtmux_core::SessionId>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::TextField<T, libtmux_core::TmuxText>
+impl<T: SnapshotFields> libtmux_core::query::ReadField<T> for libtmux_core::query::TextField<T, libtmux_core::WindowId>
 impl<T: libtmux_core::query::FilterSchema> JsonSchema for libtmux_core::query::FilterExpr<T>
 impl<T: libtmux_core::query::Filterable> Serialize for libtmux_core::query::FilterExpr<T>
 impl<T: libtmux_core::query::Filterable> libtmux_core::query::Matcher<T> for &libtmux_core::query::FilterExpr<T>
@@ -915,42 +1253,59 @@ impl<T> PartialEq for libtmux_core::query::BoolField<T>
 impl<T> PartialEq for libtmux_core::query::FilterExpr<T>
 impl<T> Serialize for libtmux_core::plan::Slot<T>
 impl<T> libtmux_core::plan::FromStep for libtmux_core::plan::Slot<T>
+impl<Target> Debug for libtmux_core::ClientFields<Target>
+impl<Target> Debug for libtmux_core::PaneFields<Target>
+impl<Target> Debug for libtmux_core::SessionFields<Target>
+impl<Target> Debug for libtmux_core::WindowFields<Target>
 module libtmux_core::control
 module libtmux_core::plan
 module libtmux_core::query
 module libtmux_core::since
 struct libtmux_core::Capture
+struct libtmux_core::ClientFields<Target>
+struct libtmux_core::ClientSnapshot
 struct libtmux_core::Command
 struct libtmux_core::CommandChain
 struct libtmux_core::CommandSummary
 struct libtmux_core::CreatedSession
 struct libtmux_core::CreationNonce
+struct libtmux_core::FormatCodecError
 struct libtmux_core::IdParseError
 struct libtmux_core::NewSession
 struct libtmux_core::ObjectKey<I>
 struct libtmux_core::ObservePane
 struct libtmux_core::Operand
+struct libtmux_core::OrdinaryGenerationProbe
 struct libtmux_core::OrdinaryPaneObservation
 struct libtmux_core::OrdinaryPaneProbe
 struct libtmux_core::OrdinaryVersionProbe
+struct libtmux_core::PaneFields<Target>
 struct libtmux_core::PaneId
+struct libtmux_core::PaneSnapshot
 struct libtmux_core::ReleaseSuffix
 struct libtmux_core::ReleaseVersion
 struct libtmux_core::ServerGeneration
 struct libtmux_core::ServerIdentity
+struct libtmux_core::SessionFields<Target>
 struct libtmux_core::SessionId
 struct libtmux_core::SessionName
+struct libtmux_core::SessionSnapshot
+struct libtmux_core::SnapshotList<S>
 struct libtmux_core::TmuxArg
 struct libtmux_core::TmuxText
 struct libtmux_core::TmuxVersion
+struct libtmux_core::WindowFields<Target>
 struct libtmux_core::WindowId
 struct libtmux_core::WindowLinkSnapshot
+struct libtmux_core::WindowSnapshot
 struct libtmux_core::control::ControlBlock
 struct libtmux_core::control::ControlIdentity
 struct libtmux_core::control::ControlLimits
 struct libtmux_core::control::ControlProbe
 struct libtmux_core::control::ControlReply
 struct libtmux_core::control::FrameHeader
+struct libtmux_core::formats::FormatDescriptor
+struct libtmux_core::formats::row::ParsedSlot<'row>
 struct libtmux_core::plan::CapturePane
 struct libtmux_core::plan::Effects
 struct libtmux_core::plan::KillPane
@@ -981,9 +1336,33 @@ struct libtmux_core::query::ManyRelation<From, To>
 struct libtmux_core::query::MultipleItemsError
 struct libtmux_core::query::OneRelation<From, To>
 struct libtmux_core::query::TextField<T, V = libtmux_core::TmuxText>
+struct libtmux_core::supervision::CleanupErrors
+struct_field libtmux_core::Availability::Available::0: T
+struct_field libtmux_core::ClientFields::client_activity: libtmux_core::query::IntegerField<Target, i64>
+struct_field libtmux_core::ClientFields::client_cell_height: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::ClientFields::client_cell_width: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::ClientFields::client_control_mode: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::ClientFields::client_created: libtmux_core::query::IntegerField<Target, i64>
+struct_field libtmux_core::ClientFields::client_discarded: libtmux_core::query::IntegerField<Target, u64>
+struct_field libtmux_core::ClientFields::client_flags: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_height: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::ClientFields::client_key_table: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_name: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_pid: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::ClientFields::client_prefix: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::ClientFields::client_readonly: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::ClientFields::client_termfeatures: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_termname: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_termtype: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_tty: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_uid: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::ClientFields::client_user: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::ClientFields::client_utf8: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::ClientFields::client_width: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::ClientFields::client_written: libtmux_core::query::IntegerField<Target, u64>
 struct_field libtmux_core::Error::AdmissionFailed::source: Box<libtmux_core::Error>
 struct_field libtmux_core::Error::Busy::limit: usize
-struct_field libtmux_core::Error::Cleanup::errors: crate::supervision::CleanupErrors
+struct_field libtmux_core::Error::Cleanup::errors: libtmux_core::supervision::CleanupErrors
 struct_field libtmux_core::Error::Cleanup::primary: Box<libtmux_core::Error>
 struct_field libtmux_core::Error::CleanupPending::0: Box<libtmux_core::Error>
 struct_field libtmux_core::Error::Command::diagnostic_len: usize
@@ -1004,6 +1383,7 @@ struct_field libtmux_core::Error::OutputLimit::limit: usize
 struct_field libtmux_core::Error::OutputLimit::stream: &'static str
 struct_field libtmux_core::Error::PaneNotFound::0: libtmux_core::PaneId
 struct_field libtmux_core::Error::Shutdown::0: String
+struct_field libtmux_core::Error::SnapshotRow::0: libtmux_core::FormatCodecError
 struct_field libtmux_core::Error::Spawn::0: std::io::Error
 struct_field libtmux_core::Error::UncertainStart::0: std::io::Error
 struct_field libtmux_core::Error::UnconfirmedCreation::late: bool
@@ -1012,7 +1392,86 @@ struct_field libtmux_core::Error::Version::0: Box<libtmux_core::VersionError>
 struct_field libtmux_core::Error::VersionProbeFailed::diagnostic_len: usize
 struct_field libtmux_core::Error::VersionProbeFailed::late: bool
 struct_field libtmux_core::Error::VersionProbeFailed::status: Option<i32>
+struct_field libtmux_core::PaneFields::alternate_saved_x: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::alternate_saved_y: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::bracket_paste_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::cursor_character: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::cursor_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::cursor_x: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::cursor_y: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::history_bytes: libtmux_core::query::IntegerField<Target, u64>
+struct_field libtmux_core::PaneFields::history_limit: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::history_size: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::insert_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::keypad_cursor_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::keypad_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::mouse_all_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::mouse_any_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::mouse_button_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::mouse_sgr_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::mouse_standard_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::origin_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_active: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_at_bottom: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_at_left: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_at_right: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_at_top: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_bg: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_bottom: libtmux_core::query::IntegerField<Target, i32>
+struct_field libtmux_core::PaneFields::pane_current_command: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_current_path: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_dead: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_dead_signal: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_dead_status: libtmux_core::query::IntegerField<Target, u8>
+struct_field libtmux_core::PaneFields::pane_dead_time: libtmux_core::query::IntegerField<Target, i64>
+struct_field libtmux_core::PaneFields::pane_fg: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_flags: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_floating_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_height: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::pane_id: libtmux_core::query::TextField<Target, libtmux_core::PaneId>
+struct_field libtmux_core::PaneFields::pane_in_mode: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::pane_index: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::pane_input_off: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_last: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_left: libtmux_core::query::IntegerField<Target, i32>
+struct_field libtmux_core::PaneFields::pane_marked: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_mode: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_path: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_pb_progress: libtmux_core::query::IntegerField<Target, u8>
+struct_field libtmux_core::PaneFields::pane_pb_state: libtmux_core::query::EnumField<Target, libtmux_core::PaneProgressState>
+struct_field libtmux_core::PaneFields::pane_pid: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::pane_pipe: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_pipe_pid: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::pane_right: libtmux_core::query::IntegerField<Target, i32>
+struct_field libtmux_core::PaneFields::pane_search_string: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_start_command: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_start_path: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_synchronized: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_tabs: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_title: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_top: libtmux_core::query::IntegerField<Target, i32>
+struct_field libtmux_core::PaneFields::pane_tty: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::PaneFields::pane_unseen_changes: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::pane_width: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::pane_x: libtmux_core::query::IntegerField<Target, i32>
+struct_field libtmux_core::PaneFields::pane_y: libtmux_core::query::IntegerField<Target, i32>
+struct_field libtmux_core::PaneFields::pane_z: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::pane_zoomed_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::scroll_position: libtmux_core::query::IntegerField<Target, i32>
+struct_field libtmux_core::PaneFields::scroll_region_lower: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::scroll_region_upper: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::PaneFields::synchronized_output_flag: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::PaneFields::wrap_flag: libtmux_core::query::BoolField<Target>
 struct_field libtmux_core::PaneTarget::Id::0: libtmux_core::PaneId
+struct_field libtmux_core::SessionFields::session_activity: libtmux_core::query::IntegerField<Target, i64>
+struct_field libtmux_core::SessionFields::session_attached: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::SessionFields::session_created: libtmux_core::query::IntegerField<Target, i64>
+struct_field libtmux_core::SessionFields::session_id: libtmux_core::query::TextField<Target, libtmux_core::SessionId>
+struct_field libtmux_core::SessionFields::session_last_attached: libtmux_core::query::IntegerField<Target, i64>
+struct_field libtmux_core::SessionFields::session_many_attached: libtmux_core::query::BoolField<Target>
+struct_field libtmux_core::SessionFields::session_name: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::SessionFields::session_path: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::SessionFields::session_windows: libtmux_core::query::IntegerField<Target, u32>
 struct_field libtmux_core::SessionNameError::Separator::separator: char
 struct_field libtmux_core::SessionTarget::Id::0: libtmux_core::SessionId
 struct_field libtmux_core::VersionError::InvalidVersionOutput::output_len: usize
@@ -1022,6 +1481,17 @@ struct_field libtmux_core::VersionError::UnsupportedCapability::found: libtmux_c
 struct_field libtmux_core::VersionError::UnsupportedCapability::needs: libtmux_core::ReleaseVersion
 struct_field libtmux_core::VersionError::UnsupportedTmuxVersion::found: libtmux_core::TmuxVersion
 struct_field libtmux_core::VersionError::UnsupportedTmuxVersion::minimum: libtmux_core::ReleaseVersion
+struct_field libtmux_core::WindowFields::window_activity: libtmux_core::query::IntegerField<Target, i64>
+struct_field libtmux_core::WindowFields::window_cell_height: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::WindowFields::window_cell_width: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::WindowFields::window_height: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::WindowFields::window_id: libtmux_core::query::TextField<Target, libtmux_core::WindowId>
+struct_field libtmux_core::WindowFields::window_layout: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::WindowFields::window_name: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::WindowFields::window_panes: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::WindowFields::window_visible_layout: libtmux_core::query::TextField<Target>
+struct_field libtmux_core::WindowFields::window_width: libtmux_core::query::IntegerField<Target, u32>
+struct_field libtmux_core::WindowFields::window_zoomed_flag: libtmux_core::query::BoolField<Target>
 struct_field libtmux_core::WindowTarget::Id::0: libtmux_core::WindowId
 struct_field libtmux_core::control::ControlFault::BlockLimit::limit: usize
 struct_field libtmux_core::control::ControlFault::Busy::limit: usize
@@ -1112,6 +1582,9 @@ struct_field libtmux_core::plan::SplitTarget::Pane::0: libtmux_core::plan::PaneT
 struct_field libtmux_core::plan::SplitTarget::Window::0: libtmux_core::plan::WindowTarget
 struct_field libtmux_core::plan::WindowTarget::Id::0: libtmux_core::WindowId
 struct_field libtmux_core::plan::WindowTarget::Slot::0: libtmux_core::plan::Slot<libtmux_core::plan::WindowSlot>
+struct_field libtmux_core::supervision::CleanupErrors::kill: Option<std::io::Error>
+struct_field libtmux_core::supervision::CleanupErrors::reap: Option<std::io::Error>
+trait libtmux_core::Snapshot: libtmux_core::snapshot::list::sealed::Sealed + Sized
 trait libtmux_core::plan::Chainable: libtmux_core::plan::Operation
 trait libtmux_core::plan::FromStep
 trait libtmux_core::plan::Operation: Into<libtmux_core::plan::Op>
@@ -1120,12 +1593,25 @@ trait libtmux_core::query::FilterSchema: libtmux_core::query::Filterable
 trait libtmux_core::query::Filterable: Sized
 trait libtmux_core::query::Matcher<T>
 trait libtmux_core::query::QueryIteratorExt: Iterator + Sized
+trait libtmux_core::query::ReadField<Target>: Copy + libtmux_core::snapshot::sealed::Sealed
+trait libtmux_core::snapshot::list::sealed::Sealed
+trait libtmux_core::snapshot::sealed::Sealed
 type_alias libtmux_core::PaneKey = libtmux_core::ObjectKey<libtmux_core::PaneId>
 type_alias libtmux_core::SessionKey = libtmux_core::ObjectKey<libtmux_core::SessionId>
 type_alias libtmux_core::WindowKey = libtmux_core::ObjectKey<libtmux_core::WindowId>
+variant libtmux_core::Availability::Absent
+variant libtmux_core::Availability::Available
+variant libtmux_core::Availability::Unproven
+variant libtmux_core::Availability::Unsupported
 variant libtmux_core::CommandKind::CapturePane
+variant libtmux_core::CommandKind::KillSession
+variant libtmux_core::CommandKind::ListClients
 variant libtmux_core::CommandKind::ListPanes
+variant libtmux_core::CommandKind::ListSessions
+variant libtmux_core::CommandKind::ListWindows
 variant libtmux_core::CommandKind::NewSession
+variant libtmux_core::CommandKind::ServerGeneration
+variant libtmux_core::CommandKind::UnlinkWindow
 variant libtmux_core::Effect::Created
 variant libtmux_core::Effect::NotSubmitted
 variant libtmux_core::Effect::Observation
@@ -1152,6 +1638,7 @@ variant libtmux_core::Error::ObservationFailed
 variant libtmux_core::Error::OutputLimit
 variant libtmux_core::Error::PaneNotFound
 variant libtmux_core::Error::Shutdown
+variant libtmux_core::Error::SnapshotRow
 variant libtmux_core::Error::Spawn
 variant libtmux_core::Error::StalePane
 variant libtmux_core::Error::UncertainStart
@@ -1167,6 +1654,11 @@ variant libtmux_core::OptionScope::Pane
 variant libtmux_core::OptionScope::Server
 variant libtmux_core::OptionScope::Session
 variant libtmux_core::OptionScope::Window
+variant libtmux_core::PaneProgressState::Error
+variant libtmux_core::PaneProgressState::Hidden
+variant libtmux_core::PaneProgressState::Indeterminate
+variant libtmux_core::PaneProgressState::Normal
+variant libtmux_core::PaneProgressState::Paused
 variant libtmux_core::PaneTarget::Id
 variant libtmux_core::SessionNameError::Empty
 variant libtmux_core::SessionNameError::Separator
@@ -1180,6 +1672,9 @@ variant libtmux_core::VersionError::UnrecognizedTmuxVersion
 variant libtmux_core::VersionError::UnsupportedCapability
 variant libtmux_core::VersionError::UnsupportedTmuxVersion
 variant libtmux_core::WindowTarget::Id
+variant libtmux_core::control::ControlCommandRefusal::BlockingCommand
+variant libtmux_core::control::ControlCommandRefusal::InvalidSubscriptionName
+variant libtmux_core::control::ControlCommandRefusal::UnrepresentableCommand
 variant libtmux_core::control::ControlFault::AttachRejected
 variant libtmux_core::control::ControlFault::BlockLimit
 variant libtmux_core::control::ControlFault::Busy
@@ -1225,6 +1720,75 @@ variant libtmux_core::control::Event::WindowAdded
 variant libtmux_core::control::Event::WindowClosed
 variant libtmux_core::control::Event::WindowPaneChanged
 variant libtmux_core::control::Event::WindowRenamed
+variant libtmux_core::formats::DecoderKind::Ascii
+variant libtmux_core::formats::DecoderKind::Bool
+variant libtmux_core::formats::DecoderKind::I32
+variant libtmux_core::formats::DecoderKind::PaneId
+variant libtmux_core::formats::DecoderKind::PaneProgress
+variant libtmux_core::formats::DecoderKind::PaneProgressState
+variant libtmux_core::formats::DecoderKind::SessionId
+variant libtmux_core::formats::DecoderKind::Text
+variant libtmux_core::formats::DecoderKind::Timestamp
+variant libtmux_core::formats::DecoderKind::U32
+variant libtmux_core::formats::DecoderKind::U64
+variant libtmux_core::formats::DecoderKind::U8
+variant libtmux_core::formats::DecoderKind::WindowId
+variant libtmux_core::formats::EmptyPolicy::Absent
+variant libtmux_core::formats::EmptyPolicy::Available
+variant libtmux_core::formats::EmptyPolicy::Required
+variant libtmux_core::formats::InfoPlacement::CatalogOnly
+variant libtmux_core::formats::InfoPlacement::ClientInfo
+variant libtmux_core::formats::InfoPlacement::PaneInfo
+variant libtmux_core::formats::InfoPlacement::SessionInfo
+variant libtmux_core::formats::InfoPlacement::WindowInfo
+variant libtmux_core::formats::ListProfile::Clients
+variant libtmux_core::formats::ListProfile::Panes
+variant libtmux_core::formats::ListProfile::Sessions
+variant libtmux_core::formats::ListProfile::Windows
+variant libtmux_core::formats::RequiredContext::Buffer
+variant libtmux_core::formats::RequiredContext::Client
+variant libtmux_core::formats::RequiredContext::Command
+variant libtmux_core::formats::RequiredContext::Config
+variant libtmux_core::formats::RequiredContext::CopyMode
+variant libtmux_core::formats::RequiredContext::FormatType
+variant libtmux_core::formats::RequiredContext::ListRow
+variant libtmux_core::formats::RequiredContext::None
+variant libtmux_core::formats::RequiredContext::Pane
+variant libtmux_core::formats::RequiredContext::Session
+variant libtmux_core::formats::RequiredContext::Window
+variant libtmux_core::formats::RequiredContext::WindowLink
+variant libtmux_core::formats::SemanticOwner::Buffer
+variant libtmux_core::formats::SemanticOwner::Client
+variant libtmux_core::formats::SemanticOwner::ClientAttachment
+variant libtmux_core::formats::SemanticOwner::ClientWindowView
+variant libtmux_core::formats::SemanticOwner::Command
+variant libtmux_core::formats::SemanticOwner::Config
+variant libtmux_core::formats::SemanticOwner::CopyMode
+variant libtmux_core::formats::SemanticOwner::ListRow
+variant libtmux_core::formats::SemanticOwner::Mode
+variant libtmux_core::formats::SemanticOwner::Pane
+variant libtmux_core::formats::SemanticOwner::Server
+variant libtmux_core::formats::SemanticOwner::Session
+variant libtmux_core::formats::SemanticOwner::Window
+variant libtmux_core::formats::SemanticOwner::WindowLink
+variant libtmux_core::formats::row::FormatCodecErrorKind::DanglingEscape
+variant libtmux_core::formats::row::FormatCodecErrorKind::DuplicateDescriptor
+variant libtmux_core::formats::row::FormatCodecErrorKind::EmbeddedNul
+variant libtmux_core::formats::row::FormatCodecErrorKind::EmptyPlan
+variant libtmux_core::formats::row::FormatCodecErrorKind::InvalidEscape
+variant libtmux_core::formats::row::FormatCodecErrorKind::InvalidValue
+variant libtmux_core::formats::row::FormatCodecErrorKind::MissingFieldTerminator
+variant libtmux_core::formats::row::FormatCodecErrorKind::MissingRowLf
+variant libtmux_core::formats::row::FormatCodecErrorKind::NonAscii
+variant libtmux_core::formats::row::FormatCodecErrorKind::PlanRowMismatch
+variant libtmux_core::formats::row::FormatCodecErrorKind::RequiredFieldEmpty
+variant libtmux_core::formats::row::FormatCodecErrorKind::ScopeInapplicable
+variant libtmux_core::formats::row::FormatCodecErrorKind::UnexpectedRowTerminator
+variant libtmux_core::formats::row::FormatCodecPhase::Decode
+variant libtmux_core::formats::row::FormatCodecPhase::Escape
+variant libtmux_core::formats::row::FormatCodecPhase::Field
+variant libtmux_core::formats::row::FormatCodecPhase::Plan
+variant libtmux_core::formats::row::FormatCodecPhase::RowTerminator
 variant libtmux_core::plan::Op::CapturePane
 variant libtmux_core::plan::Op::KillPane
 variant libtmux_core::plan::Op::KillWindow
