@@ -68,6 +68,22 @@ def run_supervisor(argv):
         signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
 
+def drain_terminal(master, terminal_text):
+    """Read all bytes already written to the nonblocking PTY master."""
+    while True:
+        try:
+            chunk = os.read(master, 65536)
+        except BlockingIOError:
+            return
+        except OSError as error:
+            if error.errno == errno.EIO:
+                return
+            raise
+        if not chunk:
+            return
+        terminal_text.extend(chunk)
+
+
 def process_state(pid):
     try:
         raw = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
@@ -200,11 +216,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
     try:
         while time.monotonic() < deadline:
             if select.select([master], [], [], 0.005)[0]:
-                try:
-                    terminal_text.extend(os.read(master, 65536))
-                except OSError as error:
-                    if error.errno != errno.EIO:
-                        raise
+                drain_terminal(master, terminal_text)
             if not sent_input and (directory / "input-ready").exists():
                 os.write(master, b"literal terminal input\n")
                 sent_input = True
@@ -292,6 +304,8 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                 sent_signal = True
             if (directory / "supervisor.json").exists():
                 report = json.loads((directory / "supervisor.json").read_text())
+                # The CLI exited between the last PTY read and the report.
+                drain_terminal(master, terminal_text)
                 break
         assert report is not None, {
             "directory": str(directory),
@@ -338,13 +352,9 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
         # (INT/TERM/terminal-INT et al.) still retains "Retained state: ".
         if report["status"] != 0 and not owned_failure:
             lines = terminal_text.decode(errors="replace").splitlines()
-            retained = json.loads(
-                next(
-                    line[len("Retained state: ") :]
-                    for line in lines
-                    if line.startswith("Retained state: ")
-                )
-            )
+            record = next((line for line in lines if line.startswith("Retained state: ")), None)
+            assert record is not None, (action, report, lines, stop_observed, background_observed)
+            retained = json.loads(record.removeprefix("Retained state: "))
             effects = retained["errors"][0]["effects"]
             assert active is not None, "the active pane was never listed"
             assert effects["session_id"] == active.split(":")[1], (effects, active)
