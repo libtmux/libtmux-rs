@@ -887,6 +887,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libtmux-core"
+version = "0.1.2"
+dependencies = [
+ "schemars",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "libtmux-macros"
 version = "0.1.2"
 dependencies = [

@@ -1,0 +1,26 @@
+[package]
+name = "libtmux-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Pure tmux operations and reply decoding"
+documentation = "https://docs.rs/libtmux-core"
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
+keywords = ["tmux", "terminal", "multiplexer"]
+categories = ["api-bindings"]
+
+[features]
+default = []
+serde = ["dep:serde"]
+schema = ["dep:schemars", "serde"]
+
+[dependencies]
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[lints]
+workspace = true
