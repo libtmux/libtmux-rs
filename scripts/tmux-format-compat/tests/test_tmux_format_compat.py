@@ -25,6 +25,7 @@ ENTRY = Path(harness.__file__).resolve()
 LINUX = sys.platform == "linux"
 BINARY = Path("/b/tmux-3.8-install/bin/tmux")
 CURRENT = Path("/b/tmux-3.3a-install/bin/tmux")
+CONTROL_CLIENT = Path("/b/tmux-3.6b-install/bin/tmux")
 NEWER = Path("/b/tmux-3.7b-install/bin/tmux")
 
 
@@ -42,7 +43,7 @@ def test_every_contract_in_the_manifest_is_one_the_harness_runs() -> None:
 
 
 def test_a_refusal_lane_names_the_tmux_it_proves_the_crate_refuses() -> None:
-    steps = harness.refusal_steps("reject-core", BINARY, CURRENT, NEWER)
+    steps = harness.refusal_steps("reject-core", BINARY, CURRENT, NEWER, CONTROL_CLIENT)
     assert len(steps) == 4
     for step in steps:
         assert step.require
@@ -72,7 +73,7 @@ def test_refusal_steps_select_test_targets_the_workspace_ships() -> None:
         for package in json.loads(result.stdout)["packages"]
     }
     for contract in harness.REFUSAL_CONTRACTS:
-        for step in harness.refusal_steps(contract, BINARY, CURRENT, NEWER):
+        for step in harness.refusal_steps(contract, BINARY, CURRENT, NEWER, CONTROL_CLIENT):
             if "--test" in step.argv:
                 package = step.argv[step.argv.index("--package") + 1]
                 target = step.argv[step.argv.index("--test") + 1]
@@ -80,14 +81,14 @@ def test_refusal_steps_select_test_targets_the_workspace_ships() -> None:
 
 
 def test_the_pre_probe_lane_runs_behind_the_minimum_client() -> None:
-    (step,) = harness.refusal_steps("reject-pre-probe", BINARY, CURRENT, NEWER)
+    (step,) = harness.refusal_steps("reject-pre-probe", BINARY, CURRENT, NEWER, CONTROL_CLIENT)
     assert step.env["LIBTMUX_TEST_PRE_PROBE_TMUX"] == str(BINARY)
     assert step.env["LIBTMUX_TEST_TMUX"] == str(CURRENT)
     assert "real_tmux_compat_pre_probe_" in step.argv
 
 
 def test_the_boundary_lane_requires_its_variable() -> None:
-    (step,) = harness.refusal_steps("reject-boundary", BINARY, CURRENT, NEWER)
+    (step,) = harness.refusal_steps("reject-boundary", BINARY, CURRENT, NEWER, CONTROL_CLIENT)
     assert step.env == {
         "LIBTMUX_TEST_BOUNDARY_TMUX": str(BINARY),
         "LIBTMUX_REQUIRE_NATIVE": "LIBTMUX_TEST_BOUNDARY_TMUX",
@@ -95,16 +96,20 @@ def test_the_boundary_lane_requires_its_variable() -> None:
 
 
 def test_the_witness_lane_pins_the_broken_release_between_the_two_it_needs() -> None:
-    (step,) = harness.refusal_steps("feature-boundary", BINARY, CURRENT, NEWER)
+    step, control = harness.refusal_steps(
+        "feature-boundary", BINARY, CURRENT, NEWER, CONTROL_CLIENT
+    )
     assert step.env["LIBTMUX_TEST_BROKEN_BREAK_TMUX"] == str(BINARY)
     assert step.env["LIBTMUX_TEST_MINIMUM_TMUX"] == str(CURRENT)
     assert step.env["LIBTMUX_TEST_NEWER_TMUX"] == str(NEWER)
     assert step.env["LIBTMUX_REQUIRE_NATIVE"].count(",") == 2
+    assert control.env["LIBTMUX_TEST_CONTROL_CLIENT"] == str(CONTROL_CLIENT)
+    assert control.env["LIBTMUX_TEST_TMUX"] == str(BINARY)
 
 
 def test_a_workspace_contract_has_no_refusal_steps() -> None:
     with pytest.raises(ValueError, match="not a refusal contract"):
-        harness.refusal_steps("workspace", BINARY, CURRENT, NEWER)
+        harness.refusal_steps("workspace", BINARY, CURRENT, NEWER, CONTROL_CLIENT)
 
 
 def test_only_the_minimum_and_the_safe_buffer_releases_provide_a_variable() -> None:

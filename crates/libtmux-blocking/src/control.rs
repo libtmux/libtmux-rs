@@ -121,12 +121,6 @@ impl ControlMode {
         client
             .ensure_supported()
             .map_err(libtmux_core::Error::from)?;
-        client
-            .require(
-                "managed control acquisition",
-                libtmux_core::since::CONTROL_ACQUISITION,
-            )
-            .map_err(libtmux_core::Error::from)?;
         let identity = probe(&pinned, session.clone(), &options)?;
         if identity != initial {
             return Err(ControlError::protocol(

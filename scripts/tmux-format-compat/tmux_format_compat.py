@@ -84,7 +84,7 @@ def cargo_test(package: str, *arguments: str, features: bool = True) -> tuple[st
 
 
 def refusal_steps(
-    contract: str, tmux_binary: Path, current_binary: Path, newer_binary: Path
+    contract: str, tmux_binary: Path, current_binary: Path, newer_binary: Path, control_client: Path
 ) -> list[Step]:
     """The steps of a lane that proves a refusal rather than running the workspace.
 
@@ -183,7 +183,19 @@ def refusal_steps(
                     "LIBTMUX_TEST_MINIMUM_TMUX": str(current_binary),
                     "LIBTMUX_TEST_NEWER_TMUX": str(newer_binary),
                 },
-            )
+            ),
+            Step(
+                cargo_test(
+                    "libtmux-blocking",
+                    "--lib",
+                    "managed_control_accepts_a_compatible_client_older_than_the_daemon_floor",
+                ),
+                {
+                    "LIBTMUX_TEST_TMUX": binary,
+                    "LIBTMUX_TEST_CONTROL_CLIENT": str(control_client),
+                    "LIBTMUX_REQUIRE_NATIVE": "LIBTMUX_TEST_CONTROL_CLIENT",
+                },
+            ),
         ]
     raise ValueError(f"{contract} is not a refusal contract")
 
@@ -356,7 +368,7 @@ class Harness:
         ):
             raise CompatFailure(f"tmux {tag} runs behind the 3.3a client, which is not built")
         if contract in REFUSAL_CONTRACTS:
-            for step in refusal_steps(contract, binary, current, newer):
+            for step in refusal_steps(contract, binary, current, newer, self.binary("3.6b")):
                 self.run_step(step)
             return
 

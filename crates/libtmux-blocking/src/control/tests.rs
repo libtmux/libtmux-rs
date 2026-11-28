@@ -129,6 +129,40 @@ fn cancelled_unsubmitted_request_cannot_reach_the_connection() {
 }
 
 #[test]
+fn managed_control_accepts_a_compatible_client_older_than_the_daemon_floor() {
+    let Some(client) = std::env::var_os("LIBTMUX_TEST_CONTROL_CLIENT") else {
+        assert!(
+            !std::env::var("LIBTMUX_REQUIRE_NATIVE")
+                .unwrap_or_default()
+                .split(',')
+                .any(|name| name == "LIBTMUX_TEST_CONTROL_CLIENT")
+        );
+        return;
+    };
+    let fixture = Fixture::new();
+    let binary = std::process::Command::new(&client)
+        .arg("-V")
+        .output()
+        .unwrap();
+    let version = libtmux_core::TmuxVersion::parse_output(&binary.stdout).unwrap();
+    assert!(
+        !version.managed_control_eligible(true),
+        "the test needs an older client"
+    );
+    let transport = fixture.server.clone().with_executable(client);
+    let mode = ControlMode::attach(&transport, "$0".parse().unwrap()).unwrap();
+    let reply = mode
+        .send(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("#{session_id}"),
+        )
+        .unwrap();
+    assert_eq!(reply.blocks()[0].output(), b"$0\n");
+    mode.shutdown().unwrap();
+}
+
+#[test]
 fn managed_control_refuses_the_ordinary_supported_floor() {
     let fixture = Fixture::new();
     let output = fixture.checked(["display-message", "-p", "#{version}"]);

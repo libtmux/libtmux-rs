@@ -54,7 +54,7 @@ def test_a_lane_carries_its_commit_version_contract_and_prerequisites() -> None:
         "81f88f8517c9fc5371b56cf117530c6b477c96ac",
         "3.7",
         "feature-boundary",
-        ("3.3a", "3.7b"),
+        ("3.3a", "3.6b", "3.7b"),
     )
 
 
@@ -132,7 +132,13 @@ def test_a_lane_is_built_then_tested(lanes) -> None:
 
 
 def test_a_lane_that_needs_other_builds_gets_them_first_and_untested(lanes) -> None:
-    assert run_lanes(lanes, "3.7") == ["build 3.3a", "build 3.7b", "build 3.7", "test 3.7"]
+    assert run_lanes(lanes, "3.7") == [
+        "build 3.3a",
+        "build 3.6b",
+        "build 3.7b",
+        "build 3.7",
+        "test 3.7",
+    ]
     assert run_lanes(lanes, "3.0a") == ["build 3.3a", "build 3.0a", "test 3.0a"]
 
 

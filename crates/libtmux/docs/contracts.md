@@ -75,7 +75,7 @@ Direct literal argv commands and flat batches are checked before dispatch.
 chain. Alias bodies are not read, and shell programs keep native semantics.
 
 On the pinned Linux builds, 3.3a, 3.4 and 3.5 clients cannot register a control
-connection to an exact 3.7 daemon; 3.7d can. Those older clients exit without
+connection to an exact 3.7 daemon. Native 3.6 and 3.7d clients can. The older clients exit without
 changing the daemon, including on a plain native attachment. Use a compatible
 client for control; this does not raise the 3.3a subprocess baseline.
 
