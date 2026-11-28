@@ -45,6 +45,12 @@ Notable changes to `libtmux-tokio`.
 
 ### Fixed
 
+- All subprocess calls acquire the child before registering its pipes with
+  Tokio. When registration fails after spawn, the client reaps the child
+  and reports the operation’s uncertain effect. A runtime shutting down
+  leaves reaping with the process supervisor.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
+
 - Pane streams drain queued bytes before reporting connection loss. An idle
   control connection that closes without `%exit` yields a terminal error.
   An interrupted control task reports `Error::OperationCleanupPending` when
