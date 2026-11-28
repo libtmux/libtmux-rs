@@ -774,6 +774,7 @@ impl Op {
     /// leave its own pane active cannot be folded with what decorates it: the
     /// mark would land on whichever pane was already there.
     #[doc(hidden)]
+    #[must_use]
     pub const fn focused_pane(&self) -> Option<Part> {
         match self {
             Self::SplitWindow(op) if op.focuses() => Some(Part::Created),
@@ -847,6 +848,7 @@ impl Op {
 
     /// Where a step tells tmux to keep an option, for the steps that write one.
     #[doc(hidden)]
+    #[must_use]
     pub fn declared_option_scope(&self) -> Option<(&std::ffi::OsStr, crate::OptionScope)> {
         match self {
             Self::SetOption(op) => op.declared_scope(),

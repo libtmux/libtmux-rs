@@ -310,6 +310,7 @@ fn split_at_boundaries(step: Step, boundaries: &BTreeSet<usize>) -> Vec<Step> {
 impl Step {
     /// One invocation carrying one operation.
     #[doc(hidden)]
+    #[must_use]
     pub fn single(index: usize) -> Self {
         Self {
             indices: vec![index],
