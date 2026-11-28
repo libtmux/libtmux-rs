@@ -845,19 +845,32 @@ async fn real_tmux_compat_optional_control_uses_daemon_defects_with_a_newer_clie
             )),
         "the configured client reports the fixed break-pane release"
     );
-    let control = libtmux_tokio::control::ControlMode::attach(&client, session.id())
+    let (sender, events) = libtmux_tokio::control::ControlMode::attach(&client, session.id())
         .await
-        .expect("3.7 daemon qualifies with newer client");
-    let captured = control
+        .expect("3.7 daemon qualifies with newer client")
+        .split();
+    let capture = Command::new("capture-pane")
+        .arg("-p")
+        .arg("-F")
+        .arg("-t")
+        .arg(pane.id().to_string());
+    let raw_capture = sender.send(capture.clone()).await;
+    let routed = client
+        .over_control_mode(&sender)
+        .await
+        .expect("routed client");
+    let captured = routed.cmd(capture).await;
+    let buffered = sender
         .send(
             Command::new("capture-pane")
-                .arg("-p")
                 .arg("-F")
+                .arg("-b")
+                .arg("mixed-control-flags")
                 .arg("-t")
                 .arg(pane.id().to_string()),
         )
         .await;
-    let refused = control
+    let refused = sender
         .send(
             Command::new("break-pane")
                 .arg("-d")
@@ -868,10 +881,22 @@ async fn real_tmux_compat_optional_control_uses_daemon_defects_with_a_newer_clie
         )
         .await;
     let windows = session.windows().await.expect("window count").len();
-    control.shutdown().await.expect("control closes");
+    events.shutdown().await.expect("control closes");
+    routed.shutdown().await.expect("routed client closes");
     client.shutdown().await.expect("client closes");
     guard.shutdown().await.expect("fixture closes");
-    assert!(captured.expect("daemon capture flag qualifies").succeeded());
+    assert!(
+        matches!(
+            raw_capture,
+            Err(Error::ControlMode {
+                kind: libtmux_tokio::ControlModeErrorKind::UnrepresentableCommand,
+                ..
+            })
+        ),
+        "arbitrary output uses an ordinary client: {raw_capture:?}"
+    );
+    assert!(captured.expect("ordinary capture flag qualifies").success());
+    assert!(buffered.expect("buffer capture flag qualifies").succeeded());
     assert!(
         matches!(refused, Err(Error::CapabilityDefective { .. })),
         "actual3.7 defect is refused"

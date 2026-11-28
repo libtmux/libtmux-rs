@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Output};
 use std::time::Duration;
 
+use libtmux_core::Effect;
 use libtmux_tokio::test::TestServer;
 use libtmux_tokio::{Command, CommandChain, Error, Server};
 
@@ -74,15 +75,38 @@ fn wait_until_gone(binary: &Path, socket: &Path) {
 }
 
 fn assert_unsupported(error: &Error, version: &str) {
+    let source = match error {
+        Error::OperationFailure {
+            effect,
+            receipt,
+            source,
+            ..
+        } => {
+            assert_eq!(*effect, Effect::NotSubmitted, "{error:?}");
+            assert!(
+                receipt.is_none(),
+                "a refused operation created nothing: {error:?}"
+            );
+            source.as_ref()
+        }
+        error => error,
+    };
     assert!(
-        matches!(error, Error::UnsupportedTmuxVersion { .. }),
+        matches!(source, Error::UnsupportedTmuxVersion { .. }),
         "{error:?}"
     );
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::UnsupportedVersion);
+    assert!(!error.is_transient(), "{error:?}");
     assert_eq!(error.found_version().expect("found version").raw(), version);
     assert_eq!(
         error.minimum_version().expect("minimum").to_string(),
         "3.3a"
     );
+}
+
+fn assert_not_submitted_unsupported(error: &Error, version: &str) {
+    assert_eq!(error.operation_effect(), Some(Effect::NotSubmitted));
+    assert_unsupported(error, version);
 }
 
 #[tokio::test]
@@ -114,7 +138,7 @@ async fn real_tmux_compat_old_daemon_refuses_all_dispatch_paths() {
         .new_session("refused")
         .await
         .expect_err("typed creation refuses");
-    assert_unsupported(&typed, "3.2a");
+    assert_not_submitted_unsupported(&typed, "3.2a");
     let chain = server
         .chain(
             CommandChain::new(
@@ -203,7 +227,7 @@ async fn real_tmux_compat_cold_old_executable_refuses_before_starting() {
         .new_session("must-not-start")
         .await
         .expect_err("cold old executable refuses");
-    assert_unsupported(&error, "3.2a");
+    assert_not_submitted_unsupported(&error, "3.2a");
     assert!(!socket.exists(), "no daemon was started");
     server.kill().await.expect("absent cleanup has no effect");
     assert!(!socket.exists());
@@ -518,10 +542,7 @@ async fn a_daemon_older_than_the_probe_is_refused_as_unsupported() {
         .cmd(Command::new("new-session").arg("-d"))
         .await
         .expect_err("a pre-3.2 daemon is refused");
-    assert!(
-        matches!(error, Error::UnsupportedTmuxVersion { .. }),
-        "{error:?}"
-    );
+    assert_unsupported(&error, "older than 3.2");
     assert_eq!(error.kind(), libtmux_tokio::ErrorKind::UnsupportedVersion);
     let message = error.to_string();
     assert!(
@@ -570,10 +591,7 @@ async fn a_pre_probe_daemon_holding_stdout_is_refused_promptly() {
     if let Ok(pid) = std::fs::read_to_string(&holder) {
         let _ = ProcessCommand::new("kill").arg(pid.trim()).status();
     }
-    assert!(
-        matches!(error, Error::UnsupportedTmuxVersion { .. }),
-        "{error:?}"
-    );
+    assert_unsupported(&error, "older than 3.2");
     assert!(
         elapsed < Duration::from_secs(5),
         "the refusal waited {elapsed:?} for a stdout the daemon kept open"
@@ -613,14 +631,11 @@ async fn real_tmux_compat_pre_probe_daemon_behind_a_current_client_is_refused() 
     let elapsed = started.elapsed();
     let listing = native(&old, &socket, &[OsStr::new("list-sessions")]);
     native(&old, &socket, &[OsStr::new("kill-server")]);
-    assert!(
-        matches!(error, Error::UnsupportedTmuxVersion { .. }),
-        "{error:?}"
-    );
+    assert_not_submitted_unsupported(&error, "older than 3.2");
     assert!(
         error
             .to_string()
-            .starts_with("tmux older than 3.2 is not supported"),
+            .contains("tmux older than 3.2 is not supported"),
         "{error}"
     );
     assert!(
@@ -660,14 +675,11 @@ async fn real_tmux_compat_pre_probe_daemon_is_refused_as_unsupported() {
         .new_session("refused")
         .await
         .expect_err("a pre-3.2 daemon is refused");
-    assert!(
-        matches!(error, Error::UnsupportedTmuxVersion { .. }),
-        "{error:?}"
-    );
+    assert_not_submitted_unsupported(&error, "older than 3.2");
     assert!(
         error
             .to_string()
-            .starts_with("tmux older than 3.2 is not supported"),
+            .contains("tmux older than 3.2 is not supported"),
         "{error}"
     );
     let listing = native(&old, &socket, &[OsStr::new("list-sessions")]);
@@ -1298,12 +1310,9 @@ async fn strict_version_check_does_not_reuse_creating_executable_permission() {
         "cached permission started the swapped old executable"
     );
     let first = first.expect_err("a stale live observation cannot start the missing daemon");
-    assert_eq!(
-        first.operation_effect(),
-        Some(libtmux_core::Effect::Unknown)
-    );
+    assert_eq!(first.operation_effect(), Some(Effect::Unknown));
     assert!(!first.is_transient());
-    assert_unsupported(
+    assert_not_submitted_unsupported(
         &second.expect_err("next explicit call freshly checks old executable"),
         "3.2a",
     );
@@ -1339,10 +1348,7 @@ async fn strict_version_check_supports_explicit_restarts_on_a_warmed_handle() {
     guard.shutdown().await.expect("fixture shuts down");
     assert!(owned_restart.is_ok(), "{owned_restart:?}");
     let disappeared = disappeared.expect_err("a stale live observation cannot restart the daemon");
-    assert_eq!(
-        disappeared.operation_effect(),
-        Some(libtmux_core::Effect::Unknown)
-    );
+    assert_eq!(disappeared.operation_effect(), Some(Effect::Unknown));
     assert!(!disappeared.is_transient());
     assert!(explicit_restart.is_ok(), "{explicit_restart:?}");
 }
@@ -1390,7 +1396,7 @@ async fn assert_fresh_start_after_cold_metadata(swap: bool) {
     server.shutdown().await.expect("client shuts down");
     if swap {
         assert!(!started, "cold metadata granted stale creating permission");
-        assert_unsupported(
+        assert_not_submitted_unsupported(
             &result.expect_err("creating executable is freshly checked"),
             "3.2a",
         );
