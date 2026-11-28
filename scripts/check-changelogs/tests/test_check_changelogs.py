@@ -15,7 +15,15 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 
-CRATES = ("libtmux", "libtmux-macros", "tmux-mcp", "tmux-workspace")
+CRATES = (
+    "libtmux",
+    "libtmux-blocking",
+    "libtmux-core",
+    "libtmux-macros",
+    "libtmux-tokio",
+    "tmux-mcp",
+    "tmux-workspace",
+)
 
 
 @pytest.fixture
@@ -44,7 +52,7 @@ def problems(root: pathlib.Path) -> list[str]:
 
 
 def test_the_repository_keeps_a_changelog_in_every_crate(root: pathlib.Path) -> None:
-    """The crates in this checkout pass, and all four are found."""
+    """Every publishable crate is covered by the fixtures and passes the check."""
     assert sorted(check_changelogs.published_crates(ROOT)) == sorted(CRATES)
     assert check_changelogs.check(ROOT) == []
     assert problems(root) == []
