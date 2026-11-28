@@ -6,12 +6,19 @@ Notable changes to `libtmux-tokio`.
 
 ### Added
 
+- `Error::after_cleanup` combines an operation and its completed cleanup,
+  preserving both typed errors when both fail.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 - `Error::PlanInterrupted` retains the results of earlier plan operations when a later operation fails. A caller can recover a created session, window or pane from those results. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 - Run tmux operations with Tokio. `Server::new_session` returns the shared creation receipt. Use `Server::inspect_session` to read the session and `Server::capture` to capture the pane identified by either driver. ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 ### Changed
 
+- **Behaviour change.** Creation replies without verified identities remain
+  uncertain rather than reporting an acknowledged partial effect. Raw
+  `Error::SessionExists` describes a diagnostic, not proof that nothing ran.
+  ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 - **Behaviour change.** Tokio channel waits and queued locks have a separate
   finite budget, `DispatchLimits::max_parked`, shared across clones and
   control-derived handles. It defaults to 16 and includes retained channel
