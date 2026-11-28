@@ -825,6 +825,32 @@ async fn typed_pipe_registration_failure_reaps_the_owned_child_and_releases_capa
 }
 
 #[tokio::test]
+async fn ordinary_dispatch_owns_the_child_before_pipe_registration() {
+    let spawned_pid = Arc::new(AtomicU32::new(0));
+    let executor = executor("streams", TEST_TIMEOUT).with_test_hooks(TestHooks {
+        spawned_pid: Some(Arc::clone(&spawned_pid)),
+        pipe_registration_failure: Some(PipeRegistrationFailure::Stderr),
+        ..TestHooks::default()
+    });
+
+    let error = executor
+        .execute(request(44, []))
+        .await
+        .expect_err("the stderr registration failed after spawn");
+    assert_eq!(
+        error.operation_effect(),
+        Some(libtmux_core::Effect::Unknown)
+    );
+    assert!(!error.is_transient());
+    assert!(matches!(error, Error::OperationFailure { source, .. }
+        if matches!(*source, Error::ReadOutput { .. })));
+    let child_pid = spawned_pid.load(Ordering::SeqCst);
+    assert_ne!(child_pid, 0);
+    assert_process_reaped(child_pid);
+    assert_eq!(executor.active_request_count(), 0);
+}
+
+#[tokio::test]
 async fn typed_startup_keeps_the_runtime_responsive_and_abort_reaps_the_child() {
     use std::sync::atomic::AtomicBool;
 
@@ -1412,85 +1438,52 @@ async fn tracing_errors_and_sources_omit_sensitive_argv_and_raw_output() {
 }
 
 #[test]
-fn typed_runtime_teardown_keeps_ownership_until_the_native_child_is_reaped() {
+fn runtime_teardown_reaps_ordinary_and_typed_requests_before_releasing_capacity() {
     use crate::internal::operation::OperationContext;
 
     let directory = tempfile::tempdir().expect("temporary directory");
-    let pid_path = directory.path().join("typed-runtime-drop.pid");
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .expect("runtime builds");
-    let executor = executor("descendant", TEST_TIMEOUT);
-    let pids = runtime.block_on(async {
-        tokio::spawn(executor.execute_operation(
-            request(45, [pid_path.as_os_str().to_os_string()]),
-            OperationContext::observation(tokio::time::Instant::now().checked_add(TEST_TIMEOUT)),
-        ));
-        read_pids(&pid_path, 2).await
-    });
-    drop(runtime);
-    let deadline = Instant::now() + TEST_TIMEOUT;
-    while executor.active_request_count() != 0 {
-        assert!(
-            Instant::now() < deadline,
-            "native reaper must settle its reservation"
-        );
-        std::thread::sleep(POLL_INTERVAL);
-    }
-    assert_process_reaped(pids[0]);
-    assert!(matches!(
-        waitpid(Some(pid(pids[0])), WaitOptions::NOHANG),
-        Err(Errno::CHILD)
-    ));
-    while !matches!(test_kill_process(pid(pids[1])), Err(Errno::SRCH)) {
-        assert!(Instant::now() < deadline, "owned process group must end");
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
-#[test]
-fn runtime_teardown_signals_the_group_without_claiming_library_reaping() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let pid_path = directory.path().join("runtime-drop.pid");
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .expect("runtime builds");
-    let pids = runtime.block_on(async {
+    for typed in [false, true] {
+        let pid_path = directory
+            .path()
+            .join(if typed { "typed.pid" } else { "ordinary.pid" });
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime builds");
         let executor = executor("descendant", TEST_TIMEOUT);
-        let dispatch = executor.execute(request(24, [pid_path.as_os_str().to_os_string()]));
-        tokio::spawn(dispatch);
-        read_pids(&pid_path, 2).await
-    });
-    drop(runtime);
-
-    let direct = pid(pids[0]);
-    let deadline = Instant::now() + TEST_TIMEOUT;
-    loop {
-        match waitpid(Some(direct), WaitOptions::NOHANG) {
-            Ok(Some((_pid, status))) => {
-                assert!(status.terminating_signal().is_some());
-                break;
-            }
-            Err(Errno::CHILD) => break,
-            Ok(None) | Err(Errno::INTR) => {}
-            outcome => panic!("unexpected direct-child wait outcome: {outcome:?}"),
+        let pids = runtime.block_on(async {
+            let request = request(45, [pid_path.as_os_str().to_os_string()]);
+            let dispatch = if typed {
+                executor.execute_operation(
+                    request,
+                    OperationContext::observation(
+                        tokio::time::Instant::now().checked_add(TEST_TIMEOUT),
+                    ),
+                )
+            } else {
+                executor.execute(request)
+            };
+            tokio::spawn(dispatch);
+            read_pids(&pid_path, 2).await
+        });
+        drop(runtime);
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        while executor.active_request_count() != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "native reaper must settle its reservation"
+            );
+            std::thread::sleep(POLL_INTERVAL);
         }
-        assert!(Instant::now() < deadline, "direct child was not killed");
-        std::thread::yield_now();
-    }
-
-    while !matches!(test_kill_process(direct), Err(Errno::SRCH)) {
-        assert!(Instant::now() < deadline, "direct child did not disappear");
-        std::thread::yield_now();
-    }
-
-    let descendant = pid(pids[1]);
-    while !matches!(test_kill_process(descendant), Err(Errno::SRCH)) {
-        assert!(Instant::now() < deadline, "descendant was not killed");
-        std::thread::yield_now();
+        assert_process_reaped(pids[0]);
+        assert!(matches!(
+            waitpid(Some(pid(pids[0])), WaitOptions::NOHANG),
+            Err(Errno::CHILD)
+        ));
+        while !matches!(test_kill_process(pid(pids[1])), Err(Errno::SRCH)) {
+            assert!(Instant::now() < deadline, "owned process group must end");
+            std::thread::sleep(POLL_INTERVAL);
+        }
     }
 }

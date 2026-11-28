@@ -12,7 +12,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::{Child, ChildStderr, ChildStdout};
+use tokio::process::{ChildStderr, ChildStdout};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::{Notify, OwnedSemaphorePermit, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -395,11 +395,10 @@ impl Executor for SubprocessExecutor {
 
 #[allow(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
     reason = "startup transfers the existing registry, admission and result owner together"
 )]
 async fn spawn_and_supervise(
-    mut process: tokio::process::Command,
+    process: tokio::process::Command,
     stdout_discarded: bool,
     configuration: Arc<Configuration>,
     permit: Option<OwnedSemaphorePermit>,
@@ -413,91 +412,18 @@ async fn spawn_and_supervise(
     let spawn_configuration = Arc::clone(&configuration);
     let spawn_cancellation = cancellation.clone();
     let ownership = tokio::task::spawn_blocking(move || {
-        if *spawn_cancellation.borrow() {
-            return Err(spawn_context.before_dispatch(Error::executor_shutdown(
-                spawn_context.request_id(),
-                spawn_context.command.clone(),
-            )));
-        }
-        if spawn_context
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            return Err(spawn_context.before_dispatch(Error::timeout(
-                spawn_context.request_id(),
-                spawn_context.command.clone(),
-                spawn_context.timeout,
-            )));
-        }
-        if spawn_context.operation.is_some() || parked_permit.is_some() {
-            return start_native_child(
-                process,
-                stdout_discarded,
-                &spawn_configuration,
-                Reservation {
-                    _permit: permit,
-                    _parked_permit: parked_permit,
-                    registry,
-                },
-                &spawn_context,
-                &spawn_cancellation,
-            );
-        }
-        let mut child = match process.spawn() {
-            Ok(child) => child,
-            Err(source) => {
-                let executable_not_found = (source.kind() == io::ErrorKind::NotFound
-                    && spawn_configuration
-                        .launch
-                        .current_dir()
-                        .is_none_or(std::path::Path::is_dir))
-                    || spawn_configuration.launch.executable_missing_from_path();
-                let error = Error::spawn(
-                    spawn_context.request_id(),
-                    spawn_context.command.clone(),
-                    source,
-                    executable_not_found,
-                );
-                return Err(error);
-            }
-        };
-        let process_group = ProcessGroupGuard::new(child.id());
-        #[cfg(test)]
-        if let (Some(spawned_pid), Some(child_id)) =
-            (&spawn_configuration.hooks.spawned_pid, child.id())
-        {
-            spawned_pid.store(child_id, std::sync::atomic::Ordering::SeqCst);
-        }
-        let readers = ReaderTasks::spawn(
-            child.stdout.take(),
-            child.stderr.take(),
+        start_native_child(
+            process,
             stdout_discarded,
-            spawn_configuration.output_limits,
-            spawn_context
-                .operation
-                .as_ref()
-                .and_then(OperationContext::stdout_prefix),
-            #[cfg(test)]
-            &spawn_configuration.hooks,
-        );
-        let ownership = ChildOwnership {
-            process_group,
-            child: SupervisedChild::Tokio(child),
-            readers,
-            #[cfg(feature = "test-support")]
-            synchronous_reap_on_drop: spawn_configuration.synchronous_reap_on_supervisor_drop,
-            _reservation: Some(Reservation {
+            &spawn_configuration,
+            Reservation {
                 _permit: permit,
                 _parked_permit: parked_permit,
                 registry,
-            }),
-        };
-        #[cfg(test)]
-        wait_at_barriers(
-            spawn_configuration.hooks.after_spawn_reached.as_ref(),
-            spawn_configuration.hooks.after_spawn_release.as_ref(),
-        );
-        Ok(ownership)
+            },
+            &spawn_context,
+            &spawn_cancellation,
+        )
     })
     .await;
     match ownership {
@@ -650,12 +576,20 @@ fn start_native_child(
     let (stdout, stderr) = match pipes {
         Ok(pipes) => pipes,
         Err((stream, source)) => {
-            let primary = context.interrupted(Error::read_output(
+            let failure = Error::read_output(
                 context.request_id(),
                 context.command.clone(),
                 stream,
                 source.kind(),
-            ));
+            );
+            let primary = match &context.operation {
+                Some(operation) => operation.interrupted(failure),
+                None => Error::OperationFailure {
+                    effect: libtmux_core::Effect::Unknown,
+                    receipt: None,
+                    source: Box::new(failure),
+                },
+            };
             let group = process_group.signal_checked();
             let kill = child.start_kill();
             let waited = child.wait_blocking();
@@ -692,11 +626,10 @@ fn start_native_child(
     );
     let ownership = ChildOwnership {
         process_group,
-        child: SupervisedChild::Native(child),
+        child,
         readers,
         #[cfg(feature = "test-support")]
         synchronous_reap_on_drop: configuration.synchronous_reap_on_supervisor_drop,
-        _reservation: None,
     };
     #[cfg(test)]
     wait_at_barriers(
@@ -734,35 +667,6 @@ fn register_native_pipes(
         .transpose()
         .map_err(|source| ("stderr", source))?;
     Ok((stdout, stderr))
-}
-
-enum SupervisedChild {
-    Tokio(Child),
-    Native(NativeChild),
-}
-
-impl SupervisedChild {
-    async fn wait(&mut self) -> io::Result<ExitStatus> {
-        match self {
-            Self::Tokio(child) => child.wait().await,
-            Self::Native(child) => child.wait().await,
-        }
-    }
-
-    fn start_kill(&mut self) -> io::Result<()> {
-        match self {
-            Self::Tokio(child) => child.start_kill(),
-            Self::Native(child) => child.start_kill(),
-        }
-    }
-
-    #[cfg(feature = "test-support")]
-    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        match self {
-            Self::Tokio(child) => child.try_wait(),
-            Self::Native(child) => child.try_wait(),
-        }
-    }
 }
 
 pub(crate) struct NativeChild {
@@ -908,12 +812,10 @@ fn reap_native(mut job: NativeReap) {
 struct ChildOwnership {
     // This guard must drop before `child`; the unreaped leader anchors the PGID.
     process_group: ProcessGroupGuard,
-    child: SupervisedChild,
     readers: ReaderTasks,
+    child: NativeChild,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_drop: bool,
-    // Both admission lanes follow the process and readers into cleanup.
-    _reservation: Option<Reservation>,
 }
 
 struct Reservation {
@@ -1016,7 +918,7 @@ async fn supervise_outer(
 }
 
 async fn supervise_inner(
-    child: &mut SupervisedChild,
+    child: &mut NativeChild,
     readers: &mut ReaderTasks,
     process_group: &mut ProcessGroupGuard,
     cancellation: &mut watch::Receiver<bool>,
@@ -1215,7 +1117,7 @@ fn map_reader_result(
 }
 
 async fn cleanup_child(
-    child: &mut SupervisedChild,
+    child: &mut NativeChild,
     readers: &mut ReaderTasks,
     process_group: &mut ProcessGroupGuard,
     context: &RequestContext,
