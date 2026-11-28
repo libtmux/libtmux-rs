@@ -47,6 +47,8 @@ Notable changes to `libtmux-tokio`.
 
 - Pane streams drain queued bytes before reporting connection loss. An idle
   control connection that closes without `%exit` yields a terminal error.
+  An interrupted control task reports `Error::OperationCleanupPending` when
+  the caller cannot confirm its client was reaped.
   ([#185](https://github.com/libtmux/libtmux-rs/issues/185))
 
 - If a subprocess call and its cleanup both fail, `Error::OperationAndCleanup`
