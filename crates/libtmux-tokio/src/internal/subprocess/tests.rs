@@ -142,6 +142,18 @@ fn child_helper() {
                 .expect("stdin is readable");
             writeln!(std::io::stdout(), "stdin={}", input.len()).expect("stdout is writable");
         }
+        b"stdin-state" => {
+            let input = std::io::stdin();
+            let flags = rustix::fs::fcntl_getfl(&input).expect("stdin flags");
+            rustix::fs::fcntl_setfl(&input, flags | rustix::fs::OFlags::NONBLOCK)
+                .expect("stdin is nonblocking");
+            let state = match rustix::io::read(&input, &mut [0]) {
+                Err(Errno::AGAIN) => "held",
+                Ok(0) => "eof",
+                other => panic!("unexpected stdin read: {other:?}"),
+            };
+            writeln!(std::io::stdout(), "stdin={state}").expect("stdout is writable");
+        }
         b"echo-last" => {
             std::io::stdout()
                 .write_all(arguments.last().expect("payload argument").as_bytes())
@@ -384,6 +396,32 @@ async fn child_stdin_is_null_and_reaches_eof() {
             .stdout()
             .windows(b"stdin=0\n".len())
             .any(|bytes| bytes == b"stdin=0\n")
+    );
+    executor.shutdown().await.expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn one_shot_control_stdin_stays_open_without_supplying_bytes() {
+    let executor = executor("stdin-state", TEST_TIMEOUT);
+    let globals: Vec<_> = helper_command([])
+        .logical_words()
+        .map(OsStr::to_os_string)
+        .collect();
+    let request = CommandRequest::native_argv(
+        RequestId::new(31),
+        &globals,
+        ["-N", "-C", "capture-pane"].map(OsString::from).into(),
+        Command::new("capture-pane").summary(),
+    );
+    let result = executor
+        .execute(request)
+        .await
+        .expect("one-shot helper exits");
+    assert!(
+        result
+            .stdout()
+            .windows(b"stdin=held\n".len())
+            .any(|bytes| bytes == b"stdin=held\n")
     );
     executor.shutdown().await.expect("shutdown succeeds");
 }

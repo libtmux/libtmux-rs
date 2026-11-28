@@ -45,6 +45,7 @@ pub(crate) struct CommandRequest {
     argv: Vec<OsString>,
     client_flags_end: usize,
     logical_subcommand_index: usize,
+    keep_stdin_open: bool,
     /// The same logical command rendered for a control-mode connection.
     ///
     /// Carried beside the argv rather than derived from it: the argv holds
@@ -194,6 +195,7 @@ impl CommandRequest {
             argv,
             client_flags_end: logical_subcommand_index,
             logical_subcommand_index,
+            keep_stdin_open: false,
             #[cfg(feature = "control-mode")]
             control_line: None,
             #[cfg(feature = "control-mode")]
@@ -215,8 +217,11 @@ impl CommandRequest {
     ) -> Self {
         let mut argv = Vec::with_capacity(global_argv.len() + arguments.len());
         argv.extend_from_slice(global_argv);
-        let logical_subcommand_index =
-            argv.len() + usize::from(arguments.first().is_some_and(|word| word == "-N"));
+        let client_flags = arguments
+            .iter()
+            .take_while(|word| *word == "-N" || *word == "-C");
+        let keep_stdin_open = client_flags.clone().any(|word| word == "-C");
+        let logical_subcommand_index = argv.len() + client_flags.count();
         argv.extend(arguments);
         Self {
             request_id,
@@ -224,6 +229,7 @@ impl CommandRequest {
             argv,
             client_flags_end: logical_subcommand_index,
             logical_subcommand_index,
+            keep_stdin_open,
             #[cfg(feature = "control-mode")]
             control_line: None,
             #[cfg(feature = "control-mode")]
@@ -260,6 +266,7 @@ impl CommandRequest {
             argv,
             client_flags_end: logical_subcommand_index,
             logical_subcommand_index,
+            keep_stdin_open: false,
             #[cfg(feature = "control-mode")]
             control_line: None,
             #[cfg(feature = "control-mode")]
@@ -312,6 +319,10 @@ impl CommandRequest {
     /// Whether this request runs without a deadline of its own.
     pub(crate) const fn is_unbounded(&self) -> bool {
         self.unbounded
+    }
+
+    pub(crate) const fn keeps_stdin_open(&self) -> bool {
+        self.keep_stdin_open
     }
 
     /// Send the client's stdout to the null device.

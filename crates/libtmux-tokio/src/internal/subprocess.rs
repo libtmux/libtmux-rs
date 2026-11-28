@@ -326,7 +326,11 @@ impl SubprocessExecutor {
         let stdout_discarded = request.is_stdout_discarded();
         let mut process = self.configuration.launch.command(request.argv());
         process
-            .stdin(Stdio::null())
+            .stdin(if request.keeps_stdin_open() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(if stdout_discarded {
                 Stdio::null()
             } else {
@@ -535,7 +539,7 @@ fn start_native_child(
             context.timeout,
         )));
     }
-    let child = process.spawn().map_err(|source| {
+    let mut child = process.spawn().map_err(|source| {
         let executable_not_found = (source.kind() == io::ErrorKind::NotFound
             && configuration
                 .launch
@@ -549,12 +553,14 @@ fn start_native_child(
             executable_not_found,
         ))
     })?;
+    // Child::wait closes stdin; the one-shot writer must stay with its owner.
+    let stdin = child.stdin.take();
     let child_id = child.id();
     let mut child = NativeChild {
         child: Some(child),
         changed,
         reaper,
-        reservation: Some(Box::new(reservation)),
+        reservation: Some(Box::new((reservation, stdin))),
         reaped: false,
     };
     // Locals drop in reverse order; signal the group before a fallback reaper
