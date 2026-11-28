@@ -111,7 +111,7 @@ impl Error {
             | Self::ParkedLimitExceeded { .. }
             | Self::SessionExists { .. }
             | Self::OptionRejected { .. } => ErrorKind::Refused,
-            Self::Timeout { .. } => ErrorKind::Timeout,
+            Self::Timeout { .. } | Self::ShutdownPending => ErrorKind::Timeout,
             Self::ExecutableNotFound { .. } | Self::InvalidServerConfiguration { .. } => {
                 ErrorKind::Unreachable
             }
@@ -200,6 +200,7 @@ impl Error {
                 ) && source.is_transient()
             }
             Self::CoreOperation { .. }
+            | Self::ShutdownPending
             | Self::OperationAndCleanup { .. }
             | Self::OperationCleanupPending { .. } => false,
             Self::Overloaded { .. }

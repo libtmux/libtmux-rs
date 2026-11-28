@@ -336,6 +336,67 @@ async fn acquisition_uses_the_captured_context_and_pinned_client() {
     fixture.server.shutdown().await.unwrap();
 }
 
+fn hold_connection_owner(
+    events: &mut super::ControlEvents,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    let connection = events.connection.take().unwrap();
+    let (release, hold) = tokio::sync::oneshot::channel();
+    let (finished, witness) = tokio::sync::oneshot::channel();
+    events.connection = Some(tokio::spawn(async move {
+        let result = connection.await.unwrap();
+        hold.await.unwrap();
+        finished.send(()).unwrap();
+        result
+    }));
+    (release, witness)
+}
+
+#[tokio::test]
+async fn explicit_shutdown_returns_while_the_connection_owner_finishes() {
+    let fixture = Fixture::new("quiet", "3.8", TEST_TIMEOUT);
+    let (_sender, mut events) = fixture.attach().await.unwrap().split();
+    let (release, witness) = hold_connection_owner(&mut events);
+    let error = tokio::time::timeout(TEST_TIMEOUT, events.shutdown())
+        .await
+        .expect("return while cleanup is pending")
+        .expect_err("the connection owner is still running");
+    assert_eq!(error.kind(), ErrorKind::Timeout);
+    assert!(matches!(error, Error::ShutdownPending));
+    release.send(()).unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, witness)
+        .await
+        .unwrap()
+        .expect("returning early leaves the connection owner running");
+    fixture.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pending_control_cleanup_preserves_the_creation_receipt() {
+    let fixture = Fixture::new("quiet", "3.8", TEST_TIMEOUT);
+    let (_sender, mut events) = fixture.attach().await.unwrap().split();
+    let (release, witness) = hold_connection_owner(&mut events);
+    let receipt = libtmux_core::NewSession::new("work")
+        .decode(fixture.server.socket_path(), b"123 456 %7 $8 @9\n")
+        .unwrap();
+    let primary = Error::control_mode_closed().after_creation(receipt.clone());
+    let error = tokio::time::timeout(TEST_TIMEOUT, events.shutdown_after_error(primary))
+        .await
+        .unwrap();
+    assert!(matches!(error, Error::OperationCleanupPending { .. }));
+    assert_eq!(error.kind(), ErrorKind::PartialEffect);
+    assert_eq!(error.creation_receipt(), Some(&receipt));
+    assert!(!error.is_transient());
+    release.send(()).unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, witness)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture.server.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn metadata_and_attached_challenges_refuse_unqualified_connections() {
     for version in ["3.6a", "next-3.7", "3.7-rc1"] {

@@ -428,6 +428,10 @@ pub enum Error {
         source: Box<Error>,
     },
 
+    /// The shutdown allowance elapsed. The supervisor still owns cleanup.
+    #[error("shutdown is still waiting for child cleanup")]
+    ShutdownPending,
+
     /// A layout is unsafe to dispatch or cannot hold the planned panes.
     #[non_exhaustive]
     #[error("invalid tmux layout: {reason}")]
@@ -1558,6 +1562,7 @@ impl fmt::Debug for Error {
                 .debug_tuple("OperationCleanupPending")
                 .field(source)
                 .finish(),
+            Self::ShutdownPending => formatter.write_str("ShutdownPending"),
             Self::AfterEffect { operation, source } => formatter
                 .debug_struct("AfterEffect")
                 .field("operation", operation)

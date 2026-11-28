@@ -402,7 +402,8 @@ impl ControlMode {
     /// # Errors
     ///
     /// Returns a connection error that was not already delivered by
-    /// [`Self::next_event`].
+    /// [`Self::next_event`], or [`Error::ShutdownPending`] if cleanup exceeds
+    /// its allowance.
     pub async fn shutdown(self) -> Result<(), Error> {
         drop(self.sender);
         self.events.shutdown().await
@@ -1182,16 +1183,12 @@ pub struct ControlEvents {
 
 impl ControlEvents {
     pub(crate) async fn shutdown_after_error(self, primary: Error) -> Error {
-        let now = Instant::now();
-        let latest = now
-            .checked_add(libtmux_core::supervision::CLEANUP_ALLOWANCE)
-            .unwrap_or(now);
-        match tokio::time::timeout_at(latest, self.shutdown()).await {
-            Ok(Err(terminal)) => retain_cleanup(primary, terminal),
-            Ok(Ok(())) => primary,
-            Err(_) => Error::OperationCleanupPending {
+        match self.shutdown().await {
+            Err(Error::ShutdownPending) => Error::OperationCleanupPending {
                 source: Box::new(primary),
             },
+            Err(terminal) => retain_cleanup(primary, terminal),
+            Ok(()) => primary,
         }
     }
 
@@ -1224,7 +1221,8 @@ impl ControlEvents {
     /// # Errors
     ///
     /// Returns a connection or cleanup error not already delivered by the
-    /// stream. Caller-requested closure succeeds when cleanup succeeds.
+    /// stream. After the one-second allowance, [`Error::ShutdownPending`]
+    /// leaves cleanup with the connection task. Keep its Tokio runtime alive.
     pub async fn shutdown(mut self) -> Result<(), Error> {
         let _ = self.stop.send(());
         // Draining releases a connection that is parked handing over an event,
@@ -1232,13 +1230,13 @@ impl ControlEvents {
         // is not coming back.
         self.events.close();
 
-        match self.connection.take() {
-            Some(connection) => match connection.await {
-                Ok(outcome) => outcome,
-                Err(_) => Err(Error::control_mode_closed()),
-            },
-            None => Ok(()),
-        }
+        let Some(connection) = self.connection.take() else {
+            return Ok(());
+        };
+        crate::internal::operation::finish_shutdown(async {
+            connection.await.map_err(|_| Error::control_mode_closed())?
+        })
+        .await
     }
 }
 
@@ -1463,7 +1461,8 @@ impl PaneOutput {
     ///
     /// # Errors
     ///
-    /// Returns a connection or cleanup failure not already delivered.
+    /// Returns a connection or cleanup failure not already delivered, including
+    /// [`Error::ShutdownPending`] when the connection task is still reaping.
     pub async fn shutdown(self) -> Result<(), Error> {
         drop(self.sender);
         self.events.shutdown().await

@@ -9,6 +9,14 @@ use crate::Error;
 
 pub(crate) type CollectedPrefix = Arc<Mutex<Vec<u8>>>;
 
+pub(crate) async fn finish_shutdown(
+    cleanup: impl Future<Output = Result<(), Error>>,
+) -> Result<(), Error> {
+    tokio::time::timeout(libtmux_core::supervision::CLEANUP_ALLOWANCE, cleanup)
+        .await
+        .unwrap_or(Err(Error::ShutdownPending))
+}
+
 #[derive(Clone)]
 pub(crate) struct OperationContext {
     deadline: Option<Instant>,

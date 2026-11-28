@@ -972,7 +972,9 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Propagates failures reported by the shared executor shutdown boundary.
+    /// Returns [`Error::ShutdownPending`] if cleanup exceeds the one-second
+    /// allowance. Admission stays closed. Keep the runtime alive and call
+    /// this method again to await the same supervisors.
     ///
     /// # Examples
     ///
@@ -989,7 +991,7 @@ impl Server {
     /// # }
     /// ```
     pub async fn shutdown(&self) -> Result<(), Error> {
-        self.core.shutdown().await
+        crate::internal::operation::finish_shutdown(self.core.shutdown()).await
     }
 
     /// Build a server from the `TMUX` variable tmux exports into every pane.
@@ -2444,6 +2446,29 @@ mod tests {
             .shutdown()
             .await
             .expect("later clone completes shutdown");
+    }
+
+    #[tokio::test]
+    async fn explicit_shutdown_reports_pending_cleanup_and_can_be_awaited_again() {
+        let (release, blocked) = watch::channel(false);
+        let executor = Arc::new(BlockingShutdownExecutor {
+            closed: AtomicBool::new(false),
+            shutdown_started: Notify::new(),
+            release: blocked,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+        let error = tokio::time::timeout(
+            libtmux_core::supervision::CLEANUP_ALLOWANCE * 3,
+            server.shutdown(),
+        )
+        .await
+        .expect("shutdown reports while cleanup is still pending")
+        .expect_err("cleanup cannot finish before the supervisor is released");
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert!(matches!(error, Error::ShutdownPending));
+        assert!(executor.closed.load(Ordering::SeqCst));
+        release.send_replace(true);
+        server.shutdown().await.expect("cleanup finished");
     }
 
     #[cfg(feature = "test-support")]

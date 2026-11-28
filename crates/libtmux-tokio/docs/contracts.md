@@ -143,9 +143,11 @@ Dropping both handles terminates and reaps the connection.
 
 [`Server::shutdown()`] is shared by all clones. It cancels active subprocess
 work and persistent control connections, rejects later commands and attaches,
-and is safe to call concurrently or repeatedly. Await it, or await your
-commands, before tearing the runtime down. Runtime destruction signals
-best-effort and cannot promise that child reaping finished.
+and is safe to call concurrently or repeatedly. If reaping takes longer
+than one second it returns `Error::ShutdownPending`. Keep Tokio running and
+call `server.shutdown().await` again to confirm cleanup. Closing an event or
+pane output stream uses the same allowance. Its connection task continues
+reaping after the caller returns.
 
 ## Errors
 

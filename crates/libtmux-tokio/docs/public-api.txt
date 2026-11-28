@@ -1450,6 +1450,7 @@ variant libtmux_tokio::Error::ServerGenerationChanged
 variant libtmux_tokio::Error::ServerGone
 variant libtmux_tokio::Error::ServerMismatch
 variant libtmux_tokio::Error::SessionExists
+variant libtmux_tokio::Error::ShutdownPending
 variant libtmux_tokio::Error::Spawn
 variant libtmux_tokio::Error::SupervisorLost
 variant libtmux_tokio::Error::Timeout
