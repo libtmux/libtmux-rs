@@ -99,6 +99,10 @@ def process_state(pid):
         return None
 
 
+def has_exited(state):
+    return state is None or state["state"] in {"Z", "X"}
+
+
 def terminal_descriptors(pid):
     result = []
     try:
@@ -111,7 +115,7 @@ def terminal_descriptors(pid):
     except PermissionError:
         for _ in range(10):
             state = process_state(pid)
-            if state is None or state["state"] == "Z":
+            if has_exited(state):
                 return None
             time.sleep(0.002)
         raise
@@ -325,7 +329,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                 )
         settle = time.monotonic() + 0.5
         while (
-            any((state := process_state(pid)) and state["state"] != "Z" for pid in pids)
+            any(not has_exited(process_state(pid)) for pid in pids)
             and time.monotonic() < settle
         ):
             time.sleep(0.005)
@@ -394,9 +398,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
             retained=retained,
             evidence_directory=str(directory),
         )
-        report["children_stopped"] = all(
-            state is None or state["state"] == "Z" for state in after.values()
-        )
+        report["children_stopped"] = all(has_exited(state) for state in after.values())
         report["pass"] = (
             sent_input
             and bool(pids)
