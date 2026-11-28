@@ -294,6 +294,109 @@ async fn an_attached_client_can_signal_while_its_ordinary_client_waits() {
 }
 
 #[tokio::test]
+async fn routed_views_share_ordinary_admission_and_borrow_the_control_connection() {
+    use libtmux_tokio::Error;
+    use libtmux_tokio::test::scaled;
+    use tokio::time::{sleep, timeout};
+
+    let fixture = TestServer::new().await.unwrap();
+    let Some(fixture) = versions::control_fixture(fixture).await else {
+        return;
+    };
+    let session = fixture.session("shared-ordinary").await.unwrap();
+    let (sender, events) = ControlMode::attach(fixture.server(), session.id())
+        .await
+        .unwrap()
+        .split();
+    let directory = tempfile::tempdir().unwrap();
+    let (executable, log) = recording_tmux(directory.path());
+    let source = Server::builder()
+        .socket_path(fixture.socket_path())
+        .tmux_executable(executable)
+        .build()
+        .unwrap();
+    let first = source.over_control_mode(&sender).await.unwrap();
+    let sibling = source.over_control_mode(&sender).await.unwrap();
+    let waiter = first.clone();
+    let mut pending = tokio::spawn(async move {
+        waiter
+            .cmd(Command::new("wait-for").arg("routed-close"))
+            .await
+    });
+    timeout(scaled(Duration::from_secs(3)), async {
+        while !spawned(&log)
+            .iter()
+            .any(|line| line.contains("routed-close"))
+        {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the ordinary wait started");
+
+    let concurrent = sibling.cmd(Command::new("-V")).await;
+    first
+        .shutdown()
+        .await
+        .expect("drain the shared ordinary pool");
+    let completion = timeout(scaled(Duration::from_millis(500)), &mut pending).await;
+    let ordinary = sibling.cmd(Command::new("-V")).await;
+    let parent = source.cmd(Command::new("-V")).await;
+    let channel = first
+        .wait_for_channel("closed-routed-view", scaled(Duration::from_millis(300)))
+        .await;
+    let projection = || Command::new("list-windows").arg("-F").arg("#{window_id}");
+    let routed = first.cmd(projection()).await;
+    let fresh = match source.over_control_mode(&sender).await {
+        Ok(view) => view.cmd(projection()).await.map(|_| ()),
+        Err(error) => Err(error),
+    };
+    let attach_refused = match ControlMode::attach(&sibling, session.id()).await {
+        Ok(connection) => {
+            connection.shutdown().await.unwrap();
+            false
+        }
+        Err(error) => matches!(error, Error::ExecutorShutdown { .. }),
+    };
+    let borrowed = sender.send(projection()).await.unwrap();
+    // Release the fixture even if shutdown left the old ordinary wait parked.
+    if completion.is_err() {
+        fixture
+            .server()
+            .cmd(Command::new("wait-for").arg("-S").arg("routed-close"))
+            .await
+            .unwrap();
+        pending.await.unwrap().unwrap();
+    }
+    events.shutdown().await.unwrap();
+    source.shutdown().await.unwrap();
+    fixture.shutdown().await.unwrap();
+
+    assert!(
+        concurrent
+            .expect("the sibling has an independent request ID")
+            .success()
+    );
+    assert!(matches!(
+        completion,
+        Ok(Ok(Err(Error::ExecutorShutdown { .. })))
+    ));
+    for outcome in [ordinary, parent, routed] {
+        assert!(matches!(outcome, Err(Error::ExecutorShutdown { .. })));
+    }
+    assert!(
+        matches!(channel, Err(Error::ExecutorShutdown { .. })),
+        "{channel:?}"
+    );
+    assert!(matches!(fresh, Err(Error::ExecutorShutdown { .. })));
+    assert!(
+        attach_refused,
+        "a sibling must not start a client after shutdown"
+    );
+    assert!(borrowed.succeeded());
+}
+
+#[tokio::test]
 async fn a_sender_for_another_server_is_refused() {
     let first = TestServer::new().await.expect("a private tmux starts");
     let Some(first) = versions::control_fixture(first).await else {
