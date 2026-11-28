@@ -92,9 +92,9 @@ const fn pane_mode_is_active(count: u32) -> bool {
 /// because a terminal can print any bytes. `capture_with` reaches into
 /// scrollback, and `capture_lines` also reports the shell prompts tmux marked,
 /// which needs tmux 3.7 and reports none unless the shell emits OSC 133.
-/// `stream_output` reports every byte the pane writes from then on over a
-/// control-mode connection, needs the `control-mode` feature, and stops the pane
-/// if it is left unread. `pipe` copies output to a shell command, and tmux
+/// With the `control-mode` feature, `stream_output` subscribes to new pane
+/// output. If its queue overflows, the reader receives a gap error and the
+/// connection keeps draining. `pipe` copies output to a shell command, and tmux
 /// expands that command as a format, so a `%` is a time conversion.
 ///
 /// - Capture: [`capture`], [`capture_with`], [`capture_lines`]

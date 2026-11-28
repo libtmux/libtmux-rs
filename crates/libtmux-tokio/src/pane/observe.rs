@@ -12,11 +12,9 @@ use super::{CaptureOptions, CapturedLine, POLL_INTERVAL, Pane, PaneWait, contain
 impl Pane {
     /// Watch what this pane writes, as it writes it.
     ///
-    /// [`Pane::capture`] reads what is on screen now; this reports every byte
-    /// the pane produces from here on, including what scrolls away. It opens a
-    /// control-mode connection to the session holding the pane and keeps it,
-    /// so there is no polling and no sampling interval to get wrong. Where the
-    /// pane lives is resolved here rather than taken from this handle.
+    /// Open a control-mode connection to the session currently holding the pane.
+    /// The stream receives new output as tmux delivers it, including text that
+    /// scrolls away before a [`Pane::capture`].
     ///
     /// The bytes are the pane's own, terminal escapes included. tmux reports
     /// them in whatever sized chunks it has, so a caller wanting lines has to
