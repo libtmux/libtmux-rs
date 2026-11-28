@@ -26,6 +26,9 @@ changelog marks each break. Pin an exact version to avoid one.
 
 ### Changed
 
+- `format_injection` checks literal start directories against the child
+  process's byte report. tmux 3.3a may omit its current path while the child
+  starts; unescaped directory formats still fail the assertions.
 - The copied mixed-reader proof uses the source-owned private socket recipe
   in HTML and Markdown. Its archive join checks the caller-owned fixture,
   exact recipe digest and both public client feature graphs, rejecting
