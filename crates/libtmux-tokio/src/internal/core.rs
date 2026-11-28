@@ -899,7 +899,10 @@ impl Core {
                     .with_dispatch_limits(self.driver.configuration.dispatch_limits);
             let binary = loop {
                 match pinned_native
-                    .execute(CommandRequest::new(self.next_request_id(), Command::new("-V")))
+                    .execute(CommandRequest::new(
+                        self.next_request_id(),
+                        Command::new("-V"),
+                    ))
                     .await
                 {
                     // A concurrent fork can retain the copy writer until exec.

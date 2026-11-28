@@ -13,9 +13,9 @@ mod qualification;
 mod tracker;
 
 pub use events::Event;
-pub use policy::{ControlCommandRefusal, require_shared_control};
 #[doc(hidden)]
 pub use policy::valid_subscription_name;
+pub use policy::{ControlCommandRefusal, require_shared_control};
 pub use qualification::{ControlIdentity, ControlProbe};
 #[doc(hidden)]
 pub use tracker::Tracker;

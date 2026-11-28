@@ -839,10 +839,7 @@ fn bound_id<T: std::str::FromStr>(
 
 #[cfg(feature = "control-mode")]
 impl Execution<'_> {
-    fn validate_control_layouts(
-        &self,
-        sender: &ControlSender,
-    ) -> Result<(), Error> {
+    fn validate_control_layouts(&self, sender: &ControlSender) -> Result<(), Error> {
         let pending = crate::layout::prepare(layouts(self.steps()))?;
         if !pending.is_empty() {
             // The version the connection attached under: asking over it would
@@ -865,10 +862,7 @@ impl Execution<'_> {
         clippy::too_many_lines,
         reason = "creation, isolated capture and control replies retain distinct evidence"
     )]
-    async fn run_over_control_mode(
-        &self,
-        sender: &ControlSender,
-    ) -> Result<PlanResult, Error> {
+    async fn run_over_control_mode(&self, sender: &ControlSender) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.validate_option_scopes()?;

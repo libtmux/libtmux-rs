@@ -682,11 +682,10 @@ async fn an_attached_plan_preserves_the_completed_session_after_a_later_failure(
         return;
     };
     let keeper = guard.session("plan-keeper").await.unwrap();
-    let (sender, events) =
-        libtmux_tokio::control::ControlMode::attach(guard.server(), keeper.id())
-            .await
-            .unwrap()
-            .split();
+    let (sender, events) = libtmux_tokio::control::ControlMode::attach(guard.server(), keeper.id())
+        .await
+        .unwrap()
+        .split();
     let name = "control-completed";
     let error = sender
         .run_plan(&duplicate_session_plan(name))
