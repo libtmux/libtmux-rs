@@ -329,7 +329,10 @@ impl Session {
             return Ok(None);
         };
 
-        server.session_by_id(pane.session_id()).await
+        server
+            .bound_to(pane.key().generation())?
+            .session_by_id(pane.session_id())
+            .await
     }
 
     /// Return the tmux session identity.

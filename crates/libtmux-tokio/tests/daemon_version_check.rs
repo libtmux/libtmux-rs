@@ -1665,6 +1665,80 @@ async fn the_probe_and_the_fence_have_no_after_hook_to_fire() {
 }
 
 #[tokio::test]
+async fn environment_parent_lookup_keeps_the_generation_that_supplied_the_pane() {
+    use libtmux_tokio::{Session, Window};
+    use std::os::unix::fs::symlink;
+
+    let old = TestServer::new().await.expect("old daemon");
+    let replacement = TestServer::new().await.expect("replacement daemon");
+    let original = old.session("original-parent").await.expect("old session");
+    let reused = replacement
+        .session("replacement-parent")
+        .await
+        .expect("replacement session");
+    let pane = original.panes().await.expect("old panes").remove(0);
+    let other = reused.panes().await.expect("replacement panes").remove(0);
+    assert_eq!(pane.id(), other.id());
+    assert_eq!(pane.window_id(), other.window_id());
+    assert_eq!(original.id(), reused.id());
+    assert_ne!(pane.key().generation(), other.key().generation());
+
+    let mut outcomes = Vec::new();
+    for lookup_window in [false, true] {
+        let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("fixture directory");
+        let active = directory.path().join("active");
+        let next = directory.path().join("next");
+        symlink(old.socket_path(), &active).expect("old endpoint");
+        symlink(replacement.socket_path(), &next).expect("replacement endpoint");
+        let executable = shell_quote(old.server().tmux_executable());
+        let wrapper = wrapper(
+            directory.path(),
+            &format!(
+                r#"for arg do
+  if [ "$arg" = list-panes ] && [ -L {next} ]; then
+    {executable} "$@" || exit $?
+    mv -f {next} {active} || exit 1
+    exit 0
+  fi
+done
+exec {executable} "$@""#,
+                next = shell_quote(next.as_os_str()),
+                active = shell_quote(active.as_os_str()),
+            ),
+        );
+        let server = Server::builder()
+            .socket_path(&active)
+            .tmux_executable(wrapper)
+            .build()
+            .expect("client");
+        let result = if lookup_window {
+            Window::from_env_value(&server, Some(pane.id().as_ref()))
+                .await
+                .map(|parent| parent.map(|item| item.key().generation()))
+        } else {
+            Session::from_env_value(&server, Some(pane.id().as_ref()))
+                .await
+                .map(|parent| parent.map(|item| item.key().generation()))
+        };
+        assert!(
+            !next.exists(),
+            "the fixture switched sockets after observing the pane"
+        );
+        outcomes.push(result);
+        server.shutdown().await.expect("client closes");
+    }
+    assert!(
+        outcomes.iter().all(Result::is_err),
+        "a replacement daemon reused the session and window IDs: {outcomes:?}"
+    );
+    old.shutdown().await.expect("old daemon stops");
+    replacement
+        .shutdown()
+        .await
+        .expect("replacement daemon stops");
+}
+
+#[tokio::test]
 async fn reused_ids_on_a_restarted_daemon_make_distinct_handles() {
     let binary = current_binary();
     let guard = TestServer::builder()

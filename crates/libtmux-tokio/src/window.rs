@@ -387,7 +387,10 @@ impl Window {
             return Ok(None);
         };
 
-        server.window_by_id(pane.window_id()).await
+        server
+            .bound_to(pane.key().generation())?
+            .window_by_id(pane.window_id())
+            .await
     }
 
     /// Return the tmux window identity.
