@@ -426,10 +426,10 @@ impl Session {
         let projections =
             listing::windows(&self.core, listing::Scope::Target(&target), None).await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .map(|projection| Window::new(Arc::clone(&self.core), projection))
-            .collect())
+            .collect()
     }
 
     /// The windows under this session that a matcher accepts, reporting why
@@ -644,7 +644,7 @@ impl Session {
             listing::create_window(&self.core, |format| options.into_command(&session, format))
                 .await?;
 
-        Ok(Window::new(Arc::clone(&self.core), projection))
+        Window::new(Arc::clone(&self.core), projection)
     }
 
     /// Rename the session and update this handle.
@@ -979,10 +979,11 @@ impl Session {
         )
         .await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .next()
-            .map(|projection| Window::new(Arc::clone(&self.core), projection)))
+            .map(|projection| Window::new(Arc::clone(&self.core), projection))
+            .transpose()
     }
 }
 

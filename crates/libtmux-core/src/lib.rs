@@ -25,6 +25,7 @@ pub mod supervision;
 mod target;
 mod text;
 mod version;
+mod window_link;
 #[cfg(feature = "serde")]
 mod wire_arg;
 
@@ -40,7 +41,9 @@ pub use ordinary_read::{OrdinaryPaneObservation, OrdinaryPaneProbe};
 #[doc(hidden)]
 pub use placement::assignment;
 pub use placement::{OptionScope, SplitDirection};
-pub use receipt::{Capture, CreatedSession, ObjectKey, ObservePane, PaneKey, SessionKey, WindowKey};
+pub use receipt::{
+    Capture, CreatedSession, ObjectKey, ObservePane, PaneKey, SessionKey, WindowKey,
+};
 pub use reply::Reply;
 pub use target::{
     IdParseError, PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName,
@@ -50,6 +53,7 @@ pub use text::TmuxText;
 pub use version::{
     OrdinaryVersionProbe, ReleaseSuffix, ReleaseVersion, TmuxVersion, VersionError, since,
 };
+pub use window_link::WindowLinkSnapshot;
 
 fn parse_number<T: std::str::FromStr>(digits: &str) -> Option<T> {
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {

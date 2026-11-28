@@ -1443,7 +1443,7 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
     let first = handles.pop().expect("two handles");
 
     // The first removal succeeds: two links, one goes.
-    first.unlink().await.expect("the link is removed");
+    first.link().unlink().await.expect("the link is removed");
 
     // The window itself is still running, held by the other session.
     let alive = server
@@ -1466,7 +1466,11 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
         "the session no longer holds a window at that index"
     );
 
-    let refused = second.unlink().await.expect_err("the link is already gone");
+    let refused = second
+        .link()
+        .unlink()
+        .await
+        .expect_err("the link is already gone");
 
     assert!(
         !refused.is_object_gone(),

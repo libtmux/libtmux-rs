@@ -197,3 +197,53 @@ async fn pane_keys_refuse_another_endpoint_before_dispatch() {
     other.shutdown().await.expect("other fixture shuts down");
     owner.shutdown().await.expect("owner shuts down");
 }
+
+#[tokio::test]
+async fn a_stale_link_cannot_unlink_the_window_that_reused_its_index() {
+    let guard = TestServer::new().await.expect("tmux starts");
+    let owner = guard.session("owner").await.expect("owner session");
+    let borrower = guard.session("borrower").await.expect("borrower session");
+    let original = owner.windows().await.expect("owner windows").remove(0);
+    let replacement = owner
+        .new_window("replacement")
+        .await
+        .expect("second window");
+    original
+        .link_to(&borrower, Some(9))
+        .await
+        .expect("first placement");
+    let stale = guard
+        .server()
+        .window_links()
+        .await
+        .expect("placements")
+        .into_iter()
+        .find(|link| link.snapshot().session() == borrower.id() && link.snapshot().index() == 9)
+        .expect("borrowed link");
+    assert_eq!(stale.window(), &original);
+    stale.clone().unlink().await.expect("withdraw link");
+    replacement
+        .link_to(&borrower, Some(9))
+        .await
+        .expect("reuse index");
+
+    assert!(matches!(stale.unlink().await, Err(Error::LinkGone { .. })));
+    let placements = guard
+        .server()
+        .window_links()
+        .await
+        .expect("current placements");
+    assert!(
+        placements
+            .iter()
+            .any(|link| link.snapshot().session() == borrower.id()
+                && link.snapshot().index() == 9
+                && link.window() == &replacement)
+    );
+    assert!(
+        placements
+            .iter()
+            .any(|link| link.snapshot().session() == owner.id() && link.window() == &original)
+    );
+    guard.shutdown().await.expect("fixture shuts down");
+}

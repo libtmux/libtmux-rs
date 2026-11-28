@@ -129,7 +129,14 @@ impl TmuxTools {
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
     pub async fn list_windows(&self) -> Result<Json<Windows>, ToolError> {
-        let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
+        let windows: Vec<_> = self
+            .server
+            .window_links()
+            .await
+            .map_err(|e| tmux_error(&e))?
+            .into_iter()
+            .map(libtmux_tokio::WindowLink::into_window)
+            .collect();
         Ok(Json(Self::render_windows(&windows)))
     }
 

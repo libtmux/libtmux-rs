@@ -23,20 +23,40 @@ impl Server {
         self.bound_to(self.generation().await?)
     }
 
-    /// List every window on the server, preserving any failure.
+    /// List each underlying window once, including windows linked into multiple sessions.
     ///
     /// # Errors
     ///
-    /// Returns an error when the list command cannot run, or when its output
-    /// cannot be decoded into snapshots.
+    /// Returns an error if the listing fails or a row cannot be decoded.
     pub async fn windows(&self) -> Result<Vec<Window>, Error> {
+        let mut windows = self.windows_by_link().await?;
+        let mut seen = HashSet::new();
+        windows.retain(|window| seen.insert(window.key().clone()));
+        Ok(windows)
+    }
+
+    /// List each observed placement, including repeated links to the same window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the listing fails or a row cannot be decoded.
+    pub async fn window_links(&self) -> Result<Vec<crate::WindowLink>, Error> {
+        Ok(self
+            .windows_by_link()
+            .await?
+            .into_iter()
+            .map(Window::into_link)
+            .collect())
+    }
+
+    async fn windows_by_link(&self) -> Result<Vec<Window>, Error> {
         let server = self.for_discovery().await?;
         let projections = listing::windows(&server.core, listing::Scope::Server, None).await?;
 
-        Ok(projections
+        projections
             .into_iter()
             .map(|projection| Window::new(Arc::clone(&server.core), projection))
-            .collect())
+            .collect()
     }
 
     /// List every pane on the server, preserving any failure.
@@ -124,7 +144,7 @@ impl Server {
     /// Find the window with this id, preferring an active link then the lowest index.
     ///
     /// A window linked into several sessions is returned once. Use
-    /// [`Server::windows`] when the link matters.
+    /// [`Server::window_links`] when the placement matters.
     ///
     /// # Errors
     ///
@@ -143,7 +163,7 @@ impl Server {
         // window can be current in one session and not in another. Taking
         // whichever row tmux happened to list first would pick by session
         // name, so the current link wins and the lowest index breaks a tie.
-        Ok(projections
+        projections
             .into_iter()
             .min_by_key(|projection| {
                 (
@@ -151,7 +171,8 @@ impl Server {
                     projection.link().identity().window_index(),
                 )
             })
-            .map(|projection| Window::new(Arc::clone(&server.core), projection)))
+            .map(|projection| Window::new(Arc::clone(&server.core), projection))
+            .transpose()
     }
 
     /// Find the pane with this id.
@@ -212,7 +233,7 @@ impl Server {
     pub async fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
         let server = self.for_discovery().await?;
         let (sessions, windows, panes) =
-            tokio::try_join!(server.sessions(), server.windows(), server.panes(),)?;
+            tokio::try_join!(server.sessions(), server.windows_by_link(), server.panes(),)?;
 
         // Grouping is by the numeric part of each ID rather than the ID: it
         // is Copy and unique among IDs of one kind, so stitching the three

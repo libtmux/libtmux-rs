@@ -640,9 +640,10 @@ impl Pane {
     ///
     /// Returns an error when the parent lookup fails.
     pub async fn window(&self) -> Result<Option<Window>, Error> {
-        Ok(listing::window_for_pane(&self.core, self.id())
+        listing::window_for_pane(&self.core, self.id())
             .await?
-            .map(|projection| Window::new(Arc::clone(&self.core), projection)))
+            .map(|projection| Window::new(Arc::clone(&self.core), projection))
+            .transpose()
     }
 
     /// Return the session this pane was reached through.

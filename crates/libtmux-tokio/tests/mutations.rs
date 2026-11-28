@@ -541,22 +541,22 @@ async fn unlink_removes_one_link_while_kill_removes_the_window() {
         .expect("link succeeds");
 
     let links: Vec<_> = server
-        .windows()
+        .window_links()
         .await
         .expect("windows list")
         .into_iter()
-        .filter(|window| window.id() == shared.id())
+        .filter(|link| link.window().id() == shared.id())
         .collect();
     assert_eq!(links.len(), 2);
 
     // Unlinking removes one edge; the window survives in the other session.
     links[0].clone().unlink().await.expect("unlink succeeds");
     let remaining: Vec<_> = server
-        .windows()
+        .window_links()
         .await
         .expect("windows list")
         .into_iter()
-        .filter(|window| window.id() == shared.id())
+        .filter(|link| link.window().id() == shared.id())
         .collect();
     assert_eq!(
         remaining.len(),
@@ -565,7 +565,12 @@ async fn unlink_removes_one_link_while_kill_removes_the_window() {
     );
 
     // Killing removes the window itself.
-    remaining[0].clone().kill().await.expect("kill succeeds");
+    remaining[0]
+        .window()
+        .clone()
+        .kill()
+        .await
+        .expect("kill succeeds");
     assert!(
         server
             .windows()
@@ -1154,7 +1159,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
     );
 
     // Unlinking removes one winlink, and the window survives in the other.
-    linked.unlink().await.expect("the link is removed");
+    linked.link().unlink().await.expect("the link is removed");
     assert!(
         !target
             .windows()

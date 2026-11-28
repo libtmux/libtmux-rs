@@ -381,7 +381,9 @@ pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[cfg(feature = "unstable-fuzzing")]
 #[doc(hidden)]
 pub use internal::environment::__fuzz_environment_listing;
-pub use libtmux_core::{CreatedSession, NewSession, PaneKey, SessionKey, WindowKey};
+pub use libtmux_core::{
+    CreatedSession, NewSession, PaneKey, SessionKey, WindowKey, WindowLinkSnapshot,
+};
 #[cfg(feature = "control-mode")]
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};
@@ -408,6 +410,7 @@ pub use target::{
     SessionTarget, TmuxArg, WindowId, WindowTarget, escape_format,
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, VersionError, since};
+pub use window::WindowLink;
 pub use window::{
     JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Respawn, Rotation,
     SplitDirection, SplitOptions, Window,

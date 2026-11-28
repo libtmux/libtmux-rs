@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
-use crate::internal::listing;
+use crate::internal::listing::{self, Pushdown as _};
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
@@ -77,17 +77,16 @@ impl PaneDirection {
     }
 }
 
-/// One tmux window, as reached through one session that links it.
+/// A window identified by its daemon generation and window ID.
 ///
-/// A window is not owned by a single session. `link-window` makes the same
-/// underlying window appear in several sessions at once, so discovery returns
-/// one `Window` per link rather than per window. Two handles for the same
-/// window reached through different sessions are **not** equal: they describe
-/// different places in the hierarchy.
+/// A window can appear in several sessions. Handles discovered through different
+/// sessions compare equal when they refer to the same underlying window.
+/// [`Server::windows`](crate::Server::windows) lists each window once.
+/// [`Server::window_links`](crate::Server::window_links) lists every placement.
 ///
-/// Getters that describe the window itself, such as [`Window::name`], read the
-/// window. Getters that describe its place in a session, such as
-/// [`Window::index`] and [`Window::is_active`], read the link.
+/// [`Window::name`] describes the window. [`Window::index`] and
+/// [`Window::is_active`] describe its placement at the time of discovery.
+/// [`Window::link`] returns a handle to that placement.
 ///
 /// # What is on here
 ///
@@ -237,7 +236,7 @@ impl PaneDirection {
 /// [`respawn`]: Window::respawn
 /// [`kill`]: Window::kill
 /// [`link_to`]: Window::link_to
-/// [`unlink`]: Window::unlink
+/// [`unlink`]: WindowLink::unlink
 /// [`move_to`]: Window::move_to
 /// [`swap_with`]: Window::swap_with
 /// [`option_names`]: Window::option_names
@@ -289,12 +288,49 @@ impl PaneDirection {
 pub struct Window {
     core: Arc<Core>,
     projection: WindowProjection,
+    key: crate::WindowKey,
 }
 
 impl Window {
     /// Build a handle from a hydrated projection.
-    pub(crate) const fn new(core: Arc<Core>, projection: WindowProjection) -> Self {
-        Self { core, projection }
+    pub(crate) fn new(core: Arc<Core>, projection: WindowProjection) -> Result<Self, Error> {
+        let generation = core
+            .expected_generation()
+            .ok_or(libtmux_core::Error::InvalidKey)?;
+        let key = crate::WindowKey::new(
+            core.configuration().identity().clone(),
+            generation,
+            projection.window().window_id().clone(),
+        );
+        Ok(Self {
+            core,
+            projection,
+            key,
+        })
+    }
+
+    /// The window identity shared by all its placements in this daemon.
+    #[must_use]
+    pub const fn key(&self) -> &crate::WindowKey {
+        &self.key
+    }
+
+    /// The placement through which this handle observed the window.
+    #[must_use]
+    pub fn link(&self) -> WindowLink {
+        self.clone().into_link()
+    }
+
+    pub(crate) fn into_link(self) -> WindowLink {
+        let snapshot = crate::WindowLinkSnapshot::new(
+            self.session_id().clone(),
+            self.index(),
+            self.key.clone(),
+        );
+        WindowLink {
+            window: self,
+            snapshot,
+        }
     }
 
     /// Find the window this process is running in.
@@ -852,7 +888,7 @@ impl Window {
 
     /// Kill the window, closing it in every session that links it.
     ///
-    /// This consumes the handle. Use [`Window::unlink`] to remove only this
+    /// This consumes the handle. Use [`WindowLink::unlink`] to remove only this
     /// session's link while leaving the window alive elsewhere.
     ///
     /// # Errors
@@ -867,34 +903,6 @@ impl Window {
                 .arg(self.id().to_string()),
         )
         .await
-    }
-
-    /// Remove this session's link to the window, leaving other links intact.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the command, which includes
-    /// unlinking a window that only one session holds.
-    pub async fn unlink(self) -> Result<(), Error> {
-        // `session:id` rather than `session:index`. A link is what this
-        // removes, so the session half is needed; the window half is an
-        // identity, and a cached index stops being one the moment anything
-        // renumbers the session.
-        let Err(error) = listing::mutate(
-            &self.core,
-            "unlink-window",
-            Command::new("unlink-window").arg("-t").arg(format!(
-                "{}:{}",
-                self.session_id(),
-                self.id()
-            )),
-        )
-        .await
-        else {
-            return Ok(());
-        };
-
-        Err(link_or_object_gone(&self.core, error, &[(self.session_id(), self.id())]).await)
     }
 
     /// Run a raw tmux command against this window.
@@ -1191,7 +1199,7 @@ impl Window {
     /// Link this window into another session, so both hold the same window.
     ///
     /// A linked window is one window with two winlinks, not a copy: renaming
-    /// it or splitting it shows up in both sessions. [`Window::unlink`] takes
+    /// it or splitting it shows up in both sessions. [`WindowLink::unlink`] takes
     /// one link away again.
     ///
     /// `index` places the link at a window index, or appends when `None`.
@@ -1297,16 +1305,10 @@ impl Window {
     }
 }
 
-/// Windows compare by server endpoint, session, index, and window id.
-///
-/// Equality follows the link, not the window, because a linked window occupies
-/// a genuinely different position in each session that holds it. Compare
-/// [`Window::id`] directly to ask whether two handles name the same underlying
-/// window.
+/// Every placement of the same window on the same daemon compares equal.
 impl PartialEq for Window {
     fn eq(&self, other: &Self) -> bool {
-        self.server_identity() == other.server_identity()
-            && self.projection.link().identity() == other.projection.link().identity()
+        self.key == other.key
     }
 }
 
@@ -1314,12 +1316,107 @@ impl Eq for Window {}
 
 impl Hash for Window {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.server_identity().hash(state);
-        self.projection.link().identity().hash(state);
+        self.key.hash(state);
     }
 }
 
-/// Renders identity only, never snapshot text.
+/// A live handle to one observed window index in a session.
+///
+/// # Examples
+///
+/// ```
+/// # async fn remove_link(window: &libtmux_tokio::Window) -> Result<(), libtmux_tokio::Error> {
+/// let link = window.link();
+/// assert_eq!(link.snapshot().window(), window.key());
+/// link.unlink().await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct WindowLink {
+    window: Window,
+    snapshot: crate::WindowLinkSnapshot,
+}
+
+impl fmt::Debug for WindowLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.snapshot.fmt(f)
+    }
+}
+
+impl WindowLink {
+    /// The observed window shared by this and any other links to it.
+    #[must_use]
+    pub const fn window(&self) -> &Window {
+        &self.window
+    }
+
+    /// Take the observed window, keeping its handle and cached fields.
+    #[must_use]
+    pub fn into_window(self) -> Window {
+        self.window
+    }
+
+    /// The immutable placement this handle addresses.
+    #[must_use]
+    pub const fn snapshot(&self) -> &crate::WindowLinkSnapshot {
+        &self.snapshot
+    }
+
+    /// Remove this placement if it still names the observed window.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a replaced daemon, a withdrawn or reindexed link, and removal
+    /// of a window's only link. Other links to the window remain available.
+    pub async fn unlink(self) -> Result<(), Error> {
+        let result = self
+            .window
+            .core
+            .execute_chain(self.snapshot.unlink_command())
+            .await?;
+        if result.success() {
+            return Ok(());
+        }
+        let target = self.snapshot.target();
+        let error = Error::from_refused_result("unlink-window", &result, Some(target.as_ref()));
+        let server = crate::Server::from_core(Arc::clone(&self.window.core));
+        match server.window_by_id(&self.snapshot.window().id()).await {
+            Ok(None) => Err(Error::ObjectGone {
+                kind: ObjectKind::Window,
+                id: self.snapshot.window().id().to_string(),
+            }),
+            Ok(Some(_)) => {
+                let filter = self.snapshot.window().id().predicate("window_id");
+                match listing::windows(
+                    &self.window.core,
+                    listing::Scope::Target(self.snapshot.session().as_ref()),
+                    Some(&filter),
+                )
+                .await
+                {
+                    Ok(rows)
+                        if rows.iter().all(|r| {
+                            r.link().identity().window_index() != self.snapshot.index()
+                        }) =>
+                    {
+                        Err(Error::LinkGone {
+                            kind: ObjectKind::Window,
+                            target,
+                        })
+                    }
+                    Err(cause) if cause.is_object_gone() => Err(Error::LinkGone {
+                        kind: ObjectKind::Window,
+                        target,
+                    }),
+                    _ => Err(error),
+                }
+            }
+            Err(_) => Err(error),
+        }
+    }
+}
+
 impl fmt::Debug for Window {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

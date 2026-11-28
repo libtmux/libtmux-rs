@@ -358,7 +358,6 @@ impl ServerGeneration {
     ///
     /// Run the client with `-N` so an absent daemon stays absent. The refusal
     /// branch is invalid tmux syntax and stops the remaining commands.
-    #[must_use]
     pub fn queue_guard(self) -> crate::Command {
         crate::Command::new("if-shell")
             .arg("-F")

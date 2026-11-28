@@ -340,9 +340,10 @@ impl Client {
     pub async fn attached_window(&self) -> Result<Option<crate::Window>, Error> {
         let name = OsString::from_vec(self.name().as_bytes().to_vec());
 
-        Ok(listing::client_window(&self.core, &name)
+        listing::client_window(&self.core, &name)
             .await?
-            .map(|projection| crate::Window::new(Arc::clone(&self.core), projection)))
+            .map(|projection| crate::Window::new(Arc::clone(&self.core), projection))
+            .transpose()
     }
 
     /// The active pane of the current window of this client's session.

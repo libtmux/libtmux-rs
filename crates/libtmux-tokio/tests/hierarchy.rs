@@ -140,26 +140,18 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
     .await;
 
     let windows = server.windows().await.expect("windows list");
-    let links = windows
-        .iter()
-        .filter(|window| window.id() == source.id())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        links.len(),
-        2,
-        "a window linked into two sessions yields one row per link",
-    );
-
-    // Same underlying window...
-    assert_eq!(links[0].id(), links[1].id());
-    // ...but different places in the hierarchy, so not equal handles.
-    assert_ne!(links[0], links[1]);
-    assert_ne!(links[0].session_id(), links[1].session_id());
-    assert!(
-        links.iter().all(|window| window.is_linked()),
-        "both edges report the window as linked",
-    );
+    assert_eq!(windows.iter().filter(|w| w.id() == source.id()).count(), 1);
+    let links: Vec<_> = server
+        .window_links()
+        .await
+        .expect("placement list")
+        .into_iter()
+        .filter(|link| link.window().id() == source.id())
+        .collect();
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].window(), links[1].window());
+    assert_ne!(links[0].snapshot(), links[1].snapshot());
+    assert!(links.iter().all(|link| link.window().is_linked()));
 
     // Panes under a linked window repeat for the same reason.
     let panes = server.panes().await.expect("panes list");
